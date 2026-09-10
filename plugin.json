@@ -1,0 +1,17 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "fixlab",
+  "version": "0.1.0",
+  "description": "An Agency Copilot workflow for evidence-backed defect diagnosis, repair, and validation in React and .NET repositories.",
+  "author": {
+    "name": "FixLab Contributors"
+  },
+  "keywords": [
+    "testing",
+    "validation",
+    "react",
+    "dotnet",
+    "playwright",
+    "pull-requests"
+  ]
+}

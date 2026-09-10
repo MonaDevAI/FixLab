@@ -1,0 +1,32 @@
+# Dependencies and build output
+node_modules/
+dist/
+build/
+bin/
+obj/
+!bin/
+!bin/fixlab.js
+*.tgz
+
+# Local FixLab state
+.fixlab/
+artifacts/
+worktrees/
+playwright-report/
+test-results/
+
+# Environment and authentication
+.env
+.env.*
+*.user
+*.suo
+*.token
+*.credentials
+storage-state*.json
+
+# Editor and operating system
+.vs/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

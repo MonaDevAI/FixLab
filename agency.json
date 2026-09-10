@@ -1,0 +1,17 @@
+{
+  "$schema": "https://raw.githubusercontent.com/agency-microsoft/.github-private/main/agency.schema.json",
+  "authors": [
+    {
+      "name": "FixLab Contributors"
+    }
+  ],
+  "engines": [
+    "copilot"
+  ],
+  "category": "developer-tools",
+  "platforms": [
+    "windows",
+    "linux",
+    "macos"
+  ]
+}

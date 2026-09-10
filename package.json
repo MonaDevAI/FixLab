@@ -1,0 +1,33 @@
+{
+  "name": "@fixlab/cli",
+  "version": "0.1.0",
+  "description": "Agency Copilot-powered CLI and plugin for evidence-backed React and .NET defect validation.",
+  "type": "module",
+  "bin": {
+    "fixlab": "bin/fixlab.js"
+  },
+  "files": [
+    "agency.json",
+    "agents",
+    "bin",
+    "docs",
+    "plugin.json",
+    "README.md",
+    "templates"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "pack:check": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "keywords": [
+    "agency",
+    "copilot",
+    "testing",
+    "playwright",
+    "react",
+    "dotnet"
+  ]
+}
