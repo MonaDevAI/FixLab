@@ -68,6 +68,104 @@ function loadProfile(repository) {
   }
 }
 
+function checkPlaywright(repository, profile) {
+  const configuration = profile?.browserAutomation ?? {};
+  const workingDirectory = resolve(
+    repository,
+    configuration.workingDirectory ??
+      profile?.applications?.frontend?.workingDirectory ??
+      "."
+  );
+  const preferredPackage = configuration.package;
+  const packages = [
+    preferredPackage,
+    "@playwright/test",
+    "playwright"
+  ].filter((value, index, values) => value && values.indexOf(value) === index);
+  const browserName = configuration.browser ?? "chromium";
+
+  if (!existsSync(workingDirectory)) {
+    const detail = `working directory is missing: ${workingDirectory}`;
+    return {
+      packageCheck: { name: "Playwright package", ok: false, detail },
+      browserCheck: { name: "Playwright browser", ok: false, detail }
+    };
+  }
+
+  const packageProbe = `
+    const packages = ${JSON.stringify(packages)};
+    for (const name of packages) {
+      try {
+        require.resolve(name);
+        process.stdout.write(name);
+        process.exit(0);
+      } catch {}
+    }
+    process.stderr.write("install @playwright/test in the configured working directory");
+    process.exit(1);
+  `;
+  const packageResult = spawnSync(process.execPath, ["-e", packageProbe], {
+    cwd: workingDirectory,
+    encoding: "utf8",
+    timeout: 15000
+  });
+  const resolvedPackage = packageResult.stdout?.trim();
+  const packageCheck = {
+    name: "Playwright package",
+    ok: packageResult.status === 0 && Boolean(resolvedPackage),
+    detail:
+      packageResult.error?.message ??
+      resolvedPackage ??
+      packageResult.stderr?.trim() ??
+      "package resolution failed"
+  };
+
+  if (!packageCheck.ok) {
+    return {
+      packageCheck,
+      browserCheck: {
+        name: "Playwright browser",
+        ok: false,
+        detail: "not checked because the Playwright package is unavailable"
+      }
+    };
+  }
+
+  const browserProbe = `
+    const playwright = require(${JSON.stringify(resolvedPackage)});
+    const browserType = playwright[${JSON.stringify(browserName)}];
+    if (!browserType || typeof browserType.launch !== "function") {
+      throw new Error("configured browser is not exported by Playwright");
+    }
+    (async () => {
+      const browser = await browserType.launch({ headless: true });
+      await browser.close();
+      process.stdout.write(${JSON.stringify(browserName)});
+    })().catch((error) => {
+      process.stderr.write(error.message);
+      process.exit(1);
+    });
+  `;
+  const browserResult = spawnSync(process.execPath, ["-e", browserProbe], {
+    cwd: workingDirectory,
+    encoding: "utf8",
+    timeout: 45000
+  });
+  const launchedBrowser = browserResult.stdout?.trim();
+  const browserCheck = {
+    name: "Playwright browser",
+    ok: browserResult.status === 0 && launchedBrowser === browserName,
+    detail:
+      browserResult.error?.message ??
+      (launchedBrowser
+        ? `${launchedBrowser} launched successfully`
+        : browserResult.stderr?.trim() ??
+          "browser launch failed; install the configured Playwright browser")
+  };
+
+  return { packageCheck, browserCheck };
+}
+
 function init(repository) {
   const destination = join(repository, profileRelativePath);
   if (existsSync(destination)) {
@@ -109,6 +207,8 @@ function doctor(repository) {
     ok: existsSync(join(repository, ".git")),
     detail: repository
   });
+  const playwright = checkPlaywright(repository, profile);
+  checks.push(playwright.packageCheck, playwright.browserCheck);
 
   for (const check of checks) {
     console.log(`${check.ok ? "PASS" : "FAIL"}  ${check.name} (${check.detail})`);

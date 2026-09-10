@@ -12,6 +12,7 @@ The machine running FixLab needs:
 - Node.js 18 or later
 - PowerShell 7
 - The .NET SDK required by the target repository
+- A repository-local `@playwright/test` or `playwright` package
 - Microsoft Edge or another repository-approved Playwright browser
 - Access to the source repository and its allowed validation environments
 
@@ -24,6 +25,19 @@ agency copilot
 ```
 
 FixLab does not install Agency or manage Agency authentication.
+
+Install Playwright in the frontend or browser-test project before running
+FixLab. For example:
+
+```powershell
+Set-Location <application-repository>\frontend
+npm install --save-dev @playwright/test
+npx playwright install chromium
+```
+
+Use the package and browser required by the application repository. Playwright
+and its browser binaries remain on the developer or registered runner machine;
+FixLab does not install them silently.
 
 ## Install from a Git checkout
 
@@ -82,10 +96,24 @@ The command checks:
 - .NET SDK
 - PowerShell
 - Agency
+- Repository-local Playwright package
+- A successful headless launch of the configured Playwright browser
 - The FixLab repository profile
 - Git repository initialization
 
 Resolve every failed prerequisite before starting a FixLab session.
+
+The repository profile controls the Playwright check:
+
+```json
+{
+  "browserAutomation": {
+    "workingDirectory": "frontend",
+    "package": "@playwright/test",
+    "browser": "chromium"
+  }
+}
+```
 
 ## Run FixLab
 

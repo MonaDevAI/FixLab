@@ -50,6 +50,11 @@
       "healthUrl": "http://localhost:5000/health"
     }
   },
+  "browserAutomation": {
+    "workingDirectory": "frontend",
+    "package": "@playwright/test",
+    "browser": "chromium"
+  },
   "environments": [
     "local",
     "development",
@@ -60,4 +65,3 @@
     "requireConfirmation": true
   }
 }
-

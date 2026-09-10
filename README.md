@@ -157,7 +157,8 @@ and registered runner service remain separate future distribution layers.
 agency copilot --plugin local:<fixlab-package> --agent fixlab:fixlab
 ```
 
-Run `fixlab doctor` to verify Agency, Git, Node.js, .NET, PowerShell, and the
+Run `fixlab doctor` to verify Agency, Git, Node.js, .NET, PowerShell, the
+repository-local Playwright package, a real headless browser launch, and the
 repository profile before starting a job.
 
 ---
