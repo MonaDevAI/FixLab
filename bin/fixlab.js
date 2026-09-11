@@ -399,7 +399,7 @@ function launch(repository, request) {
     "--plugin",
     `local:${packageRoot}`,
     "--agent",
-    "fixlab:fixlab"
+    "FixLab:fixlab"
   ];
   if (request) {
     args.push("--interactive", request);

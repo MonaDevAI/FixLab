@@ -2,6 +2,12 @@
 
 All notable changes to FixLab are documented in this file.
 
+## 0.3.1
+
+- Fix `fixlab run` and `fixlab validate` to use Agency's resolved `FixLab`
+  plugin qualifier.
+- Add regression coverage for launching the packaged FixLab agent.
+
 ## 0.3.0
 
 - Add repository-installed FixLab prompt commands.

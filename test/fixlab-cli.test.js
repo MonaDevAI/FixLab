@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdtempSync,
   mkdirSync,
@@ -15,10 +16,11 @@ import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../bin/fixlab.js", import.meta.url));
 
-function run(args, cwd) {
+function run(args, cwd, environment = {}) {
   return spawnSync(process.execPath, [cli, ...args], {
     cwd,
-    encoding: "utf8"
+    encoding: "utf8",
+    env: { ...process.env, ...environment }
   });
 }
 
@@ -177,4 +179,41 @@ test("validate requires a numeric pull request", () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /only digits/);
+});
+
+test("run launches the Agency-resolved FixLab agent", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "agency.cmd" : "agency"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\necho %*\r\n"
+        : "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(
+      ["run", repository, "--", "repair", "the", "defect"],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      }
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /--agent FixLab:fixlab/);
+    assert.match(result.stdout, /--interactive repair the defect/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });

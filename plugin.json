@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "fixlab",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "An Agency Copilot workflow for evidence-backed defect diagnosis, repair, and validation in React and .NET repositories.",
   "homepage": "https://github.com/MonaDevAI/FixLab",
   "repository": "https://github.com/MonaDevAI/FixLab",
