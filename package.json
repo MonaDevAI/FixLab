@@ -1,7 +1,16 @@
 {
   "name": "@fixlab/cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Agency Copilot-powered CLI and plugin for evidence-backed React and .NET defect validation.",
+  "license": "MIT",
+  "homepage": "https://github.com/MonaDevAI/FixLab#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/MonaDevAI/FixLab.git"
+  },
+  "bugs": {
+    "url": "https://github.com/MonaDevAI/FixLab/issues"
+  },
   "type": "module",
   "bin": {
     "fixlab": "bin/fixlab.js"
@@ -10,8 +19,12 @@
     "agency.json",
     "agents",
     "bin",
+    "CHANGELOG.md",
     "docs",
+    "examples",
+    "LICENSE",
     "plugin.json",
+    "prompts",
     "README.md",
     "templates"
   ],
@@ -21,6 +34,10 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "keywords": [
     "agency",

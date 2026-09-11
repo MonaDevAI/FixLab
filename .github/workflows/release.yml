@@ -1,0 +1,42 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Verify tag and manifest versions
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const packageJson = require("./package.json");
+          const plugin = require("./plugin.json");
+          const tag = process.env.GITHUB_REF_NAME.replace(/^v/, "");
+          if (packageJson.version !== tag || plugin.version !== tag) {
+            throw new Error(`Tag ${tag}, package ${packageJson.version}, and plugin ${plugin.version} must match.`);
+          }
+          if (!fs.readFileSync("CHANGELOG.md", "utf8").includes(`## ${tag}`)) {
+            throw new Error(`CHANGELOG.md has no ${tag} section.`);
+          }
+          NODE
+      - run: npm test
+      - run: npm pack --dry-run
+      - run: npm publish --access public --provenance
+      - name: Create GitHub release
+        run: gh release create "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -16,6 +16,15 @@ const profileRelativePath = join(
   "fixlab",
   "repository-profile.json"
 );
+const promptNames = [
+  "fixlab.intake.prompt.md",
+  "fixlab.diagnose.prompt.md",
+  "fixlab.reproduce.prompt.md",
+  "fixlab.fix.prompt.md",
+  "fixlab.validate.prompt.md",
+  "fixlab.live-test.prompt.md",
+  "fixlab.pr.prompt.md"
+];
 
 function printUsage() {
   console.log(`FixLab CLI
@@ -180,17 +189,37 @@ function checkPlaywright(repository, profile) {
 
 function init(repository) {
   const destination = join(repository, profileRelativePath);
+  let created = 0;
   if (existsSync(destination)) {
-    console.error(`FixLab profile already exists: ${destination}`);
-    return 1;
+    console.log(`Kept existing FixLab profile: ${destination}`);
+  } else {
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(
+      join(packageRoot, "templates", "repository-profile.json"),
+      destination
+    );
+    console.log(`Created ${destination}`);
+    created += 1;
   }
 
-  mkdirSync(dirname(destination), { recursive: true });
-  copyFileSync(
-    join(packageRoot, "templates", "repository-profile.json"),
-    destination
+  const promptDirectory = join(repository, ".github", "prompts");
+  mkdirSync(promptDirectory, { recursive: true });
+  for (const promptName of promptNames) {
+    const promptDestination = join(promptDirectory, promptName);
+    if (existsSync(promptDestination)) {
+      console.log(`Kept existing FixLab prompt: ${promptDestination}`);
+      continue;
+    }
+    copyFileSync(join(packageRoot, "prompts", promptName), promptDestination);
+    console.log(`Created ${promptDestination}`);
+    created += 1;
+  }
+
+  console.log(
+    created > 0
+      ? `Created ${created} FixLab repository file(s).`
+      : "FixLab repository setup is already present."
   );
-  console.log(`Created ${destination}`);
   console.log("Update its paths, commands, ports, and allowed environments.");
   return 0;
 }

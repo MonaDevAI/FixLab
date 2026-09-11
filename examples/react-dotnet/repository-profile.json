@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "name": "Example React and ASP.NET Core application",
+  "architecture": "React frontend with ASP.NET Core API",
+  "components": [
+    {
+      "name": "frontend",
+      "paths": ["frontend/src"],
+      "testPatterns": ["frontend/src/**/*.test.ts", "frontend/src/**/*.test.tsx"]
+    },
+    {
+      "name": "backend",
+      "paths": ["backend/src"],
+      "testPatterns": ["backend/tests/**/*.cs"]
+    }
+  ],
+  "validation": {
+    "commands": {
+      "frontendRestore": "npm ci",
+      "frontendTest": "npm test -- --runInBand",
+      "frontendTypeCheck": "npm run type-check",
+      "frontendBuild": "npm run build",
+      "backendRestore": "dotnet restore",
+      "backendTest": "dotnet test",
+      "backendBuild": "dotnet build"
+    },
+    "productionBuildTimeoutMinutes": 15,
+    "blockerPolicy": "continue-on-owned-process-timeout"
+  },
+  "applications": {
+    "frontend": {
+      "workingDirectory": "frontend",
+      "command": "npm start",
+      "port": 3000,
+      "healthUrl": "http://localhost:3000"
+    },
+    "backend": {
+      "workingDirectory": "backend/src",
+      "command": "dotnet run",
+      "port": 5000,
+      "healthUrl": "http://localhost:5000/health"
+    }
+  },
+  "browserAutomation": {
+    "workingDirectory": "frontend",
+    "package": "@playwright/test",
+    "browser": "chromium",
+    "channel": "msedge"
+  },
+  "environments": ["local", "development", "integration"],
+  "pullRequests": {
+    "defaultTargetBranch": "develop",
+    "requireConfirmation": true
+  }
+}

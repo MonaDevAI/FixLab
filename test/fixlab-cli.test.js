@@ -47,20 +47,50 @@ test("init creates a parseable repository profile", () => {
     const profile = JSON.parse(readFileSync(profilePath, "utf8"));
     assert.equal(profile.browserAutomation.package, "@playwright/test");
     assert.equal(profile.browserAutomation.browser, "chromium");
+    const promptDirectory = join(repository, ".github", "prompts");
+    const expectedPrompts = [
+      "fixlab.intake.prompt.md",
+      "fixlab.diagnose.prompt.md",
+      "fixlab.reproduce.prompt.md",
+      "fixlab.fix.prompt.md",
+      "fixlab.validate.prompt.md",
+      "fixlab.live-test.prompt.md",
+      "fixlab.pr.prompt.md"
+    ];
+    for (const promptName of expectedPrompts) {
+      assert.equal(existsSync(join(promptDirectory, promptName)), true);
+    }
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
 });
 
-test("init refuses to overwrite an existing profile", () => {
+test("init preserves existing profile and prompt files", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 
   try {
     assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const promptPath = join(
+      repository,
+      ".github",
+      "prompts",
+      "fixlab.validate.prompt.md"
+    );
+    writeFileSync(profilePath, '{"name":"custom"}');
+    writeFileSync(promptPath, "custom prompt");
     const second = run(["init", repository], repository);
 
-    assert.equal(second.status, 1);
-    assert.match(second.stderr, /already exists/);
+    assert.equal(second.status, 0);
+    assert.match(second.stdout, /Kept existing FixLab profile/);
+    assert.match(second.stdout, /Kept existing FixLab prompt/);
+    assert.equal(readFileSync(profilePath, "utf8"), '{"name":"custom"}');
+    assert.equal(readFileSync(promptPath, "utf8"), "custom prompt");
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

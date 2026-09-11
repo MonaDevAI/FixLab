@@ -41,6 +41,8 @@ passed, what was skipped, and what still needs human attention.
    ```
 
    While developing locally, use `npm install --global .` from this repository.
+   `fixlab init` adds the repository profile and packaged Copilot prompt
+   commands without overwriting existing files.
 3. **Describe the application.**
    Set the frontend and backend paths, restore and test commands, startup
    commands, ports, safe environments, and browser journeys.
@@ -134,8 +136,12 @@ See the full [security model](docs/security.md).
 | [`docs/repository-onboarding.md`](docs/repository-onboarding.md) | How an application adopts FixLab |
 | [`docs/security.md`](docs/security.md) | Identity, secrets, process isolation, and data safety |
 | [`docs/team-rollout.md`](docs/team-rollout.md) | Recommended team adoption stages |
+| [`docs/commands.md`](docs/commands.md) | Packaged FixLab prompt-command workflow |
+| [`docs/releasing.md`](docs/releasing.md) | GitHub release and npm trusted-publishing setup |
 | [`templates/repository-profile.json`](templates/repository-profile.json) | Generic React and .NET repository profile |
+| [`examples/react-dotnet`](examples/react-dotnet) | Example onboarding files for a React/.NET repository |
 | [`agents/fixlab.md`](agents/fixlab.md) | Agency custom agent |
+| [`prompts`](prompts) | Copilot prompt commands installed by `fixlab init` |
 | [`bin/fixlab.js`](bin/fixlab.js) | Dependency-free FixLab CLI |
 
 ---

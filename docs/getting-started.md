@@ -21,7 +21,8 @@ Install only the tools required by the repository profile.
 ## Onboard a repository
 
 1. Run `fixlab init` to create
-   `.github/fixlab/repository-profile.json`.
+   `.github/fixlab/repository-profile.json` and the FixLab prompt commands
+   under `.github/prompts`.
 2. Declare the frontend and backend paths.
 3. Add deterministic restore, test, lint, build, and startup commands.
 4. Define safe validation environments.
@@ -30,6 +31,21 @@ Install only the tools required by the repository profile.
 7. Validate the profile before enabling pull request creation.
 
 Run `fixlab doctor` after editing the profile.
+
+The installed prompt files provide the staged workflow:
+
+```text
+/fixlab.intake
+/fixlab.diagnose
+/fixlab.reproduce
+/fixlab.fix
+/fixlab.validate
+/fixlab.live-test
+/fixlab.pr
+```
+
+See [FixLab commands](commands.md) for the purpose and completion gate of each
+stage.
 
 Start with the template in
 [`templates/repository-profile.json`](../templates/repository-profile.json).
