@@ -54,6 +54,29 @@ profile-defined startup and live testing, evidence collection, and the gated
 pull-request outcome. It asks for human interaction only for authentication,
 unsafe-data approval, deployment or pull-request approval, or genuine blockers.
 
+### Intake sources
+
+Manual text is the default and permanently available intake path. Azure DevOps
+intake accepts a full `dev.azure.com` work-item URL, or an ID when
+`azureDevOps.organization` and `azureDevOps.project` are configured in the
+repository profile. The local server asks Azure CLI for an Azure DevOps
+resource token using the developer's authenticated identity, uses it only in
+the outbound HTTPS authorization header, and does not expose it to the browser,
+job state, logs, prompts, or cache.
+
+The loader keeps ID, title, description, reproduction or acceptance text,
+state, type, and web URL after converting HTML to text. It does not download
+work-item attachments. User-selected PNG, JPEG, or WebP screenshots are
+validated by count, declared type, extension, base64 encoding, signature,
+per-file size, and total size. Generated local files live under the Git
+directory or a repository-specific OS temporary directory. Only their local
+paths are placed in the job prompt.
+
+Artifacts belong to one retained dashboard job. A new job removes the prior
+job's files, clean shutdown removes current files, and startup prunes directories
+older than seven days. Abrupt process termination can retain artifacts until
+the next pruning pass.
+
 ## Context and token efficiency
 
 Each job reads the repository profile and existing instructions first, then
@@ -72,7 +95,8 @@ Git repositories also receive a bounded durable metadata cache in
 worktrees. Its key combines a hashed repository identity, current `HEAD`, and
 the repository-profile content hash. A matching job prompt may reuse the
 profile shape, prior result, and sanitized concise stage summaries. It never
-stores request text, raw logs, credentials, screenshots, or source contents.
+stores request text, raw logs, credentials, screenshots, screenshot paths,
+or source contents.
 The file is capped at 20 entries and 64 KiB.
 
 Changing `HEAD` or profile content causes an automatic cache miss. Instruction

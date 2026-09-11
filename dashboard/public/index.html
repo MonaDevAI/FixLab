@@ -19,9 +19,29 @@
 
       <section class="panel">
         <form id="job-form">
+          <fieldset>
+            <legend>Intake</legend>
+            <label><input type="radio" name="intakeSource" value="manual" checked> Enter manually</label>
+            <label><input type="radio" name="intakeSource" value="azure-devops"> Load from Azure DevOps</label>
+          </fieldset>
+          <div id="azure-devops-intake" class="intake-box" hidden>
+            <label for="work-item">Azure DevOps work item URL or ID</label>
+            <div class="inline-input">
+              <input id="work-item" type="text" autocomplete="off"
+                placeholder="https://dev.azure.com/org/project/_workitems/edit/123 or 123">
+              <button id="load-work-item" type="button">Load</button>
+            </div>
+            <p class="guidance">ID-only lookup uses optional Azure DevOps organization/project settings from the repository profile. Private attachments are not downloaded.</p>
+            <div id="work-item-summary" class="loaded-summary" hidden></div>
+          </div>
           <label for="request">Bug or required enhancement</label>
           <textarea id="request" name="request" rows="6" maxlength="10000" required
             placeholder="Describe what is wrong or what small enhancement is required. Repository-defined validation context is loaded automatically."></textarea>
+          <label for="screenshots">Screenshots (optional)</label>
+          <input id="screenshots" name="screenshots" type="file"
+            accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple>
+          <p class="guidance">Up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Files remain local and are removed when replaced or when the dashboard stops.</p>
+          <ul id="screenshot-list" class="file-list"></ul>
           <fieldset>
             <legend>Request type</legend>
             <label><input type="radio" name="requestType" value="bug-fix" checked> Bug fix</label>

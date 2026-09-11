@@ -50,6 +50,40 @@ copy profile-owned paths, commands, ports, systems, or environment choices into
 the request. FixLab reads that validation context from
 `.github/fixlab/repository-profile.json`.
 
+## Choose an intake path
+
+**Enter manually** is selected by default and is always available. Type the bug
+or required enhancement and optionally select screenshots.
+
+To load Azure DevOps fields, paste a full URL such as:
+
+```text
+https://dev.azure.com/your-organization/your-project/_workitems/edit/123
+```
+
+For ID-only entry, add optional repository-owned context:
+
+```json
+{
+  "azureDevOps": {
+    "organization": "your-organization",
+    "project": "your-project"
+  }
+}
+```
+
+FixLab uses the developer's current Azure CLI authentication. Run `az login`
+with access to the organization when loading fails because authentication is
+unavailable. The access token is used only by the local HTTPS request and is
+not shown or retained. FixLab loads text fields but never downloads private
+work-item attachments automatically.
+
+Up to five PNG, JPEG, or WebP screenshots may be attached, with limits of
+2 MiB per file and 8 MiB total. They are stored locally with generated names
+outside tracked source, passed to the agent by local path, and excluded from the
+durable metadata cache. Clean shutdown and job replacement remove them;
+directories older than seven days are pruned when the dashboard starts.
+
 After submission, the agent owns the complete lifecycle: acceptance or fix
 contract, diagnosis or affected-surface inspection, smallest required
 implementation, effective-diff self-review, focused tests/type-check/build,

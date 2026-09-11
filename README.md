@@ -189,6 +189,38 @@ deployment or pull-request approval, and genuine blockers. FixLab never
 hardcodes an environment choice; the repository profile supplies and governs
 that context.
 
+Manual entry is the default intake path and remains available for every
+repository. Optionally, paste a full Azure DevOps work-item URL and select
+**Load**, or enter a numeric ID when the repository profile supplies:
+
+```json
+{
+  "azureDevOps": {
+    "organization": "your-organization",
+    "project": "your-project"
+  }
+}
+```
+
+Full URLs use their own organization and project. The dashboard obtains an
+Azure DevOps resource token from the locally authenticated `az` CLI identity
+and uses it only for the HTTPS request. Tokens are never displayed, logged,
+stored in job state, or cached. Missing Azure CLI, authentication, profile
+fallback, work-item access, or malformed URLs fail explicitly. Loaded intake
+includes safe text fields such as title, description, reproduction steps,
+acceptance criteria, state, type, and web URL; HTML is converted to readable
+text. Private work-item attachments are never downloaded automatically.
+
+Manual or Azure DevOps intake can include up to five PNG, JPEG, or WebP
+screenshots, limited to 2 MiB each and 8 MiB total. Files receive generated
+names and remain outside tracked source under
+`.git\fixlab\dashboard-artifacts\<job-id>` (or a repository-specific OS
+temporary directory for non-Git repositories). Only local paths and user text
+are sent to the agent. The dashboard removes the prior job's artifacts when a
+new job starts, removes active artifacts on clean shutdown, and prunes artifact
+directories older than seven days at startup. Abrupt termination can leave
+files until that pruning pass.
+
 Within a job, FixLab reads the profile and repository instructions first,
 checks git status and the effective diff, and focuses searches on relevant
 symbols and files. It reuses the same Agency session context and avoids
@@ -203,7 +235,8 @@ shared Git directory for worktrees). Entries are keyed by repository identity,
 current `HEAD`, and the repository-profile content hash. A matching later job
 receives only the concise profile shape, prior result, and sanitized stage
 summaries. The cache never stores request text, raw logs, credentials,
-screenshots, or source contents; it is capped at 20 entries and 64 KiB.
+screenshots, screenshot paths, or source contents; it is capped at 20 entries
+and 64 KiB.
 
 `HEAD` or profile-content changes automatically miss the cache. Instruction
 changes are also prompt-level invalidation boundaries and must be reread. For

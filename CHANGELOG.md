@@ -2,6 +2,14 @@
 
 All notable changes to FixLab are documented in this file.
 
+## 0.5.0
+
+- Add manual or Azure DevOps work-item intake.
+- Add bounded local screenshot evidence without storing tokens, request
+  attachments, or screenshot paths in the repository metadata cache.
+- Sanitize loaded work-item content and use the developer's local Azure
+  authentication without persisting bearer tokens.
+
 ## 0.4.0
 
 - Add an explicit, dependency-free local dashboard command for any onboarded

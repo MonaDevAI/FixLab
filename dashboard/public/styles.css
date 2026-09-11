@@ -83,6 +83,52 @@ textarea {
   font: inherit;
 }
 
+input[type="text"],
+input[type="file"] {
+  width: 100%;
+  padding: .7rem;
+  border: 1px solid #405275;
+  border-radius: 8px;
+  background: #080d19;
+  color: inherit;
+  font: inherit;
+}
+
+.intake-box {
+  margin: 0 0 1rem;
+  padding: 1rem;
+  border: 1px solid #405275;
+  border-radius: 8px;
+  background: #0b1324;
+}
+
+.inline-input {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: .65rem;
+  margin-top: .5rem;
+}
+
+.loaded-summary {
+  margin-top: .8rem;
+  padding: .8rem;
+  border-left: 4px solid #37c978;
+  background: #101c30;
+}
+
+.loaded-summary p {
+  margin: .4rem 0;
+}
+
+.loaded-summary a {
+  color: #8ec5ff;
+}
+
+.file-list {
+  margin-top: .5rem;
+  color: #b5c0d4;
+}
+
 fieldset {
   display: flex;
   gap: 1.5rem;
@@ -190,5 +236,9 @@ pre {
   fieldset {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .inline-input {
+    grid-template-columns: 1fr;
   }
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -70,11 +71,12 @@ function createGitRepository() {
   return repository;
 }
 
-async function startDashboard(repository, executor) {
+async function startDashboard(repository, executor, workItemLoader) {
   const dashboard = createDashboardServer({
     repository,
     packageRoot,
-    executor
+    executor,
+    ...(workItemLoader ? { workItemLoader } : {})
   });
   const address = await dashboard.listen({ port: await availablePort() });
   return { dashboard, url: address.url };
@@ -106,6 +108,9 @@ test("dashboard reports readiness and serves only known static assets", async ()
     const pageText = await page.text();
     assert.match(pageText, /FixLab Dashboard/);
     assert.match(pageText, /Bug or required enhancement/);
+    assert.match(pageText, /Enter manually/);
+    assert.match(pageText, /Load from Azure DevOps/);
+    assert.match(pageText, /Screenshots \(optional\)/);
     assert.match(pageText, /Repository-defined validation context is loaded automatically/);
     assert.match(pageText, /proceeds autonomously/);
 
@@ -113,6 +118,127 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.equal(traversal.status, 404);
   } finally {
     await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("loads Azure DevOps intake and passes local screenshots without caching them", async () => {
+  const repository = createGitRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  writeFileSync(
+    profilePath,
+    JSON.stringify({
+      name: "ADO intake repository",
+      azureDevOps: {
+        organization: "profile-org",
+        project: "Profile Project"
+      }
+    })
+  );
+  git(repository, [
+    "add",
+    join(".github", "fixlab", "repository-profile.json")
+  ]);
+  git(repository, ["commit", "--quiet", "-m", "Add ADO profile"]);
+
+  const workItem = {
+    id: 71,
+    title: "Loaded bug",
+    description: "Loaded description",
+    reproduction: "Loaded reproduction",
+    acceptanceCriteria: "Loaded acceptance",
+    state: "Active",
+    workItemType: "Bug",
+    webUrl:
+      "https://dev.azure.com/profile-org/Profile%20Project/_workitems/edit/71"
+  };
+  let loaderInput;
+  let receivedPrompt;
+  const executor = ({ prompt, onOutput }) => {
+    receivedPrompt = prompt;
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const workItemLoader = async (input) => {
+    loaderInput = input;
+    return workItem;
+  };
+  const { dashboard, url } = await startDashboard(
+    repository,
+    executor,
+    workItemLoader
+  );
+  let screenshotPath;
+
+  try {
+    const loaded = await jsonRequest(url, "/api/azure-devops/load", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workItem: "71" })
+    });
+    assert.equal(loaded.response.status, 200);
+    assert.equal(loaded.body.workItem.title, "Loaded bug");
+    assert.equal(
+      loaderInput.profile.azureDevOps.organization,
+      "profile-org"
+    );
+
+    const png = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+    ]);
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Loaded bug and user notes.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate",
+        intakeSource: "azure-devops",
+        workItem,
+        screenshots: [
+          {
+            name: "screen.png",
+            mimeType: "image/png",
+            base64: png.toString("base64")
+          }
+        ]
+      })
+    });
+    assert.equal(started.response.status, 202, JSON.stringify(started.body));
+    assert.equal(started.body.job.intakeSource, "azure-devops");
+    assert.equal(started.body.job.workItem.id, 71);
+    assert.deepEqual(started.body.job.screenshots, [
+      { name: "screen.png", mimeType: "image/png", bytes: 8 }
+    ]);
+    assert.equal("path" in started.body.job.screenshots[0], false);
+
+    const pathLine = receivedPrompt
+      .split(/\r?\n/)
+      .find((line) => line.startsWith("- ") && line.endsWith(".png"));
+    screenshotPath = pathLine?.slice(2);
+    assert.ok(screenshotPath);
+    assert.equal(existsSync(screenshotPath), true);
+    assert.match(receivedPrompt, /Azure DevOps work item/);
+    assert.match(receivedPrompt, /Do not search for or download Azure DevOps attachments/);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const cacheContext = createCacheContext(repository);
+    const cacheContent = readFileSync(cacheContext.cachePath, "utf8");
+    assert.doesNotMatch(cacheContent, /screen\.png/);
+    assert.doesNotMatch(cacheContent, /dashboard-artifacts/);
+    assert.doesNotMatch(cacheContent, /Loaded description/);
+  } finally {
+    await dashboard.close();
+    if (screenshotPath) {
+      assert.equal(existsSync(screenshotPath), false);
+    }
     rmSync(repository, { recursive: true, force: true });
   }
 });

@@ -11,6 +11,13 @@ import {
 } from "node:fs";
 import { createServer } from "node:http";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import {
+  createAzureDevOpsLoader,
+  loadRepositoryProfile,
+  pruneArtifactDirectories,
+  removeArtifactDirectory,
+  storeScreenshots
+} from "./intake.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -61,6 +68,7 @@ export function validatePort(value) {
 
 export function inspectRepository(repository) {
   const resolvedRepository = resolve(repository);
+  pruneArtifactDirectories(resolvedRepository);
   if (
     !existsSync(resolvedRepository) ||
     !statSync(resolvedRepository).isDirectory()
@@ -119,7 +127,10 @@ export function buildJobPrompt({
   request,
   mode,
   requestType = "bug-fix",
-  cacheSummary = null
+  cacheSummary = null,
+  intakeSource = "manual",
+  workItem = null,
+  screenshotPaths = []
 }) {
   const validateOnly = mode === "validate-only";
   const smallEnhancement = requestType === "small-enhancement";
@@ -134,6 +145,14 @@ export function buildJobPrompt({
 - Use the smallest focused reproduction that demonstrates the reported defect.`;
   return `Run a FixLab ${validateOnly ? "validate-only" : "fix-and-validate"} job.
 Request type: ${requestType}
+Intake source: ${intakeSource}
+${workItem ? `Azure DevOps work item:
+${JSON.stringify(workItem, null, 2)}
+` : ""}
+${screenshotPaths.length > 0 ? `User-provided screenshots stored locally for this job:
+${screenshotPaths.map((path) => `- ${path}`).join("\n")}
+Inspect only these local files. Do not search for or download Azure DevOps attachments.
+` : ""}
 ${cacheSummary ? `
 Verified same-repository cache summary for the current HEAD and profile:
 ${JSON.stringify(cacheSummary, null, 2)}
@@ -185,7 +204,7 @@ function runGit(repository, args) {
 function safeSummary(value) {
   const text = String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
   if (
-    /(?:password|passwd|secret|token|authorization|bearer|cookie|connection.?string|private.?key|client.?secret)/i.test(
+    /(?:password|passwd|secret|token|authorization|bearer|cookie|connection.?string|private.?key|client.?secret|dashboard[-\\/]+artifacts)/i.test(
       text
     )
   ) {
@@ -400,6 +419,13 @@ function publicJob(job) {
     id: job.id,
     request: job.request,
     requestType: job.requestType,
+    intakeSource: job.intakeSource,
+    workItem: job.workItem,
+    screenshots: job.screenshots.map(({ name, mimeType, bytes }) => ({
+      name,
+      mimeType,
+      bytes
+    })),
     mode: job.mode,
     status: job.status,
     startedAt: job.startedAt,
@@ -411,13 +437,13 @@ function publicJob(job) {
   };
 }
 
-async function readJsonBody(request) {
+async function readJsonBody(request, maxBytes = 64 * 1024) {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 64 * 1024) {
-      throw new Error("request body exceeds 64 KiB");
+    if (size > maxBytes) {
+      throw new Error(`request body exceeds ${maxBytes} bytes`);
     }
     chunks.push(chunk);
   }
@@ -434,6 +460,46 @@ async function readJsonBody(request) {
     throw new Error("request body must be a JSON object");
   }
   return body;
+}
+
+function validateWorkItemSummary(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Azure DevOps intake requires a loaded work item");
+  }
+  const textFields = [
+    "title",
+    "description",
+    "reproduction",
+    "acceptanceCriteria",
+    "state",
+    "workItemType",
+    "webUrl"
+  ];
+  const result = {};
+  if (!Number.isSafeInteger(value.id) || value.id < 1) {
+    throw new Error("loaded work item ID is invalid");
+  }
+  result.id = value.id;
+  for (const field of textFields) {
+    if (value[field] !== undefined && typeof value[field] !== "string") {
+      throw new Error(`loaded work item ${field} must be a string`);
+    }
+    const maximum = [
+      "description",
+      "reproduction",
+      "acceptanceCriteria"
+    ].includes(field)
+      ? 20000
+      : 1000;
+    result[field] = (value[field] ?? "").trim().slice(0, maximum);
+  }
+  if (
+    result.webUrl &&
+    !/^https:\/\/dev\.azure\.com\//i.test(result.webUrl)
+  ) {
+    throw new Error("loaded work item URL must use https://dev.azure.com");
+  }
+  return result;
 }
 
 function appendOutput(job, stream, text) {
@@ -526,11 +592,13 @@ export function createDashboardServer({
   repository,
   packageRoot,
   publicDirectory = join(packageRoot, "dashboard", "public"),
-  executor = createAgencyExecutor({ packageRoot })
+  executor = createAgencyExecutor({ packageRoot }),
+  workItemLoader = createAzureDevOpsLoader()
 }) {
   const resolvedRepository = resolve(repository);
   let currentJob = null;
   let activeHandle = null;
+  const artifactDirectories = new Set();
 
   const server = createServer(async (request, response) => {
     const requestUrl = new URL(
@@ -551,6 +619,43 @@ export function createDashboardServer({
       return;
     }
 
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/azure-devops/load"
+    ) {
+      let body;
+      try {
+        if (
+          !request.headers["content-type"]
+            ?.toLowerCase()
+            .startsWith("application/json")
+        ) {
+          throw new Error("Content-Type must be application/json");
+        }
+        body = await readJsonBody(request);
+        const readiness = inspectRepository(resolvedRepository);
+        if (!readiness.profileReady) {
+          throw new Error(readiness.error);
+        }
+        const profile = loadRepositoryProfile(resolvedRepository);
+        const workItem = validateWorkItemSummary(
+          await workItemLoader({
+            workItem: body.workItem,
+            profile
+          })
+        );
+        sendJson(response, 200, { workItem });
+      } catch (error) {
+        sendJson(response, 400, {
+          error: String(error.message).replace(
+            /Bearer\s+\S+/gi,
+            "Bearer [REDACTED]"
+          )
+        });
+      }
+      return;
+    }
+
     if (request.method === "POST" && requestUrl.pathname === "/api/jobs") {
       if (currentJob?.status === "running") {
         sendJson(response, 409, {
@@ -568,7 +673,7 @@ export function createDashboardServer({
         ) {
           throw new Error("Content-Type must be application/json");
         }
-        body = await readJsonBody(request);
+        body = await readJsonBody(request, 12 * 1024 * 1024);
       } catch (error) {
         sendJson(response, 400, { error: error.message });
         return;
@@ -595,6 +700,22 @@ export function createDashboardServer({
         });
         return;
       }
+      const intakeSource = body.intakeSource ?? "manual";
+      if (!["manual", "azure-devops"].includes(intakeSource)) {
+        sendJson(response, 400, {
+          error: "intakeSource must be manual or azure-devops"
+        });
+        return;
+      }
+      let workItem = null;
+      try {
+        if (intakeSource === "azure-devops") {
+          workItem = validateWorkItemSummary(body.workItem);
+        }
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
 
       const readiness = inspectRepository(resolvedRepository);
       if (!readiness.repositoryReady || !readiness.profileReady) {
@@ -602,10 +723,34 @@ export function createDashboardServer({
         return;
       }
 
+      if (currentJob?.artifactDirectory) {
+        removeArtifactDirectory(currentJob.artifactDirectory);
+        artifactDirectories.delete(currentJob.artifactDirectory);
+      }
+      const jobId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      let storedScreenshots;
+      try {
+        storedScreenshots = storeScreenshots({
+          repository: resolvedRepository,
+          jobId,
+          screenshots: body.screenshots ?? []
+        });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (storedScreenshots.directory) {
+        artifactDirectories.add(storedScreenshots.directory);
+      }
+
       currentJob = {
-        id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        id: jobId,
         request: requestText,
         requestType,
+        intakeSource,
+        workItem,
+        screenshots: storedScreenshots.files,
+        artifactDirectory: storedScreenshots.directory,
         mode: body.mode,
         status: "running",
         startedAt: new Date().toISOString(),
@@ -631,6 +776,9 @@ export function createDashboardServer({
             request: requestText,
             mode: body.mode,
             requestType,
+            intakeSource,
+            workItem,
+            screenshotPaths: storedScreenshots.files.map((file) => file.path),
             cacheSummary: loadCacheSummary(currentJob.cacheContext)
           }),
           onOutput(stream, text) {
@@ -695,6 +843,10 @@ export function createDashboardServer({
       if (activeHandle?.terminate) {
         activeHandle.terminate();
       }
+      for (const directory of artifactDirectories) {
+        removeArtifactDirectory(directory);
+      }
+      artifactDirectories.clear();
       server.closeIdleConnections?.();
       await new Promise((resolveClose, reject) => {
         if (!server.listening) {

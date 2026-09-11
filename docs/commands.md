@@ -38,6 +38,26 @@ outcome. It never hardcodes environment choices. Human interaction is reserved
 for authentication, unsafe-data approval, deployment or pull-request approval,
 and genuine blockers.
 
+Manual entry is the default intake path. The dashboard can also load a full
+Azure DevOps work-item URL or use a numeric ID with this optional profile
+section:
+
+```json
+{
+  "azureDevOps": {
+    "organization": "your-organization",
+    "project": "your-project"
+  }
+}
+```
+
+Azure DevOps loading uses the local developer's authenticated Azure CLI
+identity and never exposes or stores the bearer token. It loads safe work-item
+text and metadata without downloading private attachments. Both intake paths
+can add up to five validated PNG/JPEG/WebP screenshots (2 MiB each, 8 MiB
+total). Generated files remain outside tracked source, are sent to the agent
+only as local paths, and are excluded from the durable metadata cache.
+
 Within one job/session, the prompt requires profile/instruction-first reading,
 git status and effective-diff inspection, task-relevant symbol searches, and
 focused risk-scaled validation. It avoids unchanged-file rereads, repeated

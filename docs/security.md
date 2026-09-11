@@ -17,6 +17,11 @@ operations. Treat every runner as privileged engineering infrastructure.
 - Retrieve secrets at runtime from an approved secret store.
 - Redact authorization headers, cookies, tokens, and connection strings.
 - Keep browser profiles and authentication state outside Git.
+- Azure DevOps intake uses the locally authenticated Azure CLI identity. The
+  resource token exists only during the outbound HTTPS request and is excluded
+  from browser responses, errors, logs, job state, prompts, and caches.
+- Work-item response bodies are not included in authentication errors, and
+  private Azure DevOps attachments are not downloaded automatically.
 
 ## Process isolation
 
@@ -41,9 +46,16 @@ operations. Treat every runner as privileged engineering infrastructure.
 - Avoid production unless a separately governed workflow explicitly allows it.
 - Sanitize screenshots and API evidence.
 - Apply retention limits to logs, screenshots, and temporary worktrees.
+- Dashboard screenshots are restricted to five PNG/JPEG/WebP files, 2 MiB each
+  and 8 MiB total. Names, extensions, MIME types, base64, and file signatures
+  are validated before generated files are written outside tracked source.
+- Screenshot artifacts are removed when replaced or on clean shutdown.
+  Directories older than seven days are pruned at startup; an abrupt process
+  termination may retain files until the next pruning pass.
 - The local dashboard's Git cache stores only bounded profile shape, result
   metadata, and sanitized stage summaries under `.git\fixlab`. It excludes
-  request text, raw logs, credentials, screenshots, and source contents.
+  request text, raw logs, credentials, screenshots, screenshot paths, and
+  source contents.
 - Cache reuse is keyed by repository identity, `HEAD`, and profile-content
   hash. Current diffs and repository instructions remain authoritative.
 

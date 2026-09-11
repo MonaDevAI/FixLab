@@ -1,0 +1,458 @@
+import { spawnSync } from "node:child_process";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import { request as httpsRequest } from "node:https";
+import { tmpdir } from "node:os";
+import { basename, isAbsolute, join, resolve } from "node:path";
+
+export const MAX_SCREENSHOTS = 5;
+export const MAX_SCREENSHOT_BYTES = 2 * 1024 * 1024;
+export const MAX_SCREENSHOT_TOTAL_BYTES = 8 * 1024 * 1024;
+const azureDevOpsResource = "499b84ac-1321-427f-aa17-267ca6975798";
+const imageTypes = new Map([
+  ["image/png", new Set([".png"])],
+  ["image/jpeg", new Set([".jpg", ".jpeg"])],
+  ["image/webp", new Set([".webp"])]
+]);
+
+function runGit(repository, args) {
+  const result = spawnSync("git", args, {
+    cwd: repository,
+    encoding: "utf8",
+    shell: false
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function extension(name) {
+  const index = name.lastIndexOf(".");
+  return index >= 0 ? name.slice(index).toLowerCase() : "";
+}
+
+function hasValidSignature(buffer, mimeType) {
+  if (mimeType === "image/png") {
+    return buffer.subarray(0, 8).equals(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    );
+  }
+  if (mimeType === "image/jpeg") {
+    return (
+      buffer.length >= 4 &&
+      buffer[0] === 0xff &&
+      buffer[1] === 0xd8 &&
+      buffer[buffer.length - 2] === 0xff &&
+      buffer[buffer.length - 1] === 0xd9
+    );
+  }
+  if (mimeType === "image/webp") {
+    return (
+      buffer.length >= 12 &&
+      buffer.subarray(0, 4).toString("ascii") === "RIFF" &&
+      buffer.subarray(8, 12).toString("ascii") === "WEBP"
+    );
+  }
+  return false;
+}
+
+function decodeBase64(value) {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      value
+    )
+  ) {
+    throw new Error("screenshot data must be valid base64");
+  }
+  const buffer = Buffer.from(value, "base64");
+  if (buffer.toString("base64") !== value) {
+    throw new Error("screenshot data must be canonical base64");
+  }
+  return buffer;
+}
+
+export function resolveArtifactRoot(repository) {
+  const commonGitDirectory = runGit(repository, [
+    "rev-parse",
+    "--git-common-dir"
+  ]);
+  if (commonGitDirectory) {
+    const gitDirectoryPath = isAbsolute(commonGitDirectory)
+      ? commonGitDirectory
+      : resolve(repository, commonGitDirectory);
+    return join(
+      realpathSync.native(gitDirectoryPath),
+      "fixlab",
+      "dashboard-artifacts"
+    );
+  }
+  const identity = createHash("sha256")
+    .update(resolve(repository))
+    .digest("hex")
+    .slice(0, 20);
+  return join(tmpdir(), "fixlab-dashboard-artifacts", identity);
+}
+
+export function storeScreenshots({ repository, jobId, screenshots = [] }) {
+  if (!Array.isArray(screenshots)) {
+    throw new Error("screenshots must be an array");
+  }
+  if (screenshots.length > MAX_SCREENSHOTS) {
+    throw new Error(`at most ${MAX_SCREENSHOTS} screenshots are allowed`);
+  }
+  if (screenshots.length === 0) {
+    return { directory: null, files: [] };
+  }
+
+  const prepared = [];
+  let totalBytes = 0;
+  for (const screenshot of screenshots) {
+    if (!screenshot || typeof screenshot !== "object") {
+      throw new Error("each screenshot must be an object");
+    }
+    const name =
+      typeof screenshot.name === "string" ? screenshot.name.trim() : "";
+    if (
+      !name ||
+      name !== basename(name) ||
+      name.includes("/") ||
+      name.includes("\\") ||
+      name.includes("..")
+    ) {
+      throw new Error("screenshot names must not contain paths or traversal");
+    }
+    const mimeType =
+      typeof screenshot.mimeType === "string"
+        ? screenshot.mimeType.toLowerCase()
+        : "";
+    const allowedExtensions = imageTypes.get(mimeType);
+    if (!allowedExtensions || !allowedExtensions.has(extension(name))) {
+      throw new Error(
+        "screenshots must be PNG, JPEG, or WebP with a matching extension"
+      );
+    }
+    const buffer = decodeBase64(screenshot.base64);
+    if (buffer.length > MAX_SCREENSHOT_BYTES) {
+      throw new Error(
+        `each screenshot must be at most ${MAX_SCREENSHOT_BYTES} bytes`
+      );
+    }
+    totalBytes += buffer.length;
+    if (totalBytes > MAX_SCREENSHOT_TOTAL_BYTES) {
+      throw new Error(
+        `screenshots must total at most ${MAX_SCREENSHOT_TOTAL_BYTES} bytes`
+      );
+    }
+    if (!hasValidSignature(buffer, mimeType)) {
+      throw new Error("screenshot content does not match its declared type");
+    }
+    prepared.push({ name, mimeType, buffer, extension: extension(name) });
+  }
+
+  const artifactRoot = resolveArtifactRoot(repository);
+  const directory = join(artifactRoot, jobId);
+  mkdirSync(artifactRoot, { recursive: true });
+  mkdirSync(directory, { mode: 0o700 });
+  try {
+    const files = prepared.map((screenshot, index) => {
+      const generatedName = `${String(index + 1).padStart(2, "0")}-${randomBytes(
+        8
+      ).toString("hex")}${screenshot.extension}`;
+      const path = join(directory, generatedName);
+      writeFileSync(path, screenshot.buffer, { flag: "wx", mode: 0o600 });
+      return {
+        name: screenshot.name,
+        mimeType: screenshot.mimeType,
+        bytes: screenshot.buffer.length,
+        path
+      };
+    });
+    return { directory, files };
+  } catch (error) {
+    removeArtifactDirectory(directory);
+    throw error;
+  }
+}
+
+export function removeArtifactDirectory(directory) {
+  if (directory && existsSync(directory)) {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+
+export function pruneArtifactDirectories(
+  repository,
+  maxAgeMilliseconds = 7 * 24 * 60 * 60 * 1000
+) {
+  const artifactRoot = resolveArtifactRoot(repository);
+  if (!existsSync(artifactRoot)) {
+    return;
+  }
+  const cutoff = Date.now() - maxAgeMilliseconds;
+  for (const name of readdirSync(artifactRoot)) {
+    if (!/^\d{10,}-[a-f0-9]+$/i.test(name)) {
+      continue;
+    }
+    const directory = join(artifactRoot, name);
+    try {
+      const details = lstatSync(directory);
+      if (
+        details.isDirectory() &&
+        !details.isSymbolicLink() &&
+        details.mtimeMs < cutoff
+      ) {
+        removeArtifactDirectory(directory);
+      }
+    } catch {
+      // A concurrent cleanup may already have removed the directory.
+    }
+  }
+}
+
+export function parseAzureDevOpsWorkItem(value, profile = {}) {
+  const input = typeof value === "string" ? value.trim() : "";
+  if (!input) {
+    throw new Error("Azure DevOps work item URL or ID is required");
+  }
+
+  if (/^\d+$/.test(input)) {
+    const organization = profile.azureDevOps?.organization;
+    const project = profile.azureDevOps?.project;
+    if (
+      typeof organization !== "string" ||
+      !organization.trim() ||
+      typeof project !== "string" ||
+      !project.trim()
+    ) {
+      throw new Error(
+        "ID-only lookup requires azureDevOps.organization and azureDevOps.project in the repository profile"
+      );
+    }
+    const id = Number(input);
+    if (!Number.isSafeInteger(id) || id < 1) {
+      throw new Error("work item ID must be a positive safe integer");
+    }
+    return {
+      organization: organization.trim(),
+      project: project.trim(),
+      id
+    };
+  }
+
+  let url;
+  try {
+    url = new URL(input);
+  } catch {
+    throw new Error("work item must be a numeric ID or full dev.azure.com URL");
+  }
+  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "dev.azure.com") {
+    throw new Error("work item URL must use https://dev.azure.com");
+  }
+  const segments = url.pathname
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => decodeURIComponent(segment));
+  const editIndex = segments.findIndex(
+    (segment, index) =>
+      segment.toLowerCase() === "_workitems" &&
+      segments[index + 1]?.toLowerCase() === "edit"
+  );
+  const id = editIndex >= 0 ? segments[editIndex + 2] : null;
+  if (
+    segments.length < 5 ||
+    editIndex !== 2 ||
+    !/^\d+$/.test(id ?? "")
+  ) {
+    throw new Error(
+      "work item URL must match https://dev.azure.com/{organization}/{project}/_workitems/edit/{id}"
+    );
+  }
+  const numericId = Number(id);
+  if (!Number.isSafeInteger(numericId) || numericId < 1) {
+    throw new Error("work item ID must be a positive safe integer");
+  }
+  return {
+    organization: segments[0],
+    project: segments[1],
+    id: numericId
+  };
+}
+
+export function sanitizeAzureDevOpsHtml(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+  return value
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
+    .replace(/<(?:br|\/p|\/div|\/li|\/h[1-6])\s*\/?>/gi, "\n")
+    .replace(/<li\b[^>]*>/gi, "- ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, code) =>
+      String.fromCodePoint(Number.parseInt(code, 16))
+    )
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function workItemText(value, maximumLength) {
+  return sanitizeAzureDevOpsHtml(value).slice(0, maximumLength);
+}
+
+function defaultTokenProvider() {
+  const result = spawnSync(
+    "az",
+    [
+      "account",
+      "get-access-token",
+      "--resource",
+      azureDevOpsResource,
+      "--query",
+      "accessToken",
+      "--output",
+      "tsv"
+    ],
+    {
+      encoding: "utf8",
+      shell: process.platform === "win32",
+      windowsHide: true
+    }
+  );
+  const token = result.status === 0 ? result.stdout.trim() : "";
+  if (!token) {
+    throw new Error(
+      "Azure CLI authentication is unavailable. Install Azure CLI and run az login with access to the requested Azure DevOps organization."
+    );
+  }
+  return token;
+}
+
+function defaultRequestJson(url, token) {
+  return new Promise((resolveRequest, reject) => {
+    const request = httpsRequest(
+      url,
+      {
+        method: "GET",
+        headers: {
+          Accept: "application/json",
+          Authorization: `Bearer ${token}`
+        }
+      },
+      (response) => {
+        const chunks = [];
+        let size = 0;
+        response.on("data", (chunk) => {
+          size += chunk.length;
+          if (size <= 2 * 1024 * 1024) {
+            chunks.push(chunk);
+          }
+        });
+        response.on("end", () => {
+          if (size > 2 * 1024 * 1024) {
+            reject(new Error("Azure DevOps response exceeded 2 MiB"));
+            return;
+          }
+          const text = Buffer.concat(chunks).toString("utf8");
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            reject(
+              new Error(
+                `Azure DevOps returned HTTP ${response.statusCode}. Verify the work item and your access.`
+              )
+            );
+            return;
+          }
+          try {
+            resolveRequest(JSON.parse(text));
+          } catch {
+            reject(new Error("Azure DevOps returned invalid JSON"));
+          }
+        });
+      }
+    );
+    request.setTimeout(15000, () => {
+      request.destroy(new Error("Azure DevOps request timed out"));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+export function createAzureDevOpsLoader({
+  tokenProvider = defaultTokenProvider,
+  requestJson = defaultRequestJson
+} = {}) {
+  return async ({ workItem, profile }) => {
+    const target = parseAzureDevOpsWorkItem(workItem, profile);
+    let token;
+    try {
+      token = await tokenProvider();
+      const apiUrl =
+        `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
+        `${encodeURIComponent(target.project)}/_apis/wit/workitems/` +
+        `${target.id}?$expand=all&api-version=7.1`;
+      const item = await requestJson(apiUrl, token);
+      const fields = item?.fields ?? {};
+      const fallbackWebUrl =
+        `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
+        `${encodeURIComponent(target.project)}/_workitems/edit/${target.id}`;
+      const linkedWebUrl = item?._links?.html?.href;
+      const webUrl =
+        typeof linkedWebUrl === "string" &&
+        /^https:\/\/dev\.azure\.com\//i.test(linkedWebUrl)
+          ? linkedWebUrl
+          : fallbackWebUrl;
+      return {
+        id: Number(fields["System.Id"] ?? item.id ?? target.id),
+        title: workItemText(fields["System.Title"], 500),
+        description: workItemText(fields["System.Description"], 10000),
+        reproduction: workItemText(
+          fields["Microsoft.VSTS.TCM.ReproSteps"],
+          10000
+        ),
+        acceptanceCriteria: workItemText(
+          fields["Microsoft.VSTS.Common.AcceptanceCriteria"],
+          10000
+        ),
+        state: workItemText(fields["System.State"], 200),
+        workItemType: workItemText(fields["System.WorkItemType"], 200),
+        webUrl
+      };
+    } catch (error) {
+      const message = String(error?.message ?? error);
+      if (token && message.includes(token)) {
+        throw new Error(message.split(token).join("[REDACTED]"));
+      }
+      throw new Error(message.replace(/Bearer\s+\S+/gi, "Bearer [REDACTED]"));
+    } finally {
+      token = null;
+    }
+  };
+}
+
+export function loadRepositoryProfile(repository) {
+  return JSON.parse(
+    readFileSync(
+      join(repository, ".github", "fixlab", "repository-profile.json"),
+      "utf8"
+    )
+  );
+}

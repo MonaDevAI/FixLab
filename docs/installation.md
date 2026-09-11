@@ -16,6 +16,11 @@ The machine running FixLab needs:
 - Microsoft Edge or another repository-approved Playwright browser
 - Access to the source repository and its allowed validation environments
 
+Azure CLI is optional. It is required only when the local dashboard loads
+Azure DevOps work items. Authenticate with `az login` using the developer
+identity that already has access to the requested organization and project.
+FixLab does not persist the resulting Azure DevOps resource token.
+
 Use your organization's supported Agency installation and authentication
 instructions. Verify the runtime before continuing:
 
