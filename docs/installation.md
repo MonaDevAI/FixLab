@@ -26,8 +26,30 @@ agency copilot
 
 FixLab does not install Agency or manage Agency authentication.
 
-Install Playwright in the frontend or browser-test project before running
-FixLab. For example:
+FixLab can inspect the repository profile and prepare the repository-local
+Playwright installation commands:
+
+```powershell
+fixlab setup-playwright
+```
+
+This first prints the detected package manager and exact commands without
+changing the repository. Review them, then approve execution:
+
+```powershell
+fixlab setup-playwright --yes
+```
+
+The command:
+
+- Detects npm, pnpm, or Yarn from the repository lock file
+- Installs the configured Playwright package as a development dependency when
+  it is missing
+- Installs the configured browser or browser channel
+- Performs a real headless launch to verify the installation
+- Stops with an explicit failure if installation or verification fails
+
+You can also install Playwright manually. For example:
 
 ```powershell
 Set-Location <application-repository>\frontend
@@ -36,8 +58,9 @@ npx playwright install chromium
 ```
 
 Use the package and browser required by the application repository. Playwright
-and its browser binaries remain on the developer or registered runner machine;
-FixLab does not install them silently.
+and its browser binaries remain on the developer or registered runner machine.
+FixLab never installs them silently; `--yes` is required before setup commands
+are executed.
 
 ## Install from a Git checkout
 
@@ -110,10 +133,15 @@ The repository profile controls the Playwright check:
   "browserAutomation": {
     "workingDirectory": "frontend",
     "package": "@playwright/test",
-    "browser": "chromium"
+    "browser": "chromium",
+    "channel": "msedge"
   }
 }
 ```
+
+`browser` selects the Playwright browser API. The optional `channel` selects an
+installed branded browser such as Microsoft Edge. Omit `channel` when the
+repository uses Playwright's bundled Chromium.
 
 ## Run FixLab
 

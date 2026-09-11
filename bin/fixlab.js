@@ -23,6 +23,7 @@ function printUsage() {
 Usage:
   fixlab init [repository]
   fixlab doctor [repository]
+  fixlab setup-playwright [repository] [--yes]
   fixlab run [repository] [--] [request...]
   fixlab validate [repository] --pr <number>
   fixlab --help
@@ -30,6 +31,8 @@ Usage:
 Commands:
   init      Add the FixLab repository profile template.
   doctor    Check required tools and repository configuration.
+  setup-playwright
+            Plan or install the repository-local Playwright package and browser.
   run       Launch the FixLab Agency agent for a request.
   validate  Launch validation-only mode for a pull request.`);
 }
@@ -83,6 +86,7 @@ function checkPlaywright(repository, profile) {
     "playwright"
   ].filter((value, index, values) => value && values.indexOf(value) === index);
   const browserName = configuration.browser ?? "chromium";
+  const browserChannel = configuration.channel;
 
   if (!existsSync(workingDirectory)) {
     const detail = `working directory is missing: ${workingDirectory}`;
@@ -138,9 +142,14 @@ function checkPlaywright(repository, profile) {
       throw new Error("configured browser is not exported by Playwright");
     }
     (async () => {
-      const browser = await browserType.launch({ headless: true });
+      const browser = await browserType.launch({
+        headless: true,
+        ...(${JSON.stringify(browserChannel)} ? { channel: ${JSON.stringify(browserChannel)} } : {})
+      });
       await browser.close();
-      process.stdout.write(${JSON.stringify(browserName)});
+      process.stdout.write(${JSON.stringify(
+        browserChannel ? `${browserName}:${browserChannel}` : browserName
+      )});
     })().catch((error) => {
       process.stderr.write(error.message);
       process.exit(1);
@@ -152,13 +161,16 @@ function checkPlaywright(repository, profile) {
     timeout: 45000
   });
   const launchedBrowser = browserResult.stdout?.trim();
+  const expectedBrowser = browserChannel
+    ? `${browserName}:${browserChannel}`
+    : browserName;
   const browserCheck = {
     name: "Playwright browser",
-    ok: browserResult.status === 0 && launchedBrowser === browserName,
+    ok: browserResult.status === 0 && launchedBrowser === expectedBrowser,
     detail:
       browserResult.error?.message ??
       (launchedBrowser
-        ? `${launchedBrowser} launched successfully`
+        ? `${launchedBrowser.replace(":", " channel ")} launched successfully`
         : browserResult.stderr?.trim() ??
           "browser launch failed; install the configured Playwright browser")
   };
@@ -221,6 +233,119 @@ function doctor(repository) {
   }
 
   console.log(`FixLab is ready for ${profile.name ?? repository}.`);
+  return 0;
+}
+
+function detectPackageManager(workingDirectory) {
+  if (existsSync(join(workingDirectory, "pnpm-lock.yaml"))) {
+    return "pnpm";
+  }
+  if (existsSync(join(workingDirectory, "yarn.lock"))) {
+    return "yarn";
+  }
+  return "npm";
+}
+
+function playwrightSetupCommands(packageManager, packageName, browserTarget) {
+  if (packageManager === "pnpm") {
+    return [
+      ["pnpm", ["add", "--save-dev", packageName]],
+      ["pnpm", ["exec", "playwright", "install", browserTarget]]
+    ];
+  }
+  if (packageManager === "yarn") {
+    return [
+      ["yarn", ["add", "--dev", packageName]],
+      ["yarn", ["playwright", "install", browserTarget]]
+    ];
+  }
+  return [
+    ["npm", ["install", "--save-dev", packageName]],
+    ["npx", ["playwright", "install", browserTarget]]
+  ];
+}
+
+function formatCommand(command, args) {
+  return [command, ...args].join(" ");
+}
+
+function setupPlaywright(repository, approved) {
+  const { profile, error } = loadProfile(repository);
+  if (error) {
+    console.error(
+      `Cannot set up Playwright because ${error}. Run "fixlab init ${repository}" first.`
+    );
+    return 1;
+  }
+
+  const configuration = profile.browserAutomation ?? {};
+  const workingDirectory = resolve(
+    repository,
+    configuration.workingDirectory ??
+      profile.applications?.frontend?.workingDirectory ??
+      "."
+  );
+  if (!existsSync(workingDirectory)) {
+    console.error(`Playwright working directory is missing: ${workingDirectory}`);
+    return 1;
+  }
+
+  const packageName = configuration.package ?? "@playwright/test";
+  const browserTarget = configuration.channel ?? configuration.browser ?? "chromium";
+  const current = checkPlaywright(repository, profile);
+  if (current.packageCheck.ok && current.browserCheck.ok) {
+    console.log(`Playwright is already ready in ${workingDirectory}.`);
+    console.log(`PASS  ${current.packageCheck.name} (${current.packageCheck.detail})`);
+    console.log(`PASS  ${current.browserCheck.name} (${current.browserCheck.detail})`);
+    return 0;
+  }
+
+  const packageManager = detectPackageManager(workingDirectory);
+  if (!findExecutable(packageManager)) {
+    console.error(`Required package manager is unavailable: ${packageManager}`);
+    return 1;
+  }
+
+  const commands = playwrightSetupCommands(
+    packageManager,
+    packageName,
+    browserTarget
+  ).filter((_, index) => index > 0 || !current.packageCheck.ok);
+
+  console.log(`Playwright setup directory: ${workingDirectory}`);
+  console.log(`Detected package manager: ${packageManager}`);
+  console.log("Planned commands:");
+  for (const [command, args] of commands) {
+    console.log(`  ${formatCommand(command, args)}`);
+  }
+
+  if (!approved) {
+    console.log("No changes made. Review the commands and rerun with --yes to execute them.");
+    return 0;
+  }
+
+  for (const [command, args] of commands) {
+    const result = spawnSync(command, args, {
+      cwd: workingDirectory,
+      stdio: "inherit",
+      shell: process.platform === "win32"
+    });
+    if (result.status !== 0) {
+      console.error(`Playwright setup failed: ${formatCommand(command, args)}`);
+      return result.status ?? 1;
+    }
+  }
+
+  const verified = checkPlaywright(repository, profile);
+  for (const check of [verified.packageCheck, verified.browserCheck]) {
+    console.log(`${check.ok ? "PASS" : "FAIL"}  ${check.name} (${check.detail})`);
+  }
+  if (!verified.packageCheck.ok || !verified.browserCheck.ok) {
+    console.error("Playwright installation completed but verification failed.");
+    return 1;
+  }
+
+  console.log("Playwright setup and browser launch verification completed.");
   return 0;
 }
 
@@ -287,6 +412,14 @@ function main(args) {
 
   if (command === "doctor") {
     return doctor(resolveRepository(rest[0]));
+  }
+
+  if (command === "setup-playwright") {
+    const repositoryArgument = rest.find((value) => !value.startsWith("-"));
+    return setupPlaywright(
+      resolveRepository(repositoryArgument),
+      rest.includes("--yes")
+    );
   }
 
   if (command === "run") {

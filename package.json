@@ -1,6 +1,6 @@
 {
   "name": "@fixlab/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Agency Copilot-powered CLI and plugin for evidence-backed React and .NET defect validation.",
   "type": "module",
   "bin": {

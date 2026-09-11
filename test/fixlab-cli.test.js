@@ -96,16 +96,47 @@ test("doctor launches the configured Playwright browser", () => {
     mkdirSync(playwrightDirectory, { recursive: true });
     writeFileSync(
       join(playwrightDirectory, "index.js"),
-      "exports.chromium = { launch: async () => ({ close: async () => {} }) };"
+      "exports.chromium = { launch: async (options) => { if (options.channel !== 'msedge') throw new Error('missing Edge channel'); return { close: async () => {} }; } };"
     );
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.browserAutomation.channel = "msedge";
+    writeFileSync(profilePath, JSON.stringify(profile));
 
     const result = run(["doctor", repository], repository);
 
     assert.match(result.stdout, /PASS  Playwright package/);
     assert.match(
       result.stdout,
-      /PASS  Playwright browser \(chromium launched successfully\)/
+      /PASS  Playwright browser \(chromium channel msedge launched successfully\)/
     );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("setup-playwright plans approved repository-local commands without changing files", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const frontend = join(repository, "frontend");
+    mkdirSync(frontend, { recursive: true });
+    writeFileSync(join(frontend, "package-lock.json"), "{}");
+
+    const result = run(["setup-playwright", repository], repository);
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Detected package manager: npm/);
+    assert.match(result.stdout, /npm install --save-dev @playwright\/test/);
+    assert.match(result.stdout, /npx playwright install chromium/);
+    assert.match(result.stdout, /No changes made/);
+    assert.equal(existsSync(join(frontend, "node_modules")), false);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

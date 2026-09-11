@@ -50,6 +50,7 @@ passed, what was skipped, and what still needs human attention.
 
    ```shell
    fixlab doctor
+   fixlab setup-playwright
    fixlab validate --pr 123
    ```
 
@@ -95,6 +96,7 @@ visible risk. A skipped check is never reported as successful.
 - "Reproduce this frontend defect and capture evidence."
 - "Find the smallest safe fix and run the affected tests."
 - "Start the React and .NET applications and test this browser journey."
+- "Prepare and verify the repository-local Playwright installation."
 - "Explain why the production build is blocked."
 - "Prepare a pull request with the validation evidence."
 
