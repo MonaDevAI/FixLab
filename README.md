@@ -1,4 +1,12 @@
-# FixLab
+<p align="center">
+  <img src="assets/fixlab-logo.svg" width="180" alt="FixLab logo">
+</p>
+
+<h1 align="center">FixLab</h1>
+
+<p align="center">
+  From a bug or small enhancement to a tested, evidence-backed pull request.
+</p>
 
 FixLab is a reusable engineering workflow that helps teams turn software
 defects into tested, review-ready changes.

@@ -2,6 +2,11 @@
 
 All notable changes to FixLab are documented in this file.
 
+## 0.5.1
+
+- Add the reusable FixLab logo to the public repository and packaged assets.
+- Display the product identity prominently in the GitHub README.
+
 ## 0.5.0
 
 - Add manual or Azure DevOps work-item intake.

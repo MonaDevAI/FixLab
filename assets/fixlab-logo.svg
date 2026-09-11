@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title description">
+  <title id="title">FixLab logo</title>
+  <desc id="description">A teal and purple hexagon containing the letter F and a green validation check.</desc>
+  <defs>
+    <linearGradient id="outline" x1="70" y1="70" x2="442" y2="442" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#54e5db"/>
+      <stop offset="0.55" stop-color="#55b9f3"/>
+      <stop offset="1" stop-color="#a978f4"/>
+    </linearGradient>
+    <linearGradient id="surface" x1="120" y1="100" x2="400" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#173955"/>
+      <stop offset="1" stop-color="#171d3e"/>
+    </linearGradient>
+  </defs>
+  <path d="M256 30 442 137v238L256 482 70 375V137L256 30Z" fill="#08182d"/>
+  <path d="M256 48 426 146v220L256 464 86 366V146L256 48Z" fill="url(#surface)" stroke="url(#outline)" stroke-width="16"/>
+  <path d="M189 151h156v48H247v62h86v47h-86v115h-58V151Z" fill="#f5f8ff"/>
+  <path d="m292 377 35 34 75-86" fill="none" stroke="#54dc8c" stroke-linecap="round" stroke-linejoin="round" stroke-width="25"/>
+</svg>
