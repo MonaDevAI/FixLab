@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import {
   copyFileSync,
   existsSync,
@@ -9,6 +9,12 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  createDashboardServer,
+  DEFAULT_DASHBOARD_PORT,
+  inspectRepository,
+  validatePort
+} from "../dashboard/server.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -35,6 +41,7 @@ Usage:
   fixlab setup-playwright [repository] [--yes]
   fixlab run [repository] [--] [request...]
   fixlab validate [repository] --pr <number>
+  fixlab dashboard [repository] [--port <number>] [--no-open]
   fixlab --help
 
 Commands:
@@ -43,7 +50,8 @@ Commands:
   setup-playwright
             Plan or install the repository-local Playwright package and browser.
   run       Launch the FixLab Agency agent for a request.
-  validate  Launch validation-only mode for a pull request.`);
+  validate  Launch validation-only mode for a pull request.
+  dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).`);
 }
 
 function resolveRepository(value) {
@@ -428,7 +436,106 @@ function parseValidateArguments(args) {
   return { repository, pullRequest };
 }
 
-function main(args) {
+function parseDashboardArguments(args) {
+  let repositoryArgument;
+  let port = DEFAULT_DASHBOARD_PORT;
+  let open = true;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--no-open") {
+      open = false;
+      continue;
+    }
+    if (argument === "--port") {
+      if (!args[index + 1]) {
+        return { error: "dashboard requires a value after --port" };
+      }
+      try {
+        port = validatePort(args[index + 1]);
+      } catch (error) {
+        return { error: error.message };
+      }
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("-")) {
+      return { error: `unknown dashboard option: ${argument}` };
+    }
+    if (repositoryArgument) {
+      return { error: "dashboard accepts at most one repository path" };
+    }
+    repositoryArgument = argument;
+  }
+  return {
+    repository: resolveRepository(repositoryArgument),
+    port,
+    open
+  };
+}
+
+function openBrowser(url) {
+  let command;
+  let args;
+  if (process.platform === "win32") {
+    command = process.env.ComSpec ?? "cmd.exe";
+    args = ["/d", "/s", "/c", "start", "", url];
+  } else if (process.platform === "darwin") {
+    command = "open";
+    args = [url];
+  } else {
+    command = "xdg-open";
+    args = [url];
+  }
+  const child = spawn(command, args, {
+    detached: true,
+    stdio: "ignore",
+    shell: false
+  });
+  child.on("error", (error) => {
+    console.error(`Could not open the system browser: ${error.message}`);
+  });
+  child.unref();
+}
+
+async function dashboard(repository, port, shouldOpen) {
+  const readiness = inspectRepository(repository);
+  if (!readiness.repositoryReady) {
+    console.error(`Cannot start FixLab dashboard: ${readiness.error}`);
+    return 1;
+  }
+  const dashboardServer = createDashboardServer({
+    repository,
+    packageRoot
+  });
+  let address;
+  try {
+    address = await dashboardServer.listen({ port });
+  } catch (error) {
+    console.error(`Cannot start FixLab dashboard: ${error.message}`);
+    return 1;
+  }
+
+  console.log(`FixLab dashboard: ${address.url}`);
+  console.log(`Repository: ${repository}`);
+  console.log("Press Ctrl+C to stop the local dashboard.");
+  if (shouldOpen) {
+    openBrowser(address.url);
+  }
+
+  let closing = false;
+  const close = async () => {
+    if (closing) {
+      return;
+    }
+    closing = true;
+    await dashboardServer.close();
+  };
+  process.once("SIGINT", close);
+  process.once("SIGTERM", close);
+  return 0;
+}
+
+async function main(args) {
   const [command, ...rest] = args;
   if (!command || command === "--help" || command === "-h") {
     printUsage();
@@ -474,9 +581,18 @@ function main(args) {
     );
   }
 
+  if (command === "dashboard") {
+    const parsed = parseDashboardArguments(rest);
+    if (parsed.error) {
+      console.error(parsed.error);
+      return 1;
+    }
+    return dashboard(parsed.repository, parsed.port, parsed.open);
+  }
+
   console.error(`Unknown command: ${command}`);
   printUsage();
   return 1;
 }
 
-process.exitCode = main(process.argv.slice(2));
+process.exitCode = await main(process.argv.slice(2));

@@ -36,13 +36,16 @@ passed, what was skipped, and what still needs human attention.
 2. **Install or run the FixLab CLI package.**
 
    ```shell
-   npm install --global @fixlab/cli
+   npm install --global github:MonaDevAI/FixLab
    fixlab init
+   fixlab dashboard
    ```
 
    While developing locally, use `npm install --global .` from this repository.
    `fixlab init` adds the repository profile and packaged Copilot prompt
-   commands without overwriting existing files.
+   commands without overwriting existing files. Installation does not start a
+   server; `fixlab dashboard` explicitly starts the local dashboard and opens
+   it in the system browser.
 3. **Describe the application.**
    Set the frontend and backend paths, restore and test commands, startup
    commands, ports, safe environments, and browser journeys.
@@ -154,7 +157,68 @@ profile template. The CLI provides repository initialization, prerequisite
 diagnostics, direct agent launch, and validation-only pull request launch.
 
 The current package launches Agency locally. A shared dashboard, durable broker,
-and registered runner service remain separate future distribution layers.
+and registered runner service remain separate future distribution layers. The
+included dashboard is a single-user local interface bound to `127.0.0.1`.
+
+Start it from an onboarded repository:
+
+```shell
+fixlab dashboard
+fixlab dashboard ..\another-repository --port 4318 --no-open
+```
+
+The dashboard reads `.github\fixlab\repository-profile.json`, accepts
+`bug-fix` or `small-enhancement` requests in fix-and-validate or validate-only
+mode, invokes the packaged
+`FixLab:fixlab` Agency plugin from that repository, and displays one staged job
+with polled logs. It runs one job at a time and does not expose a public network
+listener.
+
+The primary input is only the bug or required enhancement. FixLab obtains
+commands, applications, allowed systems and environments, and live-test
+journeys from the repository profile. The agent owns the complete lifecycle:
+it creates a concise acceptance or fix contract, diagnoses the defect or checks
+the affected surface, makes the smallest required change, self-reviews the
+effective diff, runs focused local tests/type-checks/builds, starts
+profile-defined applications, executes the profile-defined live test, collects
+evidence, and creates or updates the pull request only after required gates
+pass. It does not ask the user to direct routine steps.
+
+Human interaction is reserved for authentication, unsafe-data approval,
+deployment or pull-request approval, and genuine blockers. FixLab never
+hardcodes an environment choice; the repository profile supplies and governs
+that context.
+
+Within a job, FixLab reads the profile and repository instructions first,
+checks git status and the effective diff, and focuses searches on relevant
+symbols and files. It reuses the same Agency session context and avoids
+rereading unchanged files, repeating completed diagnosis, reinstalling
+available dependencies, or rerunning broad checks without risk evidence.
+Validation remains focused and risk-scaled. Stage summaries are retained
+separately, while the local raw-log view is bounded to avoid unbounded context.
+
+For Git repositories, the dashboard keeps a small durable metadata cache under
+the repository's Git directory at `.git\fixlab\dashboard-cache.json` (or the
+shared Git directory for worktrees). Entries are keyed by repository identity,
+current `HEAD`, and the repository-profile content hash. A matching later job
+receives only the concise profile shape, prior result, and sanitized stage
+summaries. The cache never stores request text, raw logs, credentials,
+screenshots, or source contents; it is capped at 20 entries and 64 KiB.
+
+`HEAD` or profile-content changes automatically miss the cache. Instruction
+changes are also prompt-level invalidation boundaries and must be reread. For
+correctness, non-Git repositories do not receive durable cache reuse. This is
+verified metadata reuse, not a durable repository scan or source-index cache;
+task-specific facts are always checked against the current diff and relevant
+files.
+
+Small enhancements use a risk-scaled fast path: FixLab defines a concise
+acceptance contract, checks and bounds the affected surface, uses the smallest
+existing focused test, and avoids manufacturing a defect reproduction. Broad
+suites and full builds are skipped unless the profile or user-visible/risk
+evidence requires them. Unlike a general coding agent, this path still requires
+explicit review, live-test, pull-request, and skipped-stage evidence and
+prohibits unrelated changes.
 
 ### Runtime dependency
 

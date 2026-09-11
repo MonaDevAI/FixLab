@@ -32,6 +32,66 @@ Install only the tools required by the repository profile.
 
 Run `fixlab doctor` after editing the profile.
 
+Start the local dashboard explicitly:
+
+```powershell
+fixlab dashboard
+```
+
+Installation and `fixlab init` do not start it automatically. The dashboard
+shows profile readiness, accepts `bug-fix` or `small-enhancement` requests, and
+offers fix-and-validate and validate-only modes. Bug fix is the default request
+type. Start with validate-only when
+onboarding a repository; that mode prohibits edits, commits, pushes, and pull
+request changes.
+
+The request field should contain only the bug or required enhancement. Do not
+copy profile-owned paths, commands, ports, systems, or environment choices into
+the request. FixLab reads that validation context from
+`.github/fixlab/repository-profile.json`.
+
+After submission, the agent owns the complete lifecycle: acceptance or fix
+contract, diagnosis or affected-surface inspection, smallest required
+implementation, effective-diff self-review, focused tests/type-check/build,
+profile-defined application startup, repository-defined live testing against
+the allowed required system or environment, evidence collection, and the
+pull-request outcome. A pull request is created or updated only after required
+gates pass.
+
+Routine engineering steps require no human direction. Interaction is limited
+to authentication, unsafe-data approval, deployment or pull-request approval,
+or a genuine blocker. Environment choices are never hardcoded by the
+dashboard; the repository profile controls them.
+
+For efficient repeat work in the same repository, FixLab reads the profile and
+instructions first, checks git status and the effective diff, and searches only
+task-relevant symbols and files. It reuses the current job/session context and
+does not reread unchanged files, repeat completed diagnosis, reinstall
+available dependencies, or rerun broad checks unless new evidence requires it.
+Focused searches, focused tests, and risk-scaled validation are the default.
+
+The dashboard keeps concise stage summaries and a bounded local raw-log window.
+For Git repositories it also stores a small metadata-only cache in
+`.git\fixlab\dashboard-cache.json`, keyed by repository identity, `HEAD`, and
+profile-content hash. A matching later job can reuse sanitized profile shape,
+prior result, and stage summaries. Request text, raw logs, credentials,
+screenshots, and source contents are excluded, and the cache is limited to 20
+entries and 64 KiB.
+
+`HEAD` or profile changes cause an automatic miss; instruction changes require
+the instructions to be reread. Non-Git repositories skip durable reuse. The
+cache is not a repository scan or source index, so the current diff and
+task-relevant files remain authoritative.
+
+Small enhancements follow a risk-scaled fast path. FixLab first records a
+concise acceptance contract, checks the affected surface, bounds the file
+scope, and uses the smallest existing focused test instead of inventing a
+failing defect reproduction. It skips broad suites and full builds unless the
+repository profile or user-visible/risk evidence requires them. This differs
+from a general coding agent because review, live-test, pull-request, and
+skipped-stage evidence remain mandatory, and unrelated changes remain
+prohibited.
+
 The installed prompt files provide the staged workflow:
 
 ```text

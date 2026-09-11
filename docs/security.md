@@ -20,11 +20,20 @@ operations. Treat every runner as privileged engineering infrastructure.
 
 ## Process isolation
 
+- The reusable dashboard binds only to `127.0.0.1`; it is not a team service or
+  public network endpoint.
+- Installation never starts a listener. `fixlab dashboard` is an explicit,
+  foreground local command.
+- The dashboard accepts one job at a time and executes Agency with the selected
+  repository as its working directory.
+- Validate-only dashboard jobs prohibit edits, commits, pushes, and pull
+  request creation or updates.
 - Use one worktree per job.
 - Record every process identifier started by the runner.
 - Stop only verified descendants of the job's runner process.
 - Never terminate a process by name or broad wildcard.
-- Use fixed, documented local ports and report conflicts safely.
+- Use documented local ports and report conflicts safely. The dashboard
+  defaults to port 4317 but accepts an explicit alternate port.
 
 ## Data handling
 
@@ -32,6 +41,11 @@ operations. Treat every runner as privileged engineering infrastructure.
 - Avoid production unless a separately governed workflow explicitly allows it.
 - Sanitize screenshots and API evidence.
 - Apply retention limits to logs, screenshots, and temporary worktrees.
+- The local dashboard's Git cache stores only bounded profile shape, result
+  metadata, and sanitized stage summaries under `.git\fixlab`. It excludes
+  request text, raw logs, credentials, screenshots, and source contents.
+- Cache reuse is keyed by repository identity, `HEAD`, and profile-content
+  hash. Current diffs and repository instructions remain authoritative.
 
 ## Supply chain
 
@@ -47,4 +61,3 @@ operations. Treat every runner as privileged engineering infrastructure.
 - Allowlist tools, paths, domains, repositories, and commands.
 - Require confirmation for destructive or externally visible operations.
 - Preserve an audit trail of decisions and tool execution.
-

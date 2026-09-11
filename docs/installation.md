@@ -25,6 +25,20 @@ agency copilot
 ```
 
 FixLab does not install Agency or manage Agency authentication.
+Installing FixLab does not start a server or background service. The local
+dashboard starts only when you run `fixlab dashboard`.
+
+## Install directly from GitHub
+
+Install the public repository with npm:
+
+```powershell
+npm install --global github:MonaDevAI/FixLab
+fixlab --help
+```
+
+This installs the CLI, dashboard assets, and packaged Agency plugin. Agency
+itself remains a separate prerequisite.
 
 FixLab can inspect the repository profile and prepare the repository-local
 Playwright installation commands:
@@ -81,7 +95,7 @@ and launches it through the existing `agency` executable.
 If a release provides `fixlab-cli-<version>.tgz`, install it directly:
 
 ```powershell
-npm install --global .\fixlab-cli-0.1.0.tgz
+npm install --global .\fixlab-cli-0.4.0.tgz
 fixlab --help
 ```
 
@@ -145,6 +159,23 @@ repository uses Playwright's bundled Chromium.
 
 ## Run FixLab
 
+Start the local dashboard from an onboarded repository:
+
+```powershell
+fixlab dashboard
+```
+
+It binds only to `127.0.0.1`, uses port `4317` by default, and opens the system
+browser. Select another repository or port, or suppress browser opening:
+
+```powershell
+fixlab dashboard C:\source\application --port 4318 --no-open
+```
+
+The dashboard requires `.github\fixlab\repository-profile.json` before a job
+can start. It permits one local job at a time and invokes the packaged
+`FixLab:fixlab` plugin with the selected repository as its working directory.
+
 Start an interactive FixLab session:
 
 ```powershell
@@ -168,6 +199,10 @@ Internally, the CLI launches the packaged plugin through:
 ```powershell
 agency copilot --plugin local:<installed-fixlab-package> --agent fixlab:fixlab
 ```
+
+The dashboard uses the same plugin resolution. Closing the dashboard server
+terminates only its active Agency child process; it does not terminate
+unrelated repository, browser, or developer processes.
 
 ## Run the plugin without installing the CLI
 

@@ -2,6 +2,18 @@
 
 All notable changes to FixLab are documented in this file.
 
+## 0.4.0
+
+- Add an explicit, dependency-free local dashboard command for any onboarded
+  repository.
+- Add bug-fix and risk-scaled small-enhancement request types.
+- Add token-efficiency guidance, bounded dashboard logs, and a safe,
+  metadata-only same-repository cache.
+- Show repository readiness, staged job progress, and polled local logs.
+- Enforce single-job execution, validate-only protections, complete terminal
+  stage markers, safe static serving, and owned-child shutdown.
+- Package the dashboard UI and add integration coverage with a fake executor.
+
 ## 0.3.1
 
 - Fix `fixlab run` and `fixlab validate` to use Agency's resolved `FixLab`

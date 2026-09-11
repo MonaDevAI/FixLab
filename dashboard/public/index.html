@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>FixLab Dashboard</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">Local repository workflow</p>
+          <h1>FixLab Dashboard</h1>
+          <p class="summary">Describe the bug or required enhancement. FixLab uses the repository profile to own diagnosis, implementation, local validation, live testing, evidence, and the gated pull-request outcome.</p>
+        </div>
+        <div id="readiness" class="readiness">Checking repository…</div>
+      </header>
+
+      <section class="panel">
+        <form id="job-form">
+          <label for="request">Bug or required enhancement</label>
+          <textarea id="request" name="request" rows="6" maxlength="10000" required
+            placeholder="Describe what is wrong or what small enhancement is required. Repository-defined validation context is loaded automatically."></textarea>
+          <fieldset>
+            <legend>Request type</legend>
+            <label><input type="radio" name="requestType" value="bug-fix" checked> Bug fix</label>
+            <label><input type="radio" name="requestType" value="small-enhancement"> Small enhancement</label>
+          </fieldset>
+          <fieldset>
+            <legend>Mode</legend>
+            <label><input type="radio" name="mode" value="fix-and-validate" checked> Fix and validate</label>
+            <label><input type="radio" name="mode" value="validate-only"> Validate only</label>
+          </fieldset>
+          <button id="start-button" type="submit">Start job</button>
+          <p class="guidance">FixLab proceeds autonomously. It asks for human input only for authentication, unsafe-data approval, deployment or PR approval, or a genuine blocker.</p>
+          <p id="form-error" class="error" role="alert"></p>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Job</h2>
+          <span id="job-status" class="badge">Not started</span>
+        </div>
+        <div id="stages" class="stages"></div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Logs</h2>
+          <span>Polled locally</span>
+        </div>
+        <pre id="logs" aria-live="polite">No job output yet.</pre>
+      </section>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>

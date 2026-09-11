@@ -16,3 +16,35 @@ overwriting repository-owned versions.
 The commands read `.github/fixlab/repository-profile.json` and repository
 instructions before acting. They never replace repository-owned commands,
 environment controls, or approval requirements.
+
+## Local dashboard command
+
+```text
+fixlab dashboard [repository] [--port <number>] [--no-open]
+```
+
+The command starts the packaged local UI on `127.0.0.1:4317` by default and
+opens the system browser unless `--no-open` is supplied. It does not run during
+installation or `fixlab init`. The UI starts one Agency-backed job at a time
+and displays the intake, diagnosis, reproduce, fix, review, local-stack,
+live-test, and pull-request stages with polled logs.
+
+The user supplies only the bug or required enhancement. The agent loads
+validation context from the repository profile and autonomously owns contract
+generation, diagnosis or affected-surface inspection, the smallest required
+change, effective-diff review, focused local validation, profile-defined
+application startup and live testing, evidence, and the gated pull-request
+outcome. It never hardcodes environment choices. Human interaction is reserved
+for authentication, unsafe-data approval, deployment or pull-request approval,
+and genuine blockers.
+
+Within one job/session, the prompt requires profile/instruction-first reading,
+git status and effective-diff inspection, task-relevant symbol searches, and
+focused risk-scaled validation. It avoids unchanged-file rereads, repeated
+diagnosis, dependency reinstalls, and unjustified broad checks. Stage summaries
+are concise and the dashboard raw-log view is bounded. Git repositories use a
+metadata-only cache under `.git/fixlab`, keyed by repository identity, `HEAD`,
+and profile hash. It reuses only sanitized profile shape, prior result, and
+stage summaries, with 20-entry and 64-KiB limits. It is not a repository scan
+or source cache. `HEAD` or profile changes miss automatically, instruction
+changes require rereading, and non-Git repositories skip durable reuse.

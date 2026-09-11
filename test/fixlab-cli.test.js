@@ -30,6 +30,8 @@ test("help lists supported commands", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /fixlab init/);
   assert.match(result.stdout, /fixlab validate/);
+  assert.match(result.stdout, /fixlab dashboard/);
+  assert.match(result.stdout, /127\.0\.0\.1:4317/);
 });
 
 test("init creates a parseable repository profile", () => {
@@ -179,6 +181,28 @@ test("validate requires a numeric pull request", () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /only digits/);
+});
+
+test("dashboard rejects invalid ports before starting", () => {
+  const result = run(["dashboard", "--port", "70000"], process.cwd());
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /integer between 1 and 65535/);
+});
+
+test("dashboard rejects unknown options before starting", () => {
+  const result = run(["dashboard", "--public"], process.cwd());
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unknown dashboard option/);
+});
+
+test("dashboard rejects a missing repository before starting", () => {
+  const missing = join(tmpdir(), `fixlab-missing-${Date.now()}`);
+  const result = run(["dashboard", missing, "--no-open"], process.cwd());
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /repository does not exist/);
 });
 
 test("run launches the Agency-resolved FixLab agent", () => {
