@@ -284,3 +284,10 @@ repository profile before starting a job.
 - [Onboard a repository](docs/repository-onboarding.md)
 - [Review the security model](docs/security.md)
 - [Plan a team rollout](docs/team-rollout.md)
+
+---
+
+<p align="center">
+  Copyright &copy; 2026 FixLab Contributors. All rights reserved.<br>
+  Released under the <a href="LICENSE">MIT License</a>.
+</p>
