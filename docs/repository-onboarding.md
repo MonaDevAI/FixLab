@@ -59,4 +59,3 @@ internal service URLs in the profile.
 - Screenshots are sanitized before sharing.
 - Pull request creation requires authorization.
 - Deployment is a separate, explicitly approved capability.
-

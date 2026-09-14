@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "corpus": ".github/instructions/learned-rules.instructions.md",
+  "candidateReport": "artifacts/agent-review-candidates.json",
+  "review": {
+    "engine": "github-copilot",
+    "scope": "complete-pull-request-diff-and-independent-run-evidence",
+    "workflow": ".github/workflows/agentic-rule-review.lock.yml",
+    "safeOutput": "candidate-rule-issue"
+  },
+  "promotion": {
+    "minimumDistinctRuns": 2,
+    "maximumActiveRules": 20,
+    "requiresPullRequestReview": true
+  },
+  "retirement": {
+    "minimumCleanRuns": 10,
+    "requiresPullRequestReview": true
+  }
+}

@@ -39,6 +39,13 @@ operations. Treat every runner as privileged engineering infrastructure.
 - Never terminate a process by name or broad wildcard.
 - Use documented local ports and report conflicts safely. The dashboard
   defaults to port 4317 but accepts an explicit alternate port.
+- The CI failure-containment workflow runs from `workflow_run` with no source
+  checkout and never executes pull-request code with its write-capable token.
+  It may preserve artifacts and post a fixed diagnostic link only.
+- The separate rollback workflow is limited to failed `push` runs on `main`.
+  It checks out the trusted default branch, creates a single `git revert`
+  commit on a new branch, and opens a pull request. It never runs the failed
+  source, pushes to `main`, or bypasses required review and status checks.
 
 ## Data handling
 

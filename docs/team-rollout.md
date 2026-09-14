@@ -42,4 +42,3 @@ Recommended roles:
 - Support and incident owner
 
 Use `CODEOWNERS` to protect release, security, and runner code.
-

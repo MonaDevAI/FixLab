@@ -2,6 +2,15 @@
 
 All notable changes to FixLab are documented in this file.
 
+## Unreleased
+
+- Add a repository-installed `fixlab-autofix` Visual Studio Code agent and
+  `/fixlab.bugfix` prompt for one-bug reproduce, repair, and verification
+  workflows.
+- Add versioned autofix/evidence specifications, enforced repository policy
+  checks, a scheduled GitHub agentic learned-rule review, and automatic revert
+  pull-request proposals for failed trusted pushes.
+
 ## 0.5.1
 
 - Add the reusable FixLab logo to the public repository and packaged assets.

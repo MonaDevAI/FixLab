@@ -18,6 +18,7 @@ test-results/
 # Environment and authentication
 .env
 .env.*
+!.env.example
 *.user
 *.suo
 *.token

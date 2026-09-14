@@ -53,6 +53,7 @@ test("init creates a parseable repository profile", () => {
     assert.equal(profile.browserAutomation.browser, "chromium");
     const promptDirectory = join(repository, ".github", "prompts");
     const expectedPrompts = [
+      "fixlab.bugfix.prompt.md",
       "fixlab.intake.prompt.md",
       "fixlab.diagnose.prompt.md",
       "fixlab.reproduce.prompt.md",
@@ -64,6 +65,25 @@ test("init creates a parseable repository profile", () => {
     for (const promptName of expectedPrompts) {
       assert.equal(existsSync(join(promptDirectory, promptName)), true);
     }
+    const agentPath = join(
+      repository,
+      ".github",
+      "agents",
+      "fixlab-autofix.agent.md"
+    );
+    assert.equal(existsSync(agentPath), true);
+    const agent = readFileSync(agentPath, "utf8");
+    assert.match(agent, /target: vscode/);
+    assert.match(agent, /Fix one reported bug/);
+    assert.match(agent, /\.github\/fixlab\/repository-profile\.json/);
+    assert.match(agent, /Never select production automatically/);
+
+    const bugfixPrompt = readFileSync(
+      join(promptDirectory, "fixlab.bugfix.prompt.md"),
+      "utf8"
+    );
+    assert.match(bugfixPrompt, /agent: fixlab-autofix/);
+    assert.match(bugfixPrompt, /smallest complete correction/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -86,15 +106,24 @@ test("init preserves existing profile and prompt files", () => {
       "prompts",
       "fixlab.validate.prompt.md"
     );
+    const agentPath = join(
+      repository,
+      ".github",
+      "agents",
+      "fixlab-autofix.agent.md"
+    );
     writeFileSync(profilePath, '{"name":"custom"}');
     writeFileSync(promptPath, "custom prompt");
+    writeFileSync(agentPath, "custom agent");
     const second = run(["init", repository], repository);
 
     assert.equal(second.status, 0);
     assert.match(second.stdout, /Kept existing FixLab profile/);
     assert.match(second.stdout, /Kept existing FixLab prompt/);
+    assert.match(second.stdout, /Kept existing FixLab agent/);
     assert.equal(readFileSync(profilePath, "utf8"), '{"name":"custom"}');
     assert.equal(readFileSync(promptPath, "utf8"), "custom prompt");
+    assert.equal(readFileSync(agentPath, "utf8"), "custom agent");
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

@@ -5,6 +5,7 @@ overwriting repository-owned versions.
 
 | Command | Purpose | Completion gate |
 |---|---|---|
+| `/fixlab.bugfix` | Run the full VS Code reproduce, repair, and verification loop for one bug | The root cause is fixed and every affected gate has explicit evidence |
 | `/fixlab.intake` | Capture the defect, expected behavior, scope, and safe data | The request is measurable and missing inputs are explicit |
 | `/fixlab.diagnose` | Trace the affected code and establish the root cause | The cause is supported by repository evidence |
 | `/fixlab.reproduce` | Create or run the smallest failing check | The original symptom is reproduced or a blocker is recorded |
@@ -16,6 +17,32 @@ overwriting repository-owned versions.
 The commands read `.github/fixlab/repository-profile.json` and repository
 instructions before acting. They never replace repository-owned commands,
 environment controls, or approval requirements.
+
+## Visual Studio Code bugfix agent
+
+`fixlab init` also installs `.github/agents/fixlab-autofix.agent.md`. Open the
+onboarded repository in Visual Studio Code, open Copilot Chat, select
+`fixlab-autofix` from the agent picker, and provide one bug description. You
+can also run `/fixlab.bugfix` to start the same focused workflow.
+
+The agent is the reusable form of the FMDM bugfix workflow: it reads the target
+repository's profile instead of hard-coding FMDM components. It classifies the
+smallest allowed component, reproduces the defect, traces React or .NET data
+flow, makes a surgical fix, adds focused regression coverage, runs configured
+validation, and reports evidence for developer review.
+
+## MCP server
+
+FixLab ships a repository-local, read-only MCP server:
+
+```shell
+fixlab-mcp
+```
+
+The `.vscode/mcp.json` configuration starts it over standard input/output. It
+exposes tools to summarize FixLab profile readiness and discover repository
+validation commands. The server does not execute validation, modify files,
+read credentials, or make network requests.
 
 ## Local dashboard command
 

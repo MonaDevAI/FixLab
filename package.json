@@ -13,7 +13,8 @@
   },
   "type": "module",
   "bin": {
-    "fixlab": "bin/fixlab.js"
+    "fixlab": "bin/fixlab.js",
+    "fixlab-mcp": "mcp/server.js"
   },
   "files": [
     "agency.json",
@@ -25,14 +26,27 @@
     "docs",
     "examples",
     "LICENSE",
+    "mcp",
     "plugin.json",
     "prompts",
     "README.md",
+    "specs",
     "templates"
   ],
   "scripts": {
     "test": "node --test",
-    "pack:check": "npm pack --dry-run"
+    "test:ci": "node scripts/ci/run-tests-with-containment.mjs",
+    "test:e2e": "playwright test",
+    "lint": "eslint . && node scripts/ci/lint.mjs",
+    "typecheck": "tsc --project tsconfig.json",
+    "format": "node scripts/ci/format.mjs --write",
+    "format:check": "node scripts/ci/format.mjs --check",
+    "docs:check": "node scripts/ci/check-docs.mjs",
+    "agent-rules:check": "node scripts/ci/check-agent-rules.mjs",
+    "policy:check": "node scripts/ci/check-policy.mjs",
+    "cleanup": "node scripts/maintenance/cleanup.mjs",
+    "pack:check": "npm pack --dry-run",
+    "validate": "npm run lint && npm run typecheck && npm run format:check && npm run docs:check && npm run agent-rules:check && npm run policy:check && npm test && npm run test:e2e && npm run pack:check"
   },
   "engines": {
     "node": ">=18"
@@ -48,5 +62,12 @@
     "playwright",
     "react",
     "dotnet"
-  ]
+  ],
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.18.3",
+    "eslint": "^9.35.0",
+    "globals": "^16.3.0",
+    "typescript": "^5.9.2"
+  }
 }

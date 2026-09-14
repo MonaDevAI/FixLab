@@ -93,130 +93,130 @@ async function fetchJson(url, options) {
   if (!response.ok) {
     throw new Error(body.error || `Request failed (${response.status})`);
   }
-
-  function selectedIntakeSource() {
-    return form.elements.intakeSource.value;
-  }
-
-  function renderWorkItem(workItem) {
-    workItemSummary.replaceChildren();
-    const title = document.createElement("strong");
-    title.textContent = `#${workItem.id} · ${workItem.workItemType || "Work item"} · ${workItem.title}`;
-    const details = document.createElement("p");
-    details.textContent = `State: ${workItem.state || "Unknown"}`;
-    const link = document.createElement("a");
-    link.href = workItem.webUrl;
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.textContent = "Open in Azure DevOps";
-    workItemSummary.append(title, details, link);
-    workItemSummary.hidden = false;
-  }
-
-  function workItemRequest(workItem) {
-    return [
-      `Azure DevOps work item ${workItem.id}: ${workItem.title}`,
-      workItem.workItemType ? `Type: ${workItem.workItemType}` : "",
-      workItem.state ? `State: ${workItem.state}` : "",
-      workItem.description ? `Description:\n${workItem.description}` : "",
-      workItem.reproduction ? `Reproduction:\n${workItem.reproduction}` : "",
-      workItem.acceptanceCriteria
-        ? `Acceptance criteria:\n${workItem.acceptanceCriteria}`
-        : "",
-      workItem.webUrl ? `Work item: ${workItem.webUrl}` : ""
-    ]
-      .filter(Boolean)
-      .join("\n\n");
-  }
-
-  function validateSelectedScreenshots() {
-    const files = [...screenshotInput.files];
-    if (files.length > maxScreenshots) {
-      throw new Error(`Select at most ${maxScreenshots} screenshots.`);
-    }
-    let total = 0;
-    for (const file of files) {
-      if (!allowedScreenshotTypes.has(file.type)) {
-        throw new Error(`${file.name} is not a PNG, JPEG, or WebP image.`);
-      }
-      if (file.size > maxScreenshotBytes) {
-        throw new Error(`${file.name} exceeds the 2 MiB per-file limit.`);
-      }
-      total += file.size;
-    }
-    if (total > maxScreenshotTotalBytes) {
-      throw new Error("Selected screenshots exceed the 8 MiB total limit.");
-    }
-    return files;
-  }
-
-  function fileBase64(file) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.addEventListener("error", () =>
-        reject(new Error(`Could not read ${file.name}.`))
-      );
-      reader.addEventListener("load", () => {
-        const result = String(reader.result);
-        const separator = result.indexOf(",");
-        if (separator < 0) {
-          reject(new Error(`Could not encode ${file.name}.`));
-          return;
-        }
-        resolve({
-          name: file.name,
-          mimeType: file.type,
-          base64: result.slice(separator + 1)
-        });
-      });
-      reader.readAsDataURL(file);
-    });
-  }
-
-  document.querySelectorAll("input[name='intakeSource']").forEach((input) => {
-    input.addEventListener("change", () => {
-      azureDevOpsIntake.hidden = selectedIntakeSource() !== "azure-devops";
-    });
-  });
-
-  loadWorkItemButton.addEventListener("click", async () => {
-    formError.textContent = "";
-    loadWorkItemButton.disabled = true;
-    try {
-      const body = await fetchJson("/api/azure-devops/load", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ workItem: workItemInput.value })
-      });
-      loadedWorkItem = body.workItem;
-      renderWorkItem(loadedWorkItem);
-      requestInput.value = workItemRequest(loadedWorkItem).slice(0, 10000);
-    } catch (error) {
-      loadedWorkItem = null;
-      workItemSummary.hidden = true;
-      formError.textContent = error.message;
-    } finally {
-      loadWorkItemButton.disabled = false;
-    }
-  });
-
-  screenshotInput.addEventListener("change", () => {
-    formError.textContent = "";
-    screenshotList.replaceChildren();
-    try {
-      const files = validateSelectedScreenshots();
-      for (const file of files) {
-        const item = document.createElement("li");
-        item.textContent = `${file.name} (${Math.ceil(file.size / 1024)} KiB)`;
-        screenshotList.append(item);
-      }
-    } catch (error) {
-      screenshotInput.value = "";
-      formError.textContent = error.message;
-    }
-  });
   return body;
 }
+
+function selectedIntakeSource() {
+  return form.elements.intakeSource.value;
+}
+
+function renderWorkItem(workItem) {
+  workItemSummary.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = `#${workItem.id} · ${workItem.workItemType || "Work item"} · ${workItem.title}`;
+  const details = document.createElement("p");
+  details.textContent = `State: ${workItem.state || "Unknown"}`;
+  const link = document.createElement("a");
+  link.href = workItem.webUrl;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = "Open in Azure DevOps";
+  workItemSummary.append(title, details, link);
+  workItemSummary.hidden = false;
+}
+
+function workItemRequest(workItem) {
+  return [
+    `Azure DevOps work item ${workItem.id}: ${workItem.title}`,
+    workItem.workItemType ? `Type: ${workItem.workItemType}` : "",
+    workItem.state ? `State: ${workItem.state}` : "",
+    workItem.description ? `Description:\n${workItem.description}` : "",
+    workItem.reproduction ? `Reproduction:\n${workItem.reproduction}` : "",
+    workItem.acceptanceCriteria
+      ? `Acceptance criteria:\n${workItem.acceptanceCriteria}`
+      : "",
+    workItem.webUrl ? `Work item: ${workItem.webUrl}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function validateSelectedScreenshots() {
+  const files = [...screenshotInput.files];
+  if (files.length > maxScreenshots) {
+    throw new Error(`Select at most ${maxScreenshots} screenshots.`);
+  }
+  let total = 0;
+  for (const file of files) {
+    if (!allowedScreenshotTypes.has(file.type)) {
+      throw new Error(`${file.name} is not a PNG, JPEG, or WebP image.`);
+    }
+    if (file.size > maxScreenshotBytes) {
+      throw new Error(`${file.name} exceeds the 2 MiB per-file limit.`);
+    }
+    total += file.size;
+  }
+  if (total > maxScreenshotTotalBytes) {
+    throw new Error("Selected screenshots exceed the 8 MiB total limit.");
+  }
+  return files;
+}
+
+function fileBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.addEventListener("error", () =>
+      reject(new Error(`Could not read ${file.name}.`))
+    );
+    reader.addEventListener("load", () => {
+      const result = String(reader.result);
+      const separator = result.indexOf(",");
+      if (separator < 0) {
+        reject(new Error(`Could not encode ${file.name}.`));
+        return;
+      }
+      resolve({
+        name: file.name,
+        mimeType: file.type,
+        base64: result.slice(separator + 1)
+      });
+    });
+    reader.readAsDataURL(file);
+  });
+}
+
+document.querySelectorAll("input[name='intakeSource']").forEach((input) => {
+  input.addEventListener("change", () => {
+    azureDevOpsIntake.hidden = selectedIntakeSource() !== "azure-devops";
+  });
+});
+
+loadWorkItemButton.addEventListener("click", async () => {
+  formError.textContent = "";
+  loadWorkItemButton.disabled = true;
+  try {
+    const body = await fetchJson("/api/azure-devops/load", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ workItem: workItemInput.value })
+    });
+    loadedWorkItem = body.workItem;
+    renderWorkItem(loadedWorkItem);
+    requestInput.value = workItemRequest(loadedWorkItem).slice(0, 10000);
+  } catch (error) {
+    loadedWorkItem = null;
+    workItemSummary.hidden = true;
+    formError.textContent = error.message;
+  } finally {
+    loadWorkItemButton.disabled = false;
+  }
+});
+
+screenshotInput.addEventListener("change", () => {
+  formError.textContent = "";
+  screenshotList.replaceChildren();
+  try {
+    const files = validateSelectedScreenshots();
+    for (const file of files) {
+      const item = document.createElement("li");
+      item.textContent = `${file.name} (${Math.ceil(file.size / 1024)} KiB)`;
+      screenshotList.append(item);
+    }
+  } catch (error) {
+    screenshotInput.value = "";
+    formError.textContent = error.message;
+  }
+});
 
 async function refresh() {
   try {

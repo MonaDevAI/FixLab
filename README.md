@@ -51,9 +51,10 @@ passed, what was skipped, and what still needs human attention.
 
    While developing locally, use `npm install --global .` from this repository.
    `fixlab init` adds the repository profile and packaged Copilot prompt
-   commands without overwriting existing files. Installation does not start a
-   server; `fixlab dashboard` explicitly starts the local dashboard and opens
-   it in the system browser.
+   commands plus a `fixlab-autofix` Visual Studio Code agent without
+   overwriting existing files. Installation does not start a server; `fixlab
+   dashboard` explicitly starts the local dashboard and opens it in the system
+   browser.
 3. **Describe the application.**
    Set the frontend and backend paths, restore and test commands, startup
    commands, ports, safe environments, and browser journeys.
@@ -71,6 +72,34 @@ Detailed instructions are in the
 [installation guide](docs/installation.md),
 [getting-started guide](docs/getting-started.md) and
 [repository onboarding guide](docs/repository-onboarding.md).
+
+## Develop and validate FixLab
+
+FixLab includes repository-level and module-level agent instructions, a
+reproducible Node.js development container, a committed dependency lock file,
+and one deterministic completion gate:
+
+```shell
+./scripts/setup.sh
+npm run validate
+```
+
+On Windows, run `pwsh -File scripts/setup.ps1` instead of the shell setup
+script.
+
+The gate checks JavaScript syntax and whitespace policy, formatting,
+repository-wide documentation links and required guidance, focused tests, and
+the npm package contents. Pull-request CI also uploads JUnit and documentation
+drift reports as machine-readable evidence.
+
+The repository-local CodeBlend skill can reassess the engineering loop:
+
+```text
+Run the /codeblend-ai-composite skill against the current repository root.
+```
+
+See [AI-readiness engineering](docs/ai-readiness.md) for the baseline,
+maintenance loop, and interpretation rules.
 
 To run the Agency plugin directly from this checkout:
 
@@ -108,6 +137,7 @@ visible risk. A skipped check is never reported as successful.
 - "Validate pull request 123 without changing it."
 - "Reproduce this frontend defect and capture evidence."
 - "Find the smallest safe fix and run the affected tests."
+- "Use the `fixlab-autofix` VS Code agent to reproduce and fix this bug."
 - "Start the React and .NET applications and test this browser journey."
 - "Prepare and verify the repository-local Playwright installation."
 - "Explain why the production build is blocked."
@@ -149,6 +179,8 @@ See the full [security model](docs/security.md).
 | [`docs/team-rollout.md`](docs/team-rollout.md) | Recommended team adoption stages |
 | [`docs/commands.md`](docs/commands.md) | Packaged FixLab prompt-command workflow |
 | [`docs/releasing.md`](docs/releasing.md) | GitHub release and npm trusted-publishing setup |
+| [`specs/v1/autofix-loop.md`](specs/v1/autofix-loop.md) | Versioned autofix behavior contract |
+| [`specs/v1/validation-evidence.md`](specs/v1/validation-evidence.md) | Versioned completion-evidence contract |
 | [`templates/repository-profile.json`](templates/repository-profile.json) | Generic React and .NET repository profile |
 | [`examples/react-dotnet`](examples/react-dotnet) | Example onboarding files for a React/.NET repository |
 | [`agents/fixlab.md`](agents/fixlab.md) | Agency custom agent |

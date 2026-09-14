@@ -1,0 +1,99 @@
+name: CI Failure Containment
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+jobs:
+  contain:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download failed validation evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          mkdir -p artifacts
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name validation-evidence \
+            --dir artifacts ||
+            printf '%s\n' '{"evidence":"validation artifact unavailable"}' \
+              > artifacts/download-status.json
+      - name: Record containment signal
+        shell: bash
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          jq -n \
+            --argjson workflowRunId "$RUN_ID" \
+            --arg commit "$COMMIT_SHA" \
+            --arg runUrl "$RUN_URL" \
+            '{
+              signal: "ci-failure",
+              containment: "evidence-preserved-and-merge-blocked",
+              workflowRunId: $workflowRunId,
+              commit: $commit,
+              runUrl: $runUrl,
+              rollbackPath: ".github/workflows/self-healing-rollback.yml",
+              rollbackCapability: "auto-revert PR",
+              failureClasses: ["test-failure", "flaky-rerun"],
+              automaticSourceMutation: false
+            }' > artifacts/self-healing-signal.json
+      - name: Notify pull request or issue queue
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          pull_request="$(
+            jq -r '.workflow_run.pull_requests[0].number // empty' \
+              "$GITHUB_EVENT_PATH"
+          )"
+          body="FixLab CI failed and was contained without modifying source. Evidence is retained in the workflow artifacts: $RUN_URL"
+          if [ -n "$pull_request" ]; then
+            gh pr comment "$pull_request" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body "$body"
+            exit 0
+          fi
+
+          title="CI containment: $BRANCH"
+          existing="$(
+            gh issue list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --search "\"$title\" in:title" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" \
+              --repo "$GITHUB_REPOSITORY" \
+              --body "$body"
+          else
+            gh issue create \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$title" \
+              --body "$body"
+          fi
+      - name: Upload containment evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: self-healing-signal-${{ github.event.workflow_run.id }}
+          path: artifacts/
+          if-no-files-found: error
+          retention-days: 30

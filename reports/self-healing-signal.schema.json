@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MonaDevAI/FixLab/reports/self-healing-signal.schema.json",
+  "title": "FixLab CI failure containment signal",
+  "type": "object",
+  "required": [
+    "signal",
+    "containment",
+    "workflowRunId",
+    "commit",
+    "runUrl",
+    "automaticSourceMutation"
+  ],
+  "properties": {
+    "signal": {
+      "const": "ci-failure"
+    },
+    "containment": {
+      "const": "evidence-preserved-and-merge-blocked"
+    },
+    "workflowRunId": {
+      "type": "integer"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "runUrl": {
+      "type": "string",
+      "format": "uri"
+    },
+    "rollbackPath": {
+      "const": ".github/workflows/self-healing-rollback.yml"
+    },
+    "rollbackCapability": {
+      "const": "auto-revert PR"
+    },
+    "failureClasses": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "test-failure",
+          "flaky-rerun"
+        ]
+      },
+      "minItems": 2,
+      "uniqueItems": true
+    },
+    "automaticSourceMutation": {
+      "type": "boolean"
+    },
+    "protectedBranchMutation": {
+      "const": false
+    },
+    "rollback": {
+      "const": "automatic-revert-pull-request"
+    }
+  },
+  "additionalProperties": false
+}

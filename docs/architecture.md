@@ -148,6 +148,32 @@ skipped gates, remaining risks, and pull request links.
 Every required stage must pass or be explicitly marked skipped with a visible
 risk. A skipped gate must never be reported as passed.
 
+## Repository engineering loop
+
+FixLab itself uses the same deterministic loop expected from onboarded
+repositories:
+
+1. Repository and module agent instructions define scope and safety invariants.
+2. A lock-file-backed development environment installs reproducibly.
+3. `npm run validate` runs syntax linting, formatting policy, documentation
+   drift checks, focused tests, and package-content validation.
+4. Pull-request CI publishes JUnit and documentation-drift evidence.
+5. CODEOWNERS and the pull-request template keep a human reviewer on the loop.
+6. Scheduled maintenance deletes only GitHub Actions artifacts older than the
+   configured retention window, caps deletions per run, and retains a
+   machine-readable report.
+7. A failed CI run triggers evidence-preserving containment. The follow-up
+   workflow never checks out or executes untrusted pull-request code; it
+   records the failure and notifies the affected pull request or issue queue.
+8. If a trusted push to `main` fails, the rollback workflow proposes a revert
+   pull request. The rollback never auto-merges and must pass the normal status
+   checks and approving-review policy.
+
+The documentation drift gate resolves local Markdown links and verifies that
+the contributor completion command remains documented. This is intentionally
+deterministic; semantic review can add advice but cannot replace the blocking
+repository-wide check.
+
 ## Blocker handling
 
 FixLab should support both:
