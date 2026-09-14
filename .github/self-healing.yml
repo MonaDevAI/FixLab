@@ -1,0 +1,16 @@
+version: 1
+signals:
+  test-failure:
+    source: artifacts/test-signal.json
+    containment:
+      command: npm run test:ci
+      maximum_attempts: 2
+      recovered_attempt_behavior: fail
+    remediation:
+      action: preserve-evidence-and-block-merge
+      owner: pull-request-author
+rollback:
+  strategy: automatic-revert-pull-request
+  trigger: failed-main-push
+  command: restore diff from last successful main SHA
+  description: Validation failures block merge. A failed main push automatically creates a revert pull request that must pass normal checks and human review.

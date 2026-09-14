@@ -1,0 +1,121 @@
+name: Main CI Rollback Proposal
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  propose-rollback:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out trusted default branch
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Create automatic rollback pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FAILED_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          branch="fixlab/rollback-${FAILED_SHA:0:12}"
+          existing="$(
+            gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --head "$branch" \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [ -n "$existing" ]; then
+            echo "Rollback PR #$existing already exists."
+            exit 0
+          fi
+
+          git fetch origin "$FAILED_SHA"
+          if ! git merge-base --is-ancestor "$FAILED_SHA" HEAD; then
+            echo "Failed commit is no longer on main; no rollback is needed."
+            exit 0
+          fi
+          if [ "$(git rev-parse HEAD)" != "$FAILED_SHA" ]; then
+            echo "Main advanced after the failed run; automatic rollback is unsafe."
+            exit 1
+          fi
+
+          last_good_sha="$(
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow CI \
+              --branch main \
+              --status success \
+              --limit 1 \
+              --json headSha \
+              --jq '.[0].headSha // empty'
+          )"
+          if [ -z "$last_good_sha" ]; then
+            echo "No successful main run is available as a rollback baseline."
+            exit 1
+          fi
+          git fetch origin "$last_good_sha"
+          if ! git merge-base --is-ancestor "$last_good_sha" "$FAILED_SHA"; then
+            echo "The last successful run is not an ancestor of the failed push."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git diff --binary "$last_good_sha" "$FAILED_SHA" |
+            git apply --reverse --index
+          git commit \
+            -m "revert: restore last successful main state" \
+            -m "Failed run: $RUN_URL"
+          git push --set-upstream origin "$branch"
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base main \
+            --head "$branch" \
+            --title "Rollback failed main validation ${FAILED_SHA:0:12}" \
+            --body "Automated rollback proposal for failed CI run $RUN_URL. This pull request requires normal checks and human approval."
+      - name: Record rollback signal
+        if: always()
+        shell: bash
+        env:
+          FAILED_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          mkdir -p rollback-artifacts
+          jq -n \
+            --argjson workflowRunId "$RUN_ID" \
+            --arg commit "$FAILED_SHA" \
+            --arg runUrl "$RUN_URL" \
+            '{
+              signal: "ci-failure",
+              rollback: "automatic-revert-pull-request",
+              workflowRunId: $workflowRunId,
+              commit: $commit,
+              runUrl: $runUrl,
+              automaticSourceMutation: true,
+              protectedBranchMutation: false
+            }' > rollback-artifacts/rollback-signal.json
+      - name: Upload rollback evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: rollback-signal-${{ github.event.workflow_run.id }}
+          path: rollback-artifacts/
+          if-no-files-found: error
+          retention-days: 30

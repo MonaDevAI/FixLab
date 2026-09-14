@@ -1,2 +1,4 @@
 agents/*.md text eol=lf
 bin/*.js text eol=lf
+
+.github/workflows/*.lock.yml linguist-generated=true

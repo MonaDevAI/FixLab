@@ -13,4 +13,3 @@ Include:
 
 Never include active credentials, tokens, cookies, customer data, or private
 environment details in a report.
-

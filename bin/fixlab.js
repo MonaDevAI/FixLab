@@ -23,6 +23,7 @@ const profileRelativePath = join(
   "repository-profile.json"
 );
 const promptNames = [
+  "fixlab.bugfix.prompt.md",
   "fixlab.intake.prompt.md",
   "fixlab.diagnose.prompt.md",
   "fixlab.reproduce.prompt.md",
@@ -31,6 +32,7 @@ const promptNames = [
   "fixlab.live-test.prompt.md",
   "fixlab.pr.prompt.md"
 ];
+const vscodeAgentName = "fixlab-autofix.agent.md";
 
 function printUsage() {
   console.log(`FixLab CLI
@@ -220,6 +222,20 @@ function init(repository) {
     }
     copyFileSync(join(packageRoot, "prompts", promptName), promptDestination);
     console.log(`Created ${promptDestination}`);
+    created += 1;
+  }
+
+  const agentDirectory = join(repository, ".github", "agents");
+  const agentDestination = join(agentDirectory, vscodeAgentName);
+  if (existsSync(agentDestination)) {
+    console.log(`Kept existing FixLab agent: ${agentDestination}`);
+  } else {
+    mkdirSync(agentDirectory, { recursive: true });
+    copyFileSync(
+      join(packageRoot, "templates", "fixlab-autofix.agent.md"),
+      agentDestination
+    );
+    console.log(`Created ${agentDestination}`);
     created += 1;
   }
 

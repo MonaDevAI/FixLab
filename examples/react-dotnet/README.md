@@ -10,6 +10,10 @@ Then update every path and command to match the application repository. Copy
 `playwright.config.ts` only when the repository does not already own a
 Playwright configuration.
 
+The `tests/fixlab-smoke.spec.ts` journey demonstrates the minimum
+repository-owned Playwright health check. Set `FIXLAB_EXAMPLE_HEALTH_URL` to an
+approved local or test-environment endpoint before running it.
+
 Run:
 
 ```shell

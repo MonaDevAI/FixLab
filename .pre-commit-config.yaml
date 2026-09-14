@@ -1,0 +1,28 @@
+repos:
+  - repo: local
+    hooks:
+      - id: fixlab-lint
+        name: FixLab lint
+        entry: npm run lint
+        language: system
+        pass_filenames: false
+      - id: fixlab-format-check
+        name: FixLab format check
+        entry: npm run format:check
+        language: system
+        pass_filenames: false
+      - id: fixlab-docs-check
+        name: FixLab documentation drift check
+        entry: npm run docs:check
+        language: system
+        pass_filenames: false
+      - id: fixlab-typecheck
+        name: FixLab type check
+        entry: npm run typecheck
+        language: system
+        pass_filenames: false
+      - id: fixlab-policy-check
+        name: FixLab repository policy check
+        entry: npm run policy:check
+        language: system
+        pass_filenames: false

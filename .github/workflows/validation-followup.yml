@@ -1,0 +1,46 @@
+name: Validation Follow-up
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    outputs:
+      conclusion: ${{ steps.signal.outputs.conclusion }}
+    steps:
+      - name: Record machine-readable completion signal
+        id: signal
+        shell: bash
+        env:
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          COMMIT_SHA: ${{ github.event.workflow_run.head_sha }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: |
+          mkdir -p artifacts
+          jq -n \
+            --argjson workflowRunId "$RUN_ID" \
+            --arg workflowName "$WORKFLOW_NAME" \
+            --arg commit "$COMMIT_SHA" \
+            --arg conclusion "$CONCLUSION" \
+            '{
+              workflowRunId: $workflowRunId,
+              workflowName: $workflowName,
+              commit: $commit,
+              conclusion: $conclusion
+            }' > artifacts/validation-workflow-run.json
+          echo "conclusion=$CONCLUSION" >> "$GITHUB_OUTPUT"
+      - name: Upload completion signal
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: validation-workflow-run-${{ github.event.workflow_run.id }}
+          path: artifacts/validation-workflow-run.json
+          if-no-files-found: error
+          retention-days: 30

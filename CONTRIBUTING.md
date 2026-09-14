@@ -11,3 +11,16 @@
 Changes to runner execution, authentication, process termination, release
 workflows, or secret handling require security review.
 
+## Local completion gate
+
+Use Node.js 20, install from the committed lock file, and run the same
+deterministic checks used by pull-request validation:
+
+```shell
+npm ci
+npm run validate
+```
+
+Optional pre-commit integration is available through
+`.pre-commit-config.yaml`. Machine-readable test and documentation-drift
+reports are uploaded by CI from `artifacts/`.

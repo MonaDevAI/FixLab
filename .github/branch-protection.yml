@@ -1,0 +1,27 @@
+{
+  "version": 1,
+  "repository": "MonaDevAI/FixLab",
+  "rulesetId": 22968357,
+  "targetBranch": "main",
+  "requiredStatusChecks": [
+    "test",
+    "analyze"
+  ],
+  "pullRequest": {
+    "requiredApprovingReviews": 1,
+    "dismissStaleApprovals": true,
+    "requireReviewThreadResolution": true,
+    "allowedMergeMethods": [
+      "squash"
+    ]
+  },
+  "history": {
+    "requireLinearHistory": true,
+    "blockDeletion": true,
+    "blockForcePush": true
+  },
+  "bypass": {
+    "repositoryRole": "admin",
+    "reason": "Emergency recovery for the single-maintainer repository; normal changes use pull requests."
+  }
+}
