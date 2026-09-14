@@ -1,7 +1,7 @@
 {
   "version": 1,
   "corpus": ".github/instructions/learned-rules.instructions.md",
-  "candidateReport": "artifacts/agent-review-candidates.json",
+  "candidateReport": "artifacts/copilot-agent-review.md",
   "review": {
     "engine": "github-copilot",
     "scope": "complete-pull-request-diff-and-independent-run-evidence",

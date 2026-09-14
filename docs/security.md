@@ -46,6 +46,9 @@ operations. Treat every runner as privileged engineering infrastructure.
   It checks out the trusted default branch, creates a single `git revert`
   commit on a new branch, and opens a pull request. It never runs the failed
   source, pushes to `main`, or bypasses required review and status checks.
+- Scheduled learned-rule review grants Copilot request and read-only contents
+  permissions. The direct review disables shell, write, and built-in MCP tools;
+  its response is retained as an artifact and cannot modify the repository.
 
 ## Data handling
 

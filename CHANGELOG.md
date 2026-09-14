@@ -10,6 +10,8 @@ All notable changes to FixLab are documented in this file.
 - Add versioned autofix/evidence specifications, enforced repository policy
   checks, a scheduled GitHub agentic learned-rule review, and automatic revert
   pull-request proposals for failed trusted pushes.
+- Add executable proof-of-bug/proof-of-fix coverage for flaky containment and
+  multi-commit rollback restoration, plus a scheduled proof drill.
 
 ## 0.5.1
 

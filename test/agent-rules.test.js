@@ -12,7 +12,7 @@ test("agent rule governance accepts a bounded lifecycle corpus", () => {
   const instructions = join(root, ".github", "instructions");
   mkdirSync(instructions, { recursive: true });
   writeFileSync(
-    join(root, ".github", "agent-review.yml"),
+    join(root, ".github", "copilot-code-review.yml"),
     JSON.stringify({
       corpus: ".github/instructions/learned-rules.instructions.md",
       promotion: { minimumDistinctRuns: 2, maximumActiveRules: 3 }

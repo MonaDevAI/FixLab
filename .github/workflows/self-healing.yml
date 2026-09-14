@@ -49,6 +49,8 @@ jobs:
               rollbackPath: ".github/workflows/self-healing-rollback.yml",
               rollbackCapability: "auto-revert PR",
               failureClasses: ["test-failure", "flaky-rerun"],
+              proofOfBug: "artifacts/self-healing-proof.json",
+              proofOfFix: "artifacts/self-healing-proof.json",
               automaticSourceMutation: false
             }' > artifacts/self-healing-signal.json
       - name: Notify pull request or issue queue

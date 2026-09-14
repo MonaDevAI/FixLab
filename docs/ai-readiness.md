@@ -36,12 +36,21 @@ documentation drift controls.
 - Failed CI runs trigger evidence-preserving containment that emits a
   schema-defined signal and notifies the pull request or issue queue. The
   workflow never checks out or executes pull-request code.
+- CI executes proof-of-bug and proof-of-fix scenarios for flaky-test
+  containment and restoration of a multi-commit failed push to the last
+  successful tree.
+- A monthly and manually dispatchable self-healing drill runs the same proof
+  independently and retains its machine-readable artifact.
 - The versioned contracts under `specs/v1/` define autofix behavior and
   evidence requirements, while the repository policy checker keeps local
   branch-protection intent aligned with CI and rollback controls.
 - The scheduled `agentic-rule-review` workflow reviews independent run
   evidence and may open a bounded candidate-rule issue; promotion remains a
   human-reviewed pull-request change.
+- Its upstream `Agent Rule Review` workflow first enforces the deterministic
+  lifecycle policy and records an independent, read-only Copilot review
+  artifact. The downstream agent receives evidence rather than mutation
+  permissions.
 - Playwright exercises the running dashboard readiness endpoint, and
   TypeScript checks the repository automation and MCP implementation.
 
