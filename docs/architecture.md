@@ -168,6 +168,8 @@ repositories:
 8. If a trusted push to `main` fails, the rollback workflow proposes a revert
    pull request. The rollback never auto-merges and must pass the normal status
    checks and approving-review policy.
+9. The self-healing drill independently exercises the flaky-containment and
+   rollback algorithms without forcing a production CI failure.
 
 The documentation drift gate resolves local Markdown links and verifies that
 the contributor completion command remains documented. This is intentionally

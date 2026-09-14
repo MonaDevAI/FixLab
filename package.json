@@ -44,9 +44,10 @@
     "docs:check": "node scripts/ci/check-docs.mjs",
     "agent-rules:check": "node scripts/ci/check-agent-rules.mjs",
     "policy:check": "node scripts/ci/check-policy.mjs",
+    "self-healing:verify": "node scripts/ci/verify-self-healing.mjs",
     "cleanup": "node scripts/maintenance/cleanup.mjs",
     "pack:check": "npm pack --dry-run",
-    "validate": "npm run lint && npm run typecheck && npm run format:check && npm run docs:check && npm run agent-rules:check && npm run policy:check && npm test && npm run test:e2e && npm run pack:check"
+    "validate": "npm run lint && npm run typecheck && npm run format:check && npm run docs:check && npm run agent-rules:check && npm run policy:check && npm run self-healing:verify && npm test && npm run test:e2e && npm run pack:check"
   },
   "engines": {
     "node": ">=18"

@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 
 export function checkAgentRules(root) {
   const failures = [];
-  const configPath = resolve(root, ".github", "agent-review.yml");
+  const configPath = resolve(root, ".github", "copilot-code-review.yml");
   if (!existsSync(configPath)) {
-    return [".github/agent-review.yml is missing"];
+    return [".github/copilot-code-review.yml is missing"];
   }
 
   const config = JSON.parse(readFileSync(configPath, "utf8"));

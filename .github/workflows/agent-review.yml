@@ -6,6 +6,7 @@ on:
     - cron: "13 5 * * 3"
 
 permissions:
+  copilot-requests: write
   contents: read
 
 jobs:
@@ -20,10 +21,40 @@ jobs:
       - run: npm ci
       - name: Validate governed learned-rule corpus
         run: npm run agent-rules:check -- --report artifacts/agent-rules.json
+      - name: Select Node.js for Copilot CLI
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+      - name: Run independent Copilot lifecycle review
+        shell: bash
+        env:
+          COPILOT_GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          npm install --global @github/copilot@1.0.83
+          {
+            echo "Review this governed FixLab learned-rule corpus."
+            echo "Recommend a candidate only when at least two distinct runs support it."
+            echo "Do not modify files or include credentials, private data, or broad style preferences."
+            echo
+            cat .github/copilot-code-review.yml
+            echo
+            cat .github/instructions/learned-rules.instructions.md
+          } > artifacts/copilot-review-input.txt
+          copilot -p "$(cat artifacts/copilot-review-input.txt)" \
+            --model auto \
+            --silent \
+            --allow-all-tools \
+            --deny-tool='shell' \
+            --deny-tool='write' \
+            --disable-builtin-mcps \
+            --no-custom-instructions \
+            --no-ask-user \
+            > artifacts/copilot-agent-review.md
+          rm artifacts/copilot-review-input.txt
       - name: Upload learned-rule report
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: agent-rule-report
-          path: artifacts/agent-rules.json
+          path: artifacts/
           if-no-files-found: error
           retention-days: 30

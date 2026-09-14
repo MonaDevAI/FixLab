@@ -12,6 +12,8 @@ run output:
   artifacts.
 - `self-healing-signal.json` records fail-closed CI containment and links the
   preserved evidence to the affected pull request or issue queue.
+- `self-healing-proof.json` records executable proof-of-bug and proof-of-fix
+  pairs for flaky-test containment and failed-push rollback.
 
 Generated files are uploaded as GitHub Actions artifacts and remain excluded
 from source control through `.gitignore`.

@@ -46,6 +46,12 @@
       "minItems": 2,
       "uniqueItems": true
     },
+    "proofOfBug": {
+      "const": "artifacts/self-healing-proof.json"
+    },
+    "proofOfFix": {
+      "const": "artifacts/self-healing-proof.json"
+    },
     "automaticSourceMutation": {
       "type": "boolean"
     },

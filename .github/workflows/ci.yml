@@ -28,6 +28,7 @@ jobs:
       - run: npm run docs:check -- --report artifacts/docs-drift.json
       - run: npm run agent-rules:check -- --report artifacts/agent-rules.json
       - run: npm run policy:check -- --report artifacts/policy.json
+      - run: npm run self-healing:verify -- --report artifacts/self-healing-proof.json
       - run: npm run test:ci
       - run: npm run test:e2e
       - run: npm run pack:check

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/MonaDevAI/FixLab/reports/self-healing-proof.schema.json",
+  "title": "FixLab self-healing proof",
+  "type": "object",
+  "required": [
+    "proofOfBug",
+    "proofOfFix",
+    "rollback",
+    "verified"
+  ],
+  "properties": {
+    "proofOfBug": {
+      "type": "array",
+      "minItems": 2
+    },
+    "proofOfFix": {
+      "type": "array",
+      "minItems": 2
+    },
+    "rollback": {
+      "const": "auto-revert PR"
+    },
+    "verified": {
+      "const": true
+    }
+  },
+  "additionalProperties": false
+}

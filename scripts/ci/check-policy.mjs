@@ -84,6 +84,9 @@ export function checkPolicy(root) {
   if (!ci.includes("npm run policy:check")) {
     failures.push("CI must enforce npm run policy:check");
   }
+  if (!ci.includes("npm run self-healing:verify")) {
+    failures.push("CI must enforce npm run self-healing:verify");
+  }
 
   const selfHealing = read(
     root,

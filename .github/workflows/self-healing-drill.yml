@@ -1,0 +1,31 @@
+name: Self-Healing Proof Drill
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "19 4 1 * *"
+
+permissions:
+  contents: read
+
+jobs:
+  prove:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Prove failure detection and automated recovery paths
+        run: >-
+          npm run self-healing:verify --
+          --report artifacts/self-healing-proof.json
+      - name: Upload proof-of-bug and proof-of-fix evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: self-healing-proof
+          path: artifacts/self-healing-proof.json
+          if-no-files-found: error
+          retention-days: 30

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { classifyAttempts } from "../scripts/ci/run-tests-with-containment.mjs";
+import { verifySelfHealing } from "../scripts/ci/verify-self-healing.mjs";
 
 test("CI containment reports an initial pass", () => {
   assert.deepEqual(classifyAttempts(0), {
@@ -39,4 +40,18 @@ test("failure containment cannot execute pull-request source with write access",
   assert.match(workflow, /automaticSourceMutation: false/);
   assert.match(workflow, /gh pr comment/);
   assert.doesNotMatch(containmentJob, /actions\/checkout/);
+});
+
+test("self-healing proof covers flaky containment and failed-push rollback", () => {
+  const proof = verifySelfHealing();
+
+  assert.equal(proof.verified, true);
+  assert.deepEqual(
+    proof.proofOfBug.map((entry) => entry.failureClass),
+    ["flaky-rerun", "failed-main-push"]
+  );
+  assert.equal(
+    proof.proofOfFix[1].result.restoredLastSuccessfulTree,
+    true
+  );
 });

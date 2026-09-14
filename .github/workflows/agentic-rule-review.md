@@ -26,7 +26,7 @@ safe-outputs:
 
 Review the latest successful `Agent Rule Review` workflow artifact, recent
 FixLab pull requests, and open issues for repeated engineering-loop failures.
-Read `.github/agent-review.yml` and
+Read `.github/copilot-code-review.yml` and
 `.github/instructions/learned-rules.instructions.md`.
 
 Create one concise issue only when at least one candidate rule is supported by
