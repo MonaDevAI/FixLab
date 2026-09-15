@@ -45,6 +45,7 @@ const metricDuration = document.querySelector("#metric-duration");
 const metricInputTokens = document.querySelector("#metric-input-tokens");
 const metricOutputTokens = document.querySelector("#metric-output-tokens");
 const metricCacheReuse = document.querySelector("#metric-cache-reuse");
+const metricFreshInput = document.querySelector("#metric-fresh-input");
 const metricStatuses = document.querySelector("#metric-statuses");
 let loadedWorkItems = [];
 let selectedScreenshots = [];
@@ -218,7 +219,11 @@ function renderMetrics(metrics, warning) {
   metricCacheReuse.textContent =
     metrics.cacheReusePercent === null
       ? "—"
-      : `${metrics.cacheReusePercent.toFixed(1)}%`;
+      : `${metrics.totalCachedInputTokens.toLocaleString()} (${metrics.cacheReusePercent.toFixed(1)}%)`;
+  metricFreshInput.textContent = formatTokenCount(
+    metrics.totalInputTokens - metrics.totalCachedInputTokens,
+    usageAvailable
+  );
   metricStatuses.textContent =
     warning ||
     `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · exact usage available for ${metrics.usageJobs} completed job(s)`;
