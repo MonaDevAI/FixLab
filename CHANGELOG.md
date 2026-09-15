@@ -8,6 +8,8 @@ All notable changes to FixLab are documented in this file.
   while retaining Agency as the default compatibility runtime.
 - Add repository-configured Playwright authentication status/connect controls
   and same-session comments for running dashboard jobs.
+- Highlight the inferred active roadmap step while a running agent is between
+  explicit stage updates.
 - Load bounded Azure DevOps comments and images, support clipboard-pasted
   screenshot evidence, and expose access warnings without discarding bugs.
 - Add a visible 20-job running queue with same-session blocker handling.

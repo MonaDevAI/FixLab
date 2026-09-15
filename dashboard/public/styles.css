@@ -293,6 +293,23 @@ button:disabled {
 
 .stage.running {
   border-color: #63a1ff;
+  background: rgba(99, 161, 255, .12);
+  box-shadow: 0 0 0 1px rgba(99, 161, 255, .35), 0 0 24px rgba(99, 161, 255, .18);
+}
+
+.stage.running.inferred {
+  animation: active-stage-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes active-stage-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgba(99, 161, 255, .35), 0 0 18px rgba(99, 161, 255, .12);
+  }
+
+  50% {
+    box-shadow: 0 0 0 2px rgba(99, 161, 255, .65), 0 0 30px rgba(99, 161, 255, .3);
+  }
 }
 
 .stage.skipped {

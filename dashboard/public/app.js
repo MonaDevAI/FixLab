@@ -103,16 +103,41 @@ function renderJob(job) {
     : "Not started";
   jobStatusElement.className = `badge ${job?.status ?? ""}`;
 
+  const stageValues = stageNames.map(
+    (name) => job?.stages?.[name] ?? { status: "pending", message: "" }
+  );
+  const inferredActiveStage =
+    running &&
+    !stageValues.some((stage) =>
+      ["running", "blocked", "failed"].includes(stage.status)
+    )
+      ? stageNames[
+          stageValues.findIndex((stage) => stage.status === "pending")
+        ]
+      : null;
   stagesElement.replaceChildren();
   for (const name of stageNames) {
-    const stage = job?.stages?.[name] ?? { status: "pending", message: "" };
+    const reportedStage =
+      job?.stages?.[name] ?? { status: "pending", message: "" };
+    const inferred = name === inferredActiveStage;
+    const stage = inferred
+      ? {
+          status: "running",
+          message:
+            reportedStage.message ||
+            "Agent is working in this step; waiting for its next stage update."
+        }
+      : reportedStage;
     const card = document.createElement("article");
     card.className = `stage ${stage.status}`;
+    if (inferred) {
+      card.classList.add("inferred");
+    }
     const heading = document.createElement("div");
     const title = document.createElement("strong");
     title.textContent = name;
     const status = document.createElement("span");
-    status.textContent = stage.status;
+    status.textContent = inferred ? "active now" : stage.status;
     heading.append(title, status);
     const message = document.createElement("p");
     message.textContent = escapeText(stage.message) || "Waiting";
