@@ -1,30 +1,19 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import {
   createReadStream,
   existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
-  renameSync,
   statSync,
   writeFileSync
 } from "node:fs";
 import { createServer } from "node:http";
-import {
-  basename,
-  dirname,
-  extname,
-  isAbsolute,
-  join,
-  resolve
-} from "node:path";
+import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 import {
   createAzureDevOpsLoader,
   loadRepositoryProfile,
-  MAX_SCREENSHOT_BYTES,
-  MAX_SCREENSHOT_TOTAL_BYTES,
-  MAX_SCREENSHOTS,
   pruneArtifactDirectories,
   removeArtifactDirectory,
   storeScreenshots
@@ -35,8 +24,6 @@ export const DEFAULT_DASHBOARD_PORT = 4317;
 export const MAX_JOB_LOG_ENTRIES = 1000;
 export const MAX_CACHE_ENTRIES = 20;
 export const MAX_CACHE_BYTES = 64 * 1024;
-export const MAX_METRICS_ENTRIES = 500;
-export const MAX_QUEUED_JOBS = 20;
 export const FIXLAB_STAGES = [
   "intake",
   "diagnosis",
@@ -48,7 +35,7 @@ export const FIXLAB_STAGES = [
   "pr"
 ];
 
-const terminalStatuses = new Set(["passed", "skipped", "blocked", "failed"]);
+const terminalStatuses = new Set(["passed", "skipped", "failed"]);
 const allStatuses = new Set(["pending", "running", ...terminalStatuses]);
 const bugOutcomeStatuses = new Set([
   "fixed",
@@ -87,19 +74,6 @@ export function validatePort(value) {
     throw new Error("dashboard port must be an integer between 1 and 65535");
   }
   return port;
-}
-
-function publicQueue(jobs) {
-  return jobs.map((job, index) => ({
-    id: job.id,
-    position: index + 1,
-    request: safeSummary(job.request),
-    requestType: job.requestType,
-    intakeSource: job.intakeSource,
-    bugCount: job.bugs.length,
-    screenshotCount: job.screenshots.length,
-    createdAt: job.createdAt
-  }));
 }
 
 export function inspectRepository(repository) {
@@ -166,33 +140,11 @@ export function buildJobPrompt({
   cacheSummary = null,
   intakeSource = "manual",
   workItem = null,
-  workItems = [],
   screenshotPaths = []
 }) {
   const validateOnly = mode === "validate-only";
   const smallEnhancement = requestType === "small-enhancement";
-  const intakeWorkItems =
-    workItems.length > 0 ? workItems : workItem ? [workItem] : [];
-  const intakeSummary = intakeWorkItems.map(
-    ({
-      id,
-      title,
-      state,
-      workItemType,
-      webUrl,
-      comments,
-      commentsWarning
-    }) => ({
-      id,
-      title,
-      state,
-      workItemType,
-      webUrl,
-      commentCount: comments.length,
-      commentsWarning
-    })
-  );
-  const bugResults = extractBugResults(request, intakeWorkItems);
+  const bugResults = extractBugResults(request, workItem);
   const requestGuidance = smallEnhancement
     ? `- Generate a concise acceptance contract before changing code.
 - Check the affected surface and bound the file scope before editing.
@@ -205,13 +157,12 @@ export function buildJobPrompt({
   return `Run a FixLab ${validateOnly ? "validate-only" : "fix-and-validate"} job.
 Request type: ${requestType}
 Intake source: ${intakeSource}
-${intakeSummary.length > 0 ? `Loaded Azure DevOps selection:
-${JSON.stringify(intakeSummary, null, 2)}
-The bounded bug evidence is included in the request below.
+${workItem ? `Azure DevOps work item:
+${JSON.stringify(workItem, null, 2)}
 ` : ""}
 ${screenshotPaths.length > 0 ? `User-provided screenshots stored locally for this job:
 ${screenshotPaths.map((path) => `- ${path}`).join("\n")}
-Inspect only these local files. Do not search for or download additional Azure DevOps attachments.
+Inspect only these local files. Do not search for or download Azure DevOps attachments.
 ` : ""}
 ${cacheSummary ? `
 Verified same-repository cache summary for the current HEAD and profile:
@@ -234,7 +185,6 @@ ${requestGuidance}
 - Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks.
 - ${validateOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update the pull request only after all required gates pass, and include the collected evidence."}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
-- When one of those human actions is required, emit FIXLAB_STAGE|stage|blocked|exact action needed, emit blocked outcomes for affected bugs when applicable, mark later stages skipped because of the blocker, and exit. The dashboard will collect user input and resume this same session.
 - Keep stage messages and retained logs concise. Summarize relevant command evidence and preserve exact errors, but do not feed unbounded raw output back into prompts.
 - Keep all execution local unless the repository profile and existing authorization explicitly require an allowed external action.
 - For every Azure DevOps bug listed below, emit one terminal outcome line before finishing:
@@ -248,8 +198,8 @@ ${requestGuidance}
 - Emit exactly one or more progress lines in this format:
   FIXLAB_STAGE|stage|status|message
 - stage must be one of: ${FIXLAB_STAGES.join(", ")}.
-- status must be pending, running, passed, skipped, blocked, or failed.
-- Before finishing, emit a terminal passed, skipped, blocked, or failed marker for every stage. Never imply an unmarked stage passed.
+- status must be pending, running, passed, skipped, or failed.
+- Before finishing, emit a terminal passed, skipped, or failed marker for every stage. Never imply an unmarked stage passed.
 - Do not call task_complete or return the final response until every expected FIXLAB_BUG line and every terminal FIXLAB_STAGE line has been emitted.
 - Preserve exact command errors in the stage message or adjacent output.
 ${validateOnly ? "- The fix and pr stages must be explicitly skipped unless they fail for another reason." : ""}
@@ -258,7 +208,7 @@ Request:
 ${request}`;
 }
 
-function extractBugResults(request, workItems = []) {
+function extractBugResults(request, workItem) {
   const bugs = new Map();
   const lines = String(request ?? "").split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
@@ -277,17 +227,15 @@ function extractBugResults(request, workItems = []) {
       summary: ""
     });
   }
-  for (const workItem of workItems) {
-    if (workItem?.id && !bugs.has(String(workItem.id))) {
-      bugs.set(String(workItem.id), {
-        id: String(workItem.id),
-        title: safeSummary(workItem.title),
-        url: workItem.webUrl ?? "",
-        outcome: "pending",
-        owner: "",
-        summary: ""
-      });
-    }
+  if (workItem?.id && !bugs.has(String(workItem.id))) {
+    bugs.set(String(workItem.id), {
+      id: String(workItem.id),
+      title: safeSummary(workItem.title),
+      url: workItem.webUrl ?? "",
+      outcome: "pending",
+      owner: "",
+      summary: ""
+    });
   }
   return [...bugs.values()];
 }
@@ -315,165 +263,6 @@ function safeSummary(value) {
     return "[omitted potentially sensitive summary]";
   }
   return text;
-}
-
-function parseTokenCount(value) {
-  const match = String(value).trim().match(/^([\d.]+)\s*([kmb]?)$/i);
-  if (!match) {
-    return null;
-  }
-  const multiplier = {
-    "": 1,
-    k: 1_000,
-    m: 1_000_000,
-    b: 1_000_000_000
-  }[match[2].toLowerCase()];
-  const count = Number(match[1]) * multiplier;
-  return Number.isFinite(count) ? Math.round(count) : null;
-}
-
-function parseUsageLine(line) {
-  const match = line.match(
-    /Tokens\s+↑\s*([\d.]+\s*[kmb]?)\s+\(([\d.]+\s*[kmb]?)\s+cached,\s*([\d.]+\s*[kmb]?)\s+written\)\s+•\s+↓\s*([\d.]+\s*[kmb]?)/i
-  );
-  if (!match) {
-    return null;
-  }
-  const values = match.slice(1).map(parseTokenCount);
-  if (values.some((value) => value === null)) {
-    return null;
-  }
-  const [inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens] =
-    values;
-  return {
-    inputTokens,
-    cachedInputTokens,
-    cacheWriteTokens,
-    outputTokens,
-    cacheReusePercent:
-      inputTokens > 0
-        ? Math.round((cachedInputTokens / inputTokens) * 1000) / 10
-        : 0
-  };
-}
-
-function readMetrics(path) {
-  if (!path || !existsSync(path)) {
-    return { records: [], warning: null };
-  }
-  try {
-    const value = JSON.parse(readFileSync(path, "utf8"));
-    if (!Array.isArray(value?.jobs)) {
-      throw new Error("metrics history has an invalid shape");
-    }
-    return {
-      records: value.jobs.slice(-MAX_METRICS_ENTRIES),
-      warning: null
-    };
-  } catch {
-    return {
-      records: [],
-      warning:
-        "The existing dashboard metrics history could not be read and was ignored."
-    };
-  }
-}
-
-function updateJobMetrics(records, job) {
-  const record = {
-    id: job.id,
-    createdAt: job.createdAt,
-    finishedAt: job.finishedAt,
-    status: job.status,
-    bugCount: job.bugs.length,
-    durationMs: job.finishedAt
-      ? Math.max(
-          0,
-          Date.parse(job.finishedAt) -
-            Date.parse(job.startedAt ?? job.createdAt)
-        )
-      : null,
-    queueWaitMs: job.startedAt
-      ? Math.max(0, Date.parse(job.startedAt) - Date.parse(job.createdAt))
-      : null,
-    ...job.usage
-  };
-  const next = [
-    ...records.filter((candidate) => candidate.id !== job.id),
-    record
-  ].slice(-MAX_METRICS_ENTRIES);
-  return next;
-}
-
-function writeMetrics(path, records) {
-  if (!path) {
-    return;
-  }
-  mkdirSync(dirname(path), { recursive: true });
-  const temporaryPath = `${path}.${process.pid}.tmp`;
-  writeFileSync(
-    temporaryPath,
-    JSON.stringify({ version: 1, jobs: records }),
-    { mode: 0o600 }
-  );
-  renameSync(temporaryPath, path);
-}
-
-function summarizeMetrics(records, period) {
-  const durations = {
-    "24h": 24 * 60 * 60 * 1000,
-    "7d": 7 * 24 * 60 * 60 * 1000,
-    "30d": 30 * 24 * 60 * 60 * 1000
-  };
-  const cutoff = durations[period] ? Date.now() - durations[period] : 0;
-  const selected = records.filter(
-    (record) => Date.parse(record.createdAt) >= cutoff
-  );
-  const completed = selected.filter((record) => record.finishedAt);
-  const usageJobs = completed.filter(
-    (record) => Number.isFinite(record.inputTokens) && record.inputTokens > 0
-  );
-  const totalInputTokens = usageJobs.reduce(
-    (total, record) => total + record.inputTokens,
-    0
-  );
-  const totalCachedInputTokens = usageJobs.reduce(
-    (total, record) => total + record.cachedInputTokens,
-    0
-  );
-  return {
-    period,
-    queued: selected.length,
-    completed: completed.length,
-    passed: completed.filter((record) => record.status === "passed").length,
-    failed: completed.filter((record) => record.status === "failed").length,
-    blocked: completed.filter((record) => record.status === "blocked").length,
-    bugs: selected.reduce((total, record) => total + record.bugCount, 0),
-    averageDurationMs:
-      completed.length > 0
-        ? Math.round(
-            completed.reduce(
-              (total, record) => total + (record.durationMs ?? 0),
-              0
-            ) / completed.length
-          )
-        : null,
-    usageJobs: usageJobs.length,
-    totalInputTokens,
-    totalCachedInputTokens,
-    totalCacheWriteTokens: usageJobs.reduce(
-      (total, record) => total + record.cacheWriteTokens,
-      0
-    ),
-    totalOutputTokens: usageJobs.reduce(
-      (total, record) => total + record.outputTokens,
-      0
-    ),
-    cacheReusePercent:
-      totalInputTokens > 0
-        ? Math.round((totalCachedInputTokens / totalInputTokens) * 1000) / 10
-        : null
-  };
 }
 
 export function createCacheContext(repository) {
@@ -603,15 +392,7 @@ function writeCacheSummary(context, job) {
   }
 }
 
-export function buildAgencyInvocation({
-  packageRoot,
-  prompt,
-  sessionId,
-  resume = false
-}) {
-  if (!sessionId) {
-    throw new Error("Agency invocation requires a session ID");
-  }
+export function buildAgencyInvocation({ packageRoot, prompt }) {
   return {
     args: [
       "copilot",
@@ -622,15 +403,14 @@ export function buildAgencyInvocation({
       "--allow-all-tools",
       "--no-ask-user",
       "--stream",
-      "on",
-      ...(resume ? [`--resume=${sessionId}`] : ["--session-id", sessionId])
+      "on"
     ],
     input: prompt
   };
 }
 
 export function createAgencyExecutor({ packageRoot }) {
-  return ({ repository, prompt, sessionId, resume, onOutput }) => {
+  return ({ repository, prompt, onOutput }) => {
     const lookup = spawnSync(
       process.platform === "win32" ? "where.exe" : "which",
       ["agency"],
@@ -649,12 +429,7 @@ export function createAgencyExecutor({ packageRoot }) {
         "Agency executable is unavailable or is not a directly executable binary"
       );
     }
-    const invocation = buildAgencyInvocation({
-      packageRoot,
-      prompt,
-      sessionId,
-      resume
-    });
+    const invocation = buildAgencyInvocation({ packageRoot, prompt });
     const child = spawn(executable, invocation.args, {
       cwd: repository,
       shell: false,
@@ -707,8 +482,7 @@ function publicJob(job) {
     request: job.request,
     requestType: job.requestType,
     intakeSource: job.intakeSource,
-    workItem: publicWorkItem(job.workItem),
-    workItems: job.workItems.map(publicWorkItem),
+    workItem: job.workItem,
     screenshots: job.screenshots.map(({ name, mimeType, bytes }) => ({
       name,
       mimeType,
@@ -719,44 +493,10 @@ function publicJob(job) {
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
     error: job.error,
-    canResume: ["blocked", "failed", "passed"].includes(job.status),
-    inputCount: job.inputs.length,
-    durationMs: Math.max(
-      0,
-      job.startedAt
-        ? Date.parse(job.finishedAt ?? new Date().toISOString()) -
-            Date.parse(job.startedAt)
-        : 0
-    ),
-    usage: job.usage,
     stages: job.stages,
     bugs: job.bugs,
     logs: job.logs,
     droppedLogs: job.droppedLogs
-  };
-}
-
-function publicWorkItem(workItem) {
-  if (!workItem) {
-    return null;
-  }
-  const {
-    id,
-    title,
-    state,
-    workItemType,
-    webUrl,
-    comments,
-    commentsWarning
-  } = workItem;
-  return {
-    id,
-    title,
-    state,
-    workItemType,
-    webUrl,
-    commentCount: comments.length,
-    commentsWarning
   };
 }
 
@@ -816,88 +556,11 @@ function validateWorkItemSummary(value) {
       : 1000;
     result[field] = (value[field] ?? "").trim().slice(0, maximum);
   }
-  if (value.comments !== undefined && !Array.isArray(value.comments)) {
-    throw new Error("loaded work item comments must be an array");
-  }
-  result.comments = (value.comments ?? []).slice(0, 20).map((comment) => {
-    if (!comment || typeof comment !== "object" || Array.isArray(comment)) {
-      throw new Error("loaded work item comments must be objects");
-    }
-    for (const field of ["author", "createdAt", "text"]) {
-      if (comment[field] !== undefined && typeof comment[field] !== "string") {
-        throw new Error(`loaded work item comment ${field} must be a string`);
-      }
-    }
-    return {
-      author: (comment.author ?? "").trim().slice(0, 200),
-      createdAt: (comment.createdAt ?? "").trim().slice(0, 100),
-      text: (comment.text ?? "").trim().slice(0, 2000)
-    };
-  });
-  if (
-    value.commentsWarning !== undefined &&
-    typeof value.commentsWarning !== "string"
-  ) {
-    throw new Error("loaded work item comments warning must be a string");
-  }
-  result.commentsWarning = (value.commentsWarning ?? "")
-    .trim()
-    .slice(0, 500);
   if (
     result.webUrl &&
     !/^https:\/\/dev\.azure\.com\//i.test(result.webUrl)
   ) {
     throw new Error("loaded work item URL must use https://dev.azure.com");
-  }
-  return result;
-}
-
-function validateLoadedScreenshots(value, state) {
-  if (value === undefined) {
-    return [];
-  }
-  if (!Array.isArray(value)) {
-    throw new Error("loaded Azure DevOps screenshots must be an array");
-  }
-  const result = [];
-  for (const screenshot of value) {
-    if (state.count >= MAX_SCREENSHOTS) {
-      throw new Error(
-        `loaded Azure DevOps screenshots exceed the ${MAX_SCREENSHOTS}-image limit`
-      );
-    }
-    if (!screenshot || typeof screenshot !== "object") {
-      throw new Error("loaded Azure DevOps screenshots must be objects");
-    }
-    const name =
-      typeof screenshot.name === "string" ? screenshot.name.trim() : "";
-    const mimeType =
-      typeof screenshot.mimeType === "string"
-        ? screenshot.mimeType.toLowerCase()
-        : "";
-    const base64 =
-      typeof screenshot.base64 === "string" ? screenshot.base64 : "";
-    if (
-      !name ||
-      name !== basename(name) ||
-      name.includes("..") ||
-      !["image/png", "image/jpeg", "image/webp"].includes(mimeType) ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
-        base64
-      )
-    ) {
-      throw new Error("loaded Azure DevOps screenshot metadata is invalid");
-    }
-    const bytes = Buffer.from(base64, "base64").length;
-    if (bytes > MAX_SCREENSHOT_BYTES) {
-      throw new Error("loaded Azure DevOps screenshot exceeds 2 MiB");
-    }
-    state.totalBytes += bytes;
-    if (state.totalBytes > MAX_SCREENSHOT_TOTAL_BYTES) {
-      throw new Error("loaded Azure DevOps screenshots exceed 8 MiB total");
-    }
-    state.count += 1;
-    result.push({ name, mimeType, base64 });
   }
   return result;
 }
@@ -919,10 +582,6 @@ function appendLine(job, stream, line) {
     stream,
     message: line
   });
-  const usage = parseUsageLine(line);
-  if (usage) {
-    job.usage = usage;
-  }
   const bugMarker = line.match(
     /^FIXLAB_BUG\|(\d+)\|([^|]+)\|([^|]+)\|(.*)$/
   );
@@ -989,9 +648,6 @@ function finishJob(job, result) {
   const failed = FIXLAB_STAGES.filter(
     (stage) => job.stages[stage].status === "failed"
   );
-  const blocked = FIXLAB_STAGES.filter(
-    (stage) => job.stages[stage].status === "blocked"
-  );
   const unresolvedBugs = job.bugs.filter(
     (bug) => bug.outcome === "pending"
   );
@@ -1021,55 +677,10 @@ function finishJob(job, result) {
     missing.length === 0 &&
     failed.length === 0 &&
     unresolvedBugs.length === 0
-      ? blocked.length > 0
-        ? "blocked"
-        : "passed"
+      ? "passed"
       : "failed";
   job.finishedAt = new Date().toISOString();
   writeCacheSummary(job.cacheContext, job);
-}
-
-function buildResumePrompt(job, { action, details }) {
-  const expectedBugs = job.bugs.map((bug) => bug.id).join(", ");
-  return `Resume the existing FixLab dashboard session for job ${job.id}.
-User action: ${action}
-User input:
-${details}
-
-Resume requirements:
-- Reuse the completed diagnosis, current worktree, validation evidence, branch, and pull request from this session.
-- Re-read repository instructions and the effective diff only when the new input changes them.
-- Continue from the blocked or failed stage, or treat this as a focused addition to the completed job.
-- Do not repeat completed investigation, dependency installation, broad tests, or builds without new risk evidence.
-- If the user selected skip, mark only the affected gate skipped, preserve the risk, and continue safe remaining work.
-- Emit one updated FIXLAB_BUG line for every expected bug before finishing. Expected IDs: ${expectedBugs || "none"}.
-- Emit terminal FIXLAB_STAGE lines for every stage before finishing.
-- Do not create a duplicate or empty pull request. Reuse an existing pull request when one belongs to this session.
-- Do not call task_complete or return the final response until all required machine-readable lines are emitted.`;
-}
-
-function resetJobForResume(job) {
-  const restartIndex =
-    job.status === "passed"
-      ? FIXLAB_STAGES.indexOf("diagnosis")
-      : Math.max(
-          0,
-          FIXLAB_STAGES.findIndex((stage) =>
-            ["blocked", "failed"].includes(job.stages[stage].status)
-          )
-        );
-  for (const stage of FIXLAB_STAGES.slice(restartIndex)) {
-    job.stages[stage] = { status: "pending", message: "" };
-  }
-  for (const bug of job.bugs) {
-    bug.outcome = "pending";
-    bug.owner = "";
-    bug.summary = "";
-  }
-  job.status = "running";
-  job.finishedAt = null;
-  job.error = null;
-  job.partial = { stdout: "", stderr: "" };
 }
 
 export function createDashboardServer({
@@ -1082,80 +693,7 @@ export function createDashboardServer({
   const resolvedRepository = resolve(repository);
   let currentJob = null;
   let activeHandle = null;
-  const queuedJobs = [];
   const artifactDirectories = new Set();
-  const cacheContext = createCacheContext(resolvedRepository);
-  const metricsPath = cacheContext
-    ? join(dirname(cacheContext.cachePath), "dashboard-metrics.json")
-    : null;
-  const loadedMetrics = readMetrics(metricsPath);
-  let metricsRecords = loadedMetrics.records;
-  let metricsWarning = loadedMetrics.warning;
-
-  function recordJobMetric(job) {
-    metricsRecords = updateJobMetrics(metricsRecords, job);
-    try {
-      writeMetrics(metricsPath, metricsRecords);
-      metricsWarning = null;
-    } catch {
-      metricsWarning =
-        "Dashboard metrics were updated in memory but could not be persisted.";
-    }
-  }
-
-  function startJob(job, prompt, resume = false) {
-    const handle = executor({
-      repository: resolvedRepository,
-      prompt,
-      sessionId: job.id,
-      resume,
-      onOutput(stream, text) {
-        appendOutput(job, stream, text);
-      }
-    });
-    activeHandle = handle;
-    Promise.resolve(handle.completion)
-      .then((result) => {
-        finishJob(job, result);
-        recordJobMetric(job);
-      })
-      .catch((error) => {
-        finishJob(job, { code: null, error });
-        recordJobMetric(job);
-      })
-      .finally(() => {
-        if (activeHandle === handle) {
-          activeHandle = null;
-        }
-        startNextJob();
-      });
-  }
-
-  function startNextJob() {
-    if (
-      activeHandle ||
-      queuedJobs.length === 0 ||
-      (currentJob && currentJob.status !== "passed")
-    ) {
-      return;
-    }
-    if (currentJob?.artifactDirectory) {
-      removeArtifactDirectory(currentJob.artifactDirectory);
-      artifactDirectories.delete(currentJob.artifactDirectory);
-    }
-    currentJob = queuedJobs.shift();
-    currentJob.status = "running";
-    currentJob.startedAt = new Date().toISOString();
-    recordJobMetric(currentJob);
-    try {
-      startJob(currentJob, currentJob.pendingPrompt);
-      delete currentJob.pendingPrompt;
-    } catch (error) {
-      finishJob(currentJob, { code: null, error });
-      recordJobMetric(currentJob);
-      activeHandle = null;
-    }
-  }
 
   const server = createServer(async (request, response) => {
     const requestUrl = new URL(
@@ -1166,32 +704,13 @@ export function createDashboardServer({
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
       sendJson(response, 200, {
         readiness: inspectRepository(resolvedRepository),
-        job: publicJob(currentJob),
-        queue: publicQueue(queuedJobs)
+        job: publicJob(currentJob)
       });
       return;
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/job") {
-      sendJson(response, 200, {
-        job: publicJob(currentJob),
-        queue: publicQueue(queuedJobs)
-      });
-      return;
-    }
-
-    if (request.method === "GET" && requestUrl.pathname === "/api/metrics") {
-      const period = requestUrl.searchParams.get("period") ?? "7d";
-      if (!["24h", "7d", "30d", "all"].includes(period)) {
-        sendJson(response, 400, {
-          error: "period must be 24h, 7d, 30d, or all"
-        });
-        return;
-      }
-      sendJson(response, 200, {
-        metrics: summarizeMetrics(metricsRecords, period),
-        warning: metricsWarning
-      });
+      sendJson(response, 200, { job: publicJob(currentJob) });
       return;
     }
 
@@ -1214,47 +733,13 @@ export function createDashboardServer({
           throw new Error(readiness.error);
         }
         const profile = loadRepositoryProfile(resolvedRepository);
-        const inputs = Array.isArray(body.workItems)
-          ? body.workItems
-          : [body.workItem];
-        const uniqueInputs = [
-          ...new Set(
-            inputs
-              .map((value) => String(value ?? "").trim())
-              .filter(Boolean)
-          )
-        ];
-        if (uniqueInputs.length < 1 || uniqueInputs.length > 20) {
-          throw new Error("provide between 1 and 20 unique work item IDs or URLs");
-        }
-        const loaded =
-          typeof workItemLoader.loadMany === "function"
-            ? await workItemLoader.loadMany({
-                workItems: uniqueInputs,
-                profile
-              })
-            : await Promise.all(
-                uniqueInputs.map((workItem) =>
-                  workItemLoader({ workItem, profile })
-                )
-              );
-        const screenshotState = { count: 0, totalBytes: 0 };
-        const workItems = loaded.map((item) => {
-          const workItem = validateWorkItemSummary(item);
-          workItem.screenshots = validateLoadedScreenshots(
-            item.screenshots,
-            screenshotState
-          );
-          workItem.imagesWarning =
-            typeof item.imagesWarning === "string"
-              ? item.imagesWarning.trim().slice(0, 500)
-              : "";
-          return workItem;
-        });
-        sendJson(response, 200, {
-          workItem: workItems.length === 1 ? workItems[0] : null,
-          workItems
-        });
+        const workItem = validateWorkItemSummary(
+          await workItemLoader({
+            workItem: body.workItem,
+            profile
+          })
+        );
+        sendJson(response, 200, { workItem });
       } catch (error) {
         sendJson(response, 400, {
           error: String(error.message).replace(
@@ -1266,93 +751,10 @@ export function createDashboardServer({
       return;
     }
 
-    if (
-      request.method === "POST" &&
-      requestUrl.pathname === "/api/job/input"
-    ) {
-      if (!currentJob) {
-        sendJson(response, 404, { error: "no FixLab job is available" });
-        return;
-      }
-      if (!["blocked", "failed", "passed"].includes(currentJob.status)) {
-        sendJson(response, 409, {
-          error: "user input can resume only a blocked, failed, or completed job"
-        });
-        return;
-      }
-      if (activeHandle) {
-        sendJson(response, 409, {
-          error: "the current FixLab agent is still shutting down"
-        });
-        return;
-      }
-
-      let body;
-      try {
-        if (
-          !request.headers["content-type"]
-            ?.toLowerCase()
-            .startsWith("application/json")
-        ) {
-          throw new Error("Content-Type must be application/json");
-        }
-        body = await readJsonBody(request);
-      } catch (error) {
-        sendJson(response, 400, { error: error.message });
-        return;
-      }
-      const details =
-        typeof body.details === "string" ? body.details.trim() : "";
-      if (!details || details.length > 10000) {
-        sendJson(response, 400, {
-          error: "details must be a non-empty string of at most 10000 characters"
-        });
-        return;
-      }
-      const action = body.action ?? "continue";
-      if (!["continue", "retry", "skip"].includes(action)) {
-        sendJson(response, 400, {
-          error: "action must be continue, retry, or skip"
-        });
-        return;
-      }
-
-      currentJob.inputs.push({
-        action,
-        details,
-        createdAt: new Date().toISOString()
-      });
-      pushLog(currentJob, {
-        index: currentJob.nextLogIndex,
-        timestamp: new Date().toISOString(),
-        stream: "dashboard",
-        message: `User input ${currentJob.inputs.length} accepted; resuming the same FixLab session.`
-      });
-      const prompt = buildResumePrompt(currentJob, { action, details });
-      resetJobForResume(currentJob);
-      recordJobMetric(currentJob);
-      try {
-        startJob(currentJob, prompt, true);
-      } catch (error) {
-        finishJob(currentJob, { code: null, error });
-        recordJobMetric(currentJob);
-        activeHandle = null;
-      }
-      sendJson(response, 202, {
-        job: publicJob(currentJob),
-        queue: publicQueue(queuedJobs)
-      });
-      return;
-    }
-
     if (request.method === "POST" && requestUrl.pathname === "/api/jobs") {
-      let shouldQueue =
-        Boolean(activeHandle) ||
-        ["running", "blocked", "failed"].includes(currentJob?.status) ||
-        queuedJobs.length > 0;
-      if (shouldQueue && queuedJobs.length >= MAX_QUEUED_JOBS) {
+      if (currentJob?.status === "running") {
         sendJson(response, 409, {
-          error: `the FixLab queue already contains ${MAX_QUEUED_JOBS} jobs`
+          error: "a FixLab job is already running"
         });
         return;
       }
@@ -1401,25 +803,9 @@ export function createDashboardServer({
         return;
       }
       let workItem = null;
-      let workItems = [];
       try {
         if (intakeSource === "azure-devops") {
-          const values = Array.isArray(body.workItems)
-            ? body.workItems
-            : body.workItem
-              ? [body.workItem]
-              : [];
-          workItems = values.map(validateWorkItemSummary);
-          if (workItems.length < 1 || workItems.length > 20) {
-            throw new Error(
-              "Azure DevOps intake requires between 1 and 20 loaded work items"
-            );
-          }
-          const ids = workItems.map((item) => item.id);
-          if (new Set(ids).size !== ids.length) {
-            throw new Error("loaded Azure DevOps work items must be unique");
-          }
-          workItem = workItems.length === 1 ? workItems[0] : null;
+          workItem = validateWorkItemSummary(body.workItem);
         }
       } catch (error) {
         sendJson(response, 400, { error: error.message });
@@ -1432,21 +818,11 @@ export function createDashboardServer({
         return;
       }
 
-      shouldQueue =
-        Boolean(activeHandle) ||
-        ["running", "blocked", "failed"].includes(currentJob?.status) ||
-        queuedJobs.length > 0;
-      if (shouldQueue && queuedJobs.length >= MAX_QUEUED_JOBS) {
-        sendJson(response, 409, {
-          error: `the FixLab queue already contains ${MAX_QUEUED_JOBS} jobs`
-        });
-        return;
-      }
-      if (!shouldQueue && currentJob?.artifactDirectory) {
+      if (currentJob?.artifactDirectory) {
         removeArtifactDirectory(currentJob.artifactDirectory);
         artifactDirectories.delete(currentJob.artifactDirectory);
       }
-      const jobId = randomUUID();
+      const jobId = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
       let storedScreenshots;
       try {
         storedScreenshots = storeScreenshots({
@@ -1462,74 +838,61 @@ export function createDashboardServer({
         artifactDirectories.add(storedScreenshots.directory);
       }
 
-      const job = {
+      currentJob = {
         id: jobId,
-        createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
         intakeSource,
         workItem,
-        workItems,
         screenshots: storedScreenshots.files,
         artifactDirectory: storedScreenshots.directory,
         mode: body.mode,
-        status: shouldQueue ? "queued" : "running",
-        startedAt: shouldQueue ? null : new Date().toISOString(),
+        status: "running",
+        startedAt: new Date().toISOString(),
         finishedAt: null,
         error: null,
-        inputs: [],
-        usage: {
-          inputTokens: 0,
-          cachedInputTokens: 0,
-          cacheWriteTokens: 0,
-          outputTokens: 0,
-          cacheReusePercent: 0
-        },
         stages: Object.fromEntries(
           FIXLAB_STAGES.map((stage) => [
             stage,
             { status: "pending", message: "" }
           ])
         ),
-        bugs: extractBugResults(requestText, workItems),
+        bugs: extractBugResults(requestText, workItem),
         logs: [],
         droppedLogs: 0,
         nextLogIndex: 0,
         cacheContext: createCacheContext(resolvedRepository),
         partial: { stdout: "", stderr: "" }
       };
-      job.pendingPrompt = buildJobPrompt({
-        request: requestText,
-        mode: body.mode,
-        requestType,
-        intakeSource,
-        workItem,
-        workItems,
-        screenshotPaths: storedScreenshots.files.map((file) => file.path),
-        cacheSummary: loadCacheSummary(job.cacheContext)
-      });
-      recordJobMetric(job);
 
-      if (shouldQueue) {
-        queuedJobs.push(job);
-      } else {
-        currentJob = job;
-        try {
-          startJob(currentJob, currentJob.pendingPrompt);
-          delete currentJob.pendingPrompt;
-        } catch (error) {
-          finishJob(currentJob, { code: null, error });
-          recordJobMetric(currentJob);
-          activeHandle = null;
-        }
+      try {
+        activeHandle = executor({
+          repository: resolvedRepository,
+          prompt: buildJobPrompt({
+            request: requestText,
+            mode: body.mode,
+            requestType,
+            intakeSource,
+            workItem,
+            screenshotPaths: storedScreenshots.files.map((file) => file.path),
+            cacheSummary: loadCacheSummary(currentJob.cacheContext)
+          }),
+          onOutput(stream, text) {
+            appendOutput(currentJob, stream, text);
+          }
+        });
+        Promise.resolve(activeHandle.completion)
+          .then((result) => finishJob(currentJob, result))
+          .catch((error) => finishJob(currentJob, { code: null, error }))
+          .finally(() => {
+            activeHandle = null;
+          });
+      } catch (error) {
+        finishJob(currentJob, { code: null, error });
+        activeHandle = null;
       }
 
-      sendJson(response, 202, {
-        job: publicJob(currentJob),
-        queued: shouldQueue,
-        queuedJob: shouldQueue ? publicQueue([job])[0] : null,
-        queue: publicQueue(queuedJobs)
-      });
+      sendJson(response, 202, { job: publicJob(currentJob) });
       return;
     }
 

@@ -15,9 +15,6 @@ const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
-const queuePanel = document.querySelector("#queue-panel");
-const queueCount = document.querySelector("#queue-count");
-const queueList = document.querySelector("#queue-list");
 const bugResultsPanel = document.querySelector("#bug-results-panel");
 const bugResultsElement = document.querySelector("#bug-results");
 const logsElement = document.querySelector("#logs");
@@ -25,30 +22,10 @@ const azureDevOpsIntake = document.querySelector("#azure-devops-intake");
 const workItemInput = document.querySelector("#work-item");
 const loadWorkItemButton = document.querySelector("#load-work-item");
 const workItemSummary = document.querySelector("#work-item-summary");
-const workItemCount = document.querySelector("#work-item-count");
-const workItemList = document.querySelector("#work-item-list");
 const requestInput = document.querySelector("#request");
 const screenshotInput = document.querySelector("#screenshots");
 const screenshotList = document.querySelector("#screenshot-list");
-const jobInputPanel = document.querySelector("#job-input-panel");
-const jobInputTitle = document.querySelector("#job-input-title");
-const jobInputCount = document.querySelector("#job-input-count");
-const jobInputGuidance = document.querySelector("#job-input-guidance");
-const jobInputAction = document.querySelector("#job-input-action");
-const jobInputDetails = document.querySelector("#job-input-details");
-const jobInputSubmit = document.querySelector("#job-input-submit");
-const jobInputMessage = document.querySelector("#job-input-message");
-const metricsPeriod = document.querySelector("#metrics-period");
-const metricBugs = document.querySelector("#metric-bugs");
-const metricCompleted = document.querySelector("#metric-completed");
-const metricDuration = document.querySelector("#metric-duration");
-const metricInputTokens = document.querySelector("#metric-input-tokens");
-const metricOutputTokens = document.querySelector("#metric-output-tokens");
-const metricCacheReuse = document.querySelector("#metric-cache-reuse");
-const metricStatuses = document.querySelector("#metric-statuses");
-let loadedWorkItems = [];
-let selectedScreenshots = [];
-let screenshotPreviewUrls = [];
+let loadedWorkItem = null;
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -63,27 +40,6 @@ function escapeText(value) {
   return String(value ?? "");
 }
 
-function formatDuration(milliseconds) {
-  if (!Number.isFinite(milliseconds)) {
-    return "—";
-  }
-  const seconds = Math.round(milliseconds / 1000);
-  if (seconds < 60) {
-    return `${seconds}s`;
-  }
-  const minutes = Math.floor(seconds / 60);
-  const remainingSeconds = seconds % 60;
-  if (minutes < 60) {
-    return `${minutes}m ${remainingSeconds}s`;
-  }
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
-}
-
-function formatTokenCount(value, available) {
-  return available ? Number(value).toLocaleString() : "—";
-}
-
 function renderReadiness(readiness) {
   const ready = readiness.repositoryReady && readiness.profileReady;
   readinessElement.className = `readiness ${ready ? "ready" : "blocked"}`;
@@ -95,13 +51,10 @@ function renderReadiness(readiness) {
 
 function renderJob(job) {
   const running = job?.status === "running";
-  startButton.disabled = readinessElement.classList.contains("blocked");
-  startButton.textContent =
-    running || ["blocked", "failed"].includes(job?.status)
-      ? "Add to queue"
-      : "Start job";
+  startButton.disabled =
+    running || readinessElement.classList.contains("blocked");
   jobStatusElement.textContent = job
-    ? `${job.status} · ${job.requestType} · ${formatDuration(job.durationMs)}`
+    ? `${job.status} · ${job.requestType}`
     : "Not started";
   jobStatusElement.className = `badge ${job?.status ?? ""}`;
 
@@ -163,65 +116,6 @@ function renderJob(job) {
     logLines?.length > 0 ? logLines.join("\n") : "No job output yet.";
   logsElement.scrollTop = logsElement.scrollHeight;
   formError.textContent = job?.error ?? "";
-
-  const canResume = Boolean(job?.canResume);
-  jobInputPanel.hidden = !canResume;
-  jobInputSubmit.disabled = !canResume;
-  jobInputCount.textContent = job ? `${job.inputCount} update(s)` : "";
-  if (canResume) {
-    if (job.status === "blocked") {
-      jobInputTitle.textContent = "Action needed";
-      jobInputGuidance.textContent =
-        "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
-    } else if (job.status === "failed") {
-      jobInputTitle.textContent = "Retry or correct this job";
-      jobInputGuidance.textContent =
-        "Add the information needed to correct the failure without repeating completed work.";
-    } else {
-      jobInputTitle.textContent = "Add details or update the existing PR";
-      jobInputGuidance.textContent =
-        "Continue this completed session with one focused addition. FixLab reuses its evidence, branch, and pull request.";
-    }
-  }
-}
-
-function renderQueue(queue = []) {
-  queuePanel.hidden = queue.length === 0;
-  queueCount.textContent = `${queue.length} waiting`;
-  queueList.replaceChildren();
-  for (const job of queue) {
-    const item = document.createElement("li");
-    const summary = document.createElement("strong");
-    summary.textContent = `#${job.position} · ${job.requestType}`;
-    const details = document.createElement("span");
-    details.textContent =
-      ` · ${job.bugCount} bug(s) · ${job.screenshotCount} screenshot(s) · ${job.request}`;
-    item.append(summary, details);
-    queueList.append(item);
-  }
-}
-
-function renderMetrics(metrics, warning) {
-  const usageAvailable = metrics.usageJobs > 0;
-  metricBugs.textContent = metrics.bugs.toLocaleString();
-  metricCompleted.textContent =
-    `${metrics.completed.toLocaleString()} / ${metrics.queued.toLocaleString()} jobs`;
-  metricDuration.textContent = formatDuration(metrics.averageDurationMs);
-  metricInputTokens.textContent = formatTokenCount(
-    metrics.totalInputTokens,
-    usageAvailable
-  );
-  metricOutputTokens.textContent = formatTokenCount(
-    metrics.totalOutputTokens,
-    usageAvailable
-  );
-  metricCacheReuse.textContent =
-    metrics.cacheReusePercent === null
-      ? "—"
-      : `${metrics.cacheReusePercent.toFixed(1)}%`;
-  metricStatuses.textContent =
-    warning ||
-    `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · exact usage available for ${metrics.usageJobs} completed job(s)`;
 }
 
 async function fetchJson(url, options) {
@@ -237,76 +131,39 @@ function selectedIntakeSource() {
   return form.elements.intakeSource.value;
 }
 
-function renderWorkItems(workItems) {
-  workItemList.replaceChildren();
-  workItemCount.textContent = `${workItems.length} bug${workItems.length === 1 ? "" : "s"} loaded`;
-  for (const workItem of workItems) {
-    const item = document.createElement("li");
-    const link = document.createElement("a");
-    link.href = workItem.webUrl;
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.textContent = `#${workItem.id}`;
-    item.append(
-      link,
-      ` · ${workItem.state || "Unknown"} · ${workItem.title} · ${workItem.commentCount || 0} comment(s) · ${workItem.imageCount || 0} image(s)${workItem.commentsWarning ? " · comments unavailable" : ""}${workItem.imagesWarning ? " · some images unavailable" : ""}`
-    );
-    workItemList.append(item);
-  }
+function renderWorkItem(workItem) {
+  workItemSummary.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = `#${workItem.id} · ${workItem.workItemType || "Work item"} · ${workItem.title}`;
+  const details = document.createElement("p");
+  details.textContent = `State: ${workItem.state || "Unknown"}`;
+  const link = document.createElement("a");
+  link.href = workItem.webUrl;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = "Open in Azure DevOps";
+  workItemSummary.append(title, details, link);
   workItemSummary.hidden = false;
 }
 
-function workItemsRequest(workItems) {
-  const separator = "\n\n==============================\n\n";
-  const blockBudget = Math.floor(
-    (9800 - separator.length * (workItems.length - 1)) / workItems.length
-  );
-  return workItems
-    .map((workItem) => {
-      const header = [
-        `Azure DevOps Bug ${workItem.id}: ${workItem.title}`,
-        `URL: ${workItem.webUrl}`,
-        workItem.state ? `State: ${workItem.state}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n");
-      const evidence = [
-        workItem.description,
-        workItem.reproduction,
-        workItem.acceptanceCriteria,
-        workItem.commentsWarning,
-        workItem.imagesWarning,
-        ...(workItem.comments ?? []).map(
-          (comment) =>
-            `Comment by ${comment.author || "Unknown"}${comment.createdAt ? ` at ${comment.createdAt}` : ""}:\n${comment.text}`
-        )
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      const evidenceBudget = Math.max(
-        0,
-        blockBudget - header.length - "\nEvidence:\n".length
-      );
-      return evidenceBudget > 0 && evidence
-        ? `${header}\nEvidence:\n${evidence.slice(0, evidenceBudget)}`
-        : header.slice(0, blockBudget);
-    })
-    .join(separator);
-}
-
-function workItemInputs(value) {
+function workItemRequest(workItem) {
   return [
-    ...new Set(
-      String(value)
-        .split(/[\s,]+/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-    )
-  ];
+    `Azure DevOps work item ${workItem.id}: ${workItem.title}`,
+    workItem.workItemType ? `Type: ${workItem.workItemType}` : "",
+    workItem.state ? `State: ${workItem.state}` : "",
+    workItem.description ? `Description:\n${workItem.description}` : "",
+    workItem.reproduction ? `Reproduction:\n${workItem.reproduction}` : "",
+    workItem.acceptanceCriteria
+      ? `Acceptance criteria:\n${workItem.acceptanceCriteria}`
+      : "",
+    workItem.webUrl ? `Work item: ${workItem.webUrl}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function validateSelectedScreenshots() {
-  const files = selectedScreenshots;
+  const files = [...screenshotInput.files];
   if (files.length > maxScreenshots) {
     throw new Error(`Select at most ${maxScreenshots} screenshots.`);
   }
@@ -324,82 +181,6 @@ function validateSelectedScreenshots() {
     throw new Error("Selected screenshots exceed the 8 MiB total limit.");
   }
   return files;
-}
-
-function renderScreenshots() {
-  for (const url of screenshotPreviewUrls) {
-    URL.revokeObjectURL(url);
-  }
-  screenshotPreviewUrls = [];
-  screenshotList.replaceChildren();
-  for (const file of selectedScreenshots) {
-    const item = document.createElement("li");
-    const preview = document.createElement("img");
-    const previewUrl = URL.createObjectURL(file);
-    screenshotPreviewUrls.push(previewUrl);
-    preview.src = previewUrl;
-    preview.alt = `Preview of ${file.name}`;
-    const label = document.createElement("span");
-    label.textContent = `${file.name} (${Math.ceil(file.size / 1024)} KiB)`;
-    item.append(preview, label);
-    screenshotList.append(item);
-  }
-}
-
-function addScreenshots(files) {
-  const next = [...selectedScreenshots, ...files];
-  selectedScreenshots = next;
-  try {
-    validateSelectedScreenshots();
-  } catch (error) {
-    selectedScreenshots = next.slice(0, -files.length);
-    throw error;
-  }
-  renderScreenshots();
-}
-
-function normalizeClipboardScreenshot(file, index) {
-  if (file.name) {
-    return file;
-  }
-  const extension = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/webp": ".webp"
-  }[file.type];
-  return new File(
-    [file],
-    `pasted-${Date.now()}-${index + 1}${extension}`,
-    {
-      type: file.type,
-      lastModified: file.lastModified
-    }
-  );
-}
-
-async function convertClipboardScreenshot(file, index) {
-  if (allowedScreenshotTypes.has(file.type)) {
-    return normalizeClipboardScreenshot(file, index);
-  }
-  const bitmap = await createImageBitmap(file);
-  try {
-    const canvas = document.createElement("canvas");
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    canvas.getContext("2d").drawImage(bitmap, 0, 0);
-    const blob = await new Promise((resolve) =>
-      canvas.toBlob(resolve, "image/png")
-    );
-    if (!blob) {
-      throw new Error("The clipboard image could not be converted to PNG.");
-    }
-    return new File([blob], `pasted-${Date.now()}-${index + 1}.png`, {
-      type: "image/png",
-      lastModified: Date.now()
-    });
-  } finally {
-    bitmap.close();
-  }
 }
 
 function fileBase64(file) {
@@ -425,18 +206,6 @@ function fileBase64(file) {
   });
 }
 
-function loadedScreenshotFile(screenshot) {
-  const binary = atob(screenshot.base64);
-  const bytes = Uint8Array.from(
-    binary,
-    (character) => character.charCodeAt(0)
-  );
-  return new File([bytes], screenshot.name, {
-    type: screenshot.mimeType,
-    lastModified: Date.now()
-  });
-}
-
 document.querySelectorAll("input[name='intakeSource']").forEach((input) => {
   input.addEventListener("change", () => {
     azureDevOpsIntake.hidden = selectedIntakeSource() !== "azure-devops";
@@ -447,29 +216,16 @@ loadWorkItemButton.addEventListener("click", async () => {
   formError.textContent = "";
   loadWorkItemButton.disabled = true;
   try {
-    const inputs = workItemInputs(workItemInput.value);
-    if (inputs.length < 1 || inputs.length > 20) {
-      throw new Error("Enter between 1 and 20 unique Azure DevOps IDs or URLs.");
-    }
     const body = await fetchJson("/api/azure-devops/load", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workItems: inputs })
+      body: JSON.stringify({ workItem: workItemInput.value })
     });
-    const loadedScreenshots = body.workItems.flatMap(
-      (workItem) => workItem.screenshots ?? []
-    );
-    loadedWorkItems = body.workItems.map(
-      ({ screenshots = [], ...workItem }) => ({
-        ...workItem,
-        imageCount: screenshots.length
-      })
-    );
-    addScreenshots(loadedScreenshots.map(loadedScreenshotFile));
-    renderWorkItems(loadedWorkItems);
-    requestInput.value = workItemsRequest(loadedWorkItems);
+    loadedWorkItem = body.workItem;
+    renderWorkItem(loadedWorkItem);
+    requestInput.value = workItemRequest(loadedWorkItem).slice(0, 10000);
   } catch (error) {
-    loadedWorkItems = [];
+    loadedWorkItem = null;
     workItemSummary.hidden = true;
     formError.textContent = error.message;
   } finally {
@@ -479,34 +235,17 @@ loadWorkItemButton.addEventListener("click", async () => {
 
 screenshotInput.addEventListener("change", () => {
   formError.textContent = "";
+  screenshotList.replaceChildren();
   try {
-    addScreenshots([...screenshotInput.files]);
+    const files = validateSelectedScreenshots();
+    for (const file of files) {
+      const item = document.createElement("li");
+      item.textContent = `${file.name} (${Math.ceil(file.size / 1024)} KiB)`;
+      screenshotList.append(item);
+    }
   } catch (error) {
-    formError.textContent = error.message;
-  } finally {
     screenshotInput.value = "";
-  }
-});
-
-document.addEventListener("paste", async (event) => {
-  const items = [...(event.clipboardData?.items ?? [])].filter(
-    (item) => item.kind === "file" && item.type.startsWith("image/")
-  );
-  if (items.length === 0) {
-    return;
-  }
-  event.preventDefault();
-  formError.textContent = "";
-  try {
-    const files = items
-    .map((item) => item.getAsFile())
-      .filter(Boolean);
-    addScreenshots(
-      await Promise.all(files.map(convertClipboardScreenshot))
-    );
-  } catch (error) {
-    formError.textContent =
-      error.message || "The clipboard image could not be added.";
+    formError.textContent = error.message;
   }
 });
 
@@ -515,24 +254,10 @@ async function refresh() {
     const body = await fetchJson("/api/status");
     renderReadiness(body.readiness);
     renderJob(body.job);
-    renderQueue(body.queue);
   } catch (error) {
     formError.textContent = error.message;
   }
 }
-
-async function refreshMetrics() {
-  try {
-    const body = await fetchJson(
-      `/api/metrics?period=${encodeURIComponent(metricsPeriod.value)}`
-    );
-    renderMetrics(body.metrics, body.warning);
-  } catch (error) {
-    formError.textContent = error.message;
-  }
-}
-
-metricsPeriod.addEventListener("change", refreshMetrics);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -541,8 +266,8 @@ form.addEventListener("submit", async (event) => {
   try {
     const data = new FormData(form);
     const intakeSource = data.get("intakeSource");
-    if (intakeSource === "azure-devops" && loadedWorkItems.length === 0) {
-      throw new Error("Load one or more Azure DevOps bugs before starting.");
+    if (intakeSource === "azure-devops" && !loadedWorkItem) {
+      throw new Error("Load an Azure DevOps work item before starting.");
     }
     const screenshots = await Promise.all(
       validateSelectedScreenshots().map(fileBase64)
@@ -555,49 +280,16 @@ form.addEventListener("submit", async (event) => {
         requestType: data.get("requestType"),
         mode: data.get("mode"),
         intakeSource,
-        workItems: intakeSource === "azure-devops" ? loadedWorkItems : [],
+        workItem: intakeSource === "azure-devops" ? loadedWorkItem : null,
         screenshots
       })
     });
-    selectedScreenshots = [];
-    renderScreenshots();
     renderJob(body.job);
-    renderQueue(body.queue);
-    await refreshMetrics();
   } catch (error) {
     formError.textContent = error.message;
     startButton.disabled = false;
   }
 });
 
-jobInputSubmit.addEventListener("click", async () => {
-  jobInputMessage.textContent = "";
-  formError.textContent = "";
-  jobInputSubmit.disabled = true;
-  try {
-    const details = jobInputDetails.value.trim();
-    if (!details) {
-      throw new Error("Enter the additional details or manual result.");
-    }
-    const body = await fetchJson("/api/job/input", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: jobInputAction.value,
-        details
-      })
-    });
-    jobInputDetails.value = "";
-    jobInputMessage.textContent =
-      "Input accepted. FixLab resumed the same session.";
-    renderJob(body.job);
-  } catch (error) {
-    formError.textContent = error.message;
-    jobInputSubmit.disabled = false;
-  }
-});
-
 refresh();
-refreshMetrics();
 setInterval(refresh, 1000);
-setInterval(refreshMetrics, 5000);

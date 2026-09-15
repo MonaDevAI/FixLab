@@ -25,17 +25,14 @@
             <label><input type="radio" name="intakeSource" value="azure-devops"> Load from Azure DevOps</label>
           </fieldset>
           <div id="azure-devops-intake" class="intake-box" hidden>
-            <label for="work-item">Azure DevOps work item URLs or IDs</label>
+            <label for="work-item">Azure DevOps work item URL or ID</label>
             <div class="inline-input">
-              <textarea id="work-item" rows="3" autocomplete="off"
-                placeholder="123, 456, or one URL/ID per line"></textarea>
-              <button id="load-work-item" type="button">Load bugs</button>
+              <input id="work-item" type="text" autocomplete="off"
+                placeholder="https://dev.azure.com/org/project/_workitems/edit/123 or 123">
+              <button id="load-work-item" type="button">Load</button>
             </div>
-            <p class="guidance">Load up to 20 unique bugs in one authenticated batch. ID-only lookup uses Azure DevOps settings from the repository profile. Up to five attached or embedded images are loaded locally; non-image attachments are not downloaded.</p>
-            <div id="work-item-summary" class="loaded-summary" hidden>
-              <strong id="work-item-count"></strong>
-              <ul id="work-item-list" class="work-item-list"></ul>
-            </div>
+            <p class="guidance">ID-only lookup uses optional Azure DevOps organization/project settings from the repository profile. Private attachments are not downloaded.</p>
+            <div id="work-item-summary" class="loaded-summary" hidden></div>
           </div>
           <label for="request">Bug or required enhancement</label>
           <textarea id="request" name="request" rows="6" maxlength="10000" required
@@ -43,7 +40,7 @@
           <label for="screenshots">Screenshots (optional)</label>
           <input id="screenshots" name="screenshots" type="file"
             accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple>
-          <p class="guidance">Copy an image and press Ctrl+V anywhere on this page, or select up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Other clipboard image formats are converted to PNG. Files remain local and are removed when replaced or when the dashboard stops.</p>
+          <p class="guidance">Up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Files remain local and are removed when replaced or when the dashboard stops.</p>
           <ul id="screenshot-list" class="file-list"></ul>
           <fieldset>
             <legend>Request type</legend>
@@ -67,38 +64,6 @@
           <span id="job-status" class="badge">Not started</span>
         </div>
         <div id="stages" class="stages"></div>
-        <div id="queue-panel" class="queue-panel" hidden>
-          <div class="section-heading">
-            <h3>Running queue</h3>
-            <span id="queue-count"></span>
-          </div>
-          <ol id="queue-list"></ol>
-        </div>
-      </section>
-
-      <section class="panel">
-        <div class="section-heading">
-          <h2>Workflow statistics</h2>
-          <label class="period-label" for="metrics-period">
-            Period
-            <select id="metrics-period">
-              <option value="24h">Last 24 hours</option>
-              <option value="7d" selected>Last 7 days</option>
-              <option value="30d">Last 30 days</option>
-              <option value="all">All retained</option>
-            </select>
-          </label>
-        </div>
-        <div class="metrics">
-          <article><span>Bugs queued</span><strong id="metric-bugs">0</strong></article>
-          <article><span>Jobs completed</span><strong id="metric-completed">0</strong></article>
-          <article><span>Average time</span><strong id="metric-duration">—</strong></article>
-          <article><span>Input tokens</span><strong id="metric-input-tokens">—</strong></article>
-          <article><span>Output tokens</span><strong id="metric-output-tokens">—</strong></article>
-          <article><span>Input cache reuse</span><strong id="metric-cache-reuse">—</strong></article>
-        </div>
-        <p id="metric-statuses" class="guidance"></p>
-        <p class="guidance">Token totals are recorded only when Copilot emits its terminal usage summary. Input cache reuse is cached input divided by total input; it is not presented as exact token or cost savings without a comparable baseline.</p>
       </section>
 
       <section id="bug-results-panel" class="panel" hidden>
@@ -119,25 +84,6 @@
             <tbody id="bug-results"></tbody>
           </table>
         </div>
-      </section>
-
-      <section id="job-input-panel" class="panel intervention" hidden>
-        <div class="section-heading">
-          <h2 id="job-input-title">Continue this job</h2>
-          <span id="job-input-count"></span>
-        </div>
-        <p id="job-input-guidance" class="guidance"></p>
-        <label for="job-input-action">Action</label>
-        <select id="job-input-action">
-          <option value="continue">Provide details and continue</option>
-          <option value="retry">Retry with the available prerequisite</option>
-          <option value="skip">Skip the blocked gate and preserve the risk</option>
-        </select>
-        <label for="job-input-details">Additional details or manual result</label>
-        <textarea id="job-input-details" rows="5" maxlength="10000"
-          placeholder="For example: authentication is complete, use this safe test record, or apply this additional requirement."></textarea>
-        <button id="job-input-submit" type="button">Resume FixLab</button>
-        <p id="job-input-message" class="guidance" aria-live="polite"></p>
       </section>
 
       <section class="panel">
