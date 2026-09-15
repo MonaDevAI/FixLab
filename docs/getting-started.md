@@ -56,18 +56,12 @@ type. Start with validate-only when
 onboarding a repository; that mode prohibits edits, commits, pushes, and pull
 request changes.
 
-The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
-IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,
-shows the selected list before submission, and creates one bounded request
-with a result row for every bug. Outcomes distinguish repository fixes from
+When one request contains multiple `Azure DevOps Bug <id>:` sections, the
+dashboard shows a result row for each bug. Outcomes distinguish FMDM fixes from
 already-fixed, expected, duplicate, no-change, blocked, and external causes.
 An external MDG result is highlighted with MDG as the owner. FixLab creates a
 combined pull request only when at least one proven repository code change is
 needed; it does not create an empty pull request for external-only outcomes.
-While a job is running, the submit action changes to **Add to queue**. Up to 20
-pending jobs are shown by position. A passed job starts the next automatically;
-a blocked or failed job pauses the queue so its action-needed state remains
-available for same-session resume.
 
 The request field should contain only the bug or required enhancement. Do not
 copy profile-owned paths, commands, ports, systems, or environment choices into
@@ -79,11 +73,10 @@ the request. FixLab reads that validation context from
 **Enter manually** is selected by default and is always available. Type the bug
 or required enhancement and optionally select screenshots.
 
-To load Azure DevOps fields, paste one or more IDs or full URLs such as:
+To load Azure DevOps fields, paste a full URL such as:
 
 ```text
 https://dev.azure.com/your-organization/your-project/_workitems/edit/123
-456
 ```
 
 For ID-only entry, add optional repository-owned context:
@@ -100,18 +93,14 @@ For ID-only entry, add optional repository-owned context:
 FixLab uses the developer's current Azure CLI authentication. Run `az login`
 with access to the organization when loading fails because authentication is
 unavailable. The access token is used only by the local HTTPS request and is
-not shown or retained. FixLab loads the newest 20 non-deleted comments along
-with the work-item text fields. If comment access alone fails, the selected bug
-shows an explicit comments warning and remains available. Comment attachments
-and other private work-item attachments are never downloaded automatically.
+not shown or retained. FixLab loads text fields but never downloads private
+work-item attachments automatically.
 
 Up to five PNG, JPEG, or WebP screenshots may be attached, with limits of
-2 MiB per file and 8 MiB total. Select files or click the main bug/request
-textarea and press `Ctrl+V` after copying an image; a local thumbnail confirms
-the paste. Images are stored locally with generated names outside tracked
-source, passed to the agent by local path, and excluded from durable metadata
-and metrics. Clean shutdown and job replacement remove them; directories older
-than seven days are pruned when the dashboard starts.
+2 MiB per file and 8 MiB total. They are stored locally with generated names
+outside tracked source, passed to the agent by local path, and excluded from the
+durable metadata cache. Clean shutdown and job replacement remove them;
+directories older than seven days are pruned when the dashboard starts.
 
 After submission, the agent owns the complete lifecycle: acceptance or fix
 contract, diagnosis or affected-surface inspection, smallest required
@@ -125,13 +114,6 @@ Routine engineering steps require no human direction. Interaction is limited
 to authentication, unsafe-data approval, deployment or pull-request approval,
 or a genuine blocker. Environment choices are never hardcoded by the
 dashboard; the repository profile controls them.
-
-When a stage is blocked, the dashboard displays an **Action needed** panel.
-Enter the missing prerequisite, safe test record, approval, or manual result
-and resume. Failed jobs can be retried with corrected details, and completed
-jobs can accept one focused addition and update the existing pull request.
-FixLab resumes the same Agency session rather than starting diagnosis again.
-A controlled skip remains visibly recorded as an unverified risk.
 
 For efficient repeat work in the same repository, FixLab reads the profile and
 instructions first, checks git status and the effective diff, and searches only
@@ -147,15 +129,6 @@ profile-content hash. A matching later job can reuse sanitized profile shape,
 prior result, and stage summaries. Request text, raw logs, credentials,
 screenshots, and source contents are excluded, and the cache is limited to 20
 entries and 64 KiB.
-
-Workflow statistics are retained for the last 500 jobs in
-`.git\fixlab\dashboard-metrics.json` and can be filtered to 24 hours, 7 days,
-30 days, or all retained records. The cards show bugs queued, completed jobs,
-average execution time, and token totals when Copilot emits an exact terminal
-usage summary. Cache reuse is calculated as cached input divided by total
-input. It is not an exact token-reduction or cost-savings percentage without a
-comparable baseline. The metrics file excludes request text, comments,
-screenshots, credentials, raw logs, and source contents.
 
 `HEAD` or profile changes cause an automatic miss; instruction changes require
 the instructions to be reread. Non-Git repositories skip durable reuse. The

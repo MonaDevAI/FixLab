@@ -213,14 +213,10 @@ fixlab dashboard ..\another-repository --port 4318 --no-open
 The dashboard reads `.github\fixlab\repository-profile.json`, accepts
 `bug-fix` or `small-enhancement` requests in fix-and-validate or validate-only
 mode, invokes the packaged `fixlab:fixlab` Agency plugin from that repository,
-and displays one active staged job with polled logs. Multi-bug requests display one
+and displays one staged job with polled logs. Multi-bug requests display one
 outcome per Azure DevOps bug, including the responsible boundary such as the
-application, MDG, data, or deployment. The Azure DevOps intake accepts up to
-20 comma-, space-, or newline-separated IDs or URLs, authenticates once, and
-loads the unique bugs concurrently. It runs one job at a time, accepts up to
-20 additional jobs in a visible local queue, and does not expose a public
-network listener. A blocked or failed active job pauses the queue until the
-user resumes it; a passed job starts the next queued job automatically.
+application, MDG, data, or deployment. It runs one job at a time and does not
+expose a public network listener.
 
 The primary input is only the bug or required enhancement. FixLab obtains
 commands, applications, allowed systems and environments, and live-test
@@ -235,14 +231,11 @@ pass. It does not ask the user to direct routine steps.
 Human interaction is reserved for authentication, unsafe-data approval,
 deployment or pull-request approval, and genuine blockers. FixLab never
 hardcodes an environment choice; the repository profile supplies and governs
-that context. A blocked, failed, or completed job exposes an input panel for
-the prerequisite, manual result, retry instruction, controlled skip, or next
-focused change. FixLab resumes the same Agency session and reuses completed
-diagnosis, validation evidence, branch, and pull request.
+that context.
 
 Manual entry is the default intake path and remains available for every
-repository. Optionally, paste up to 20 Azure DevOps work-item URLs or IDs and
-select **Load bugs**. Numeric IDs use the repository profile:
+repository. Optionally, paste a full Azure DevOps work-item URL and select
+**Load**, or enter a numeric ID when the repository profile supplies:
 
 ```json
 {
@@ -259,20 +252,16 @@ and uses it only for the HTTPS request. Tokens are never displayed, logged,
 stored in job state, or cached. Missing Azure CLI, authentication, profile
 fallback, work-item access, or malformed URLs fail explicitly. Loaded intake
 includes safe text fields such as title, description, reproduction steps,
-acceptance criteria, state, type, web URL, and the newest 20 non-deleted
-comments; HTML is converted to readable text. A comment-only access failure is
-shown explicitly without discarding the rest of the bug. Comment attachments
-and other private work-item attachments are never downloaded automatically.
+acceptance criteria, state, type, and web URL; HTML is converted to readable
+text. Private work-item attachments are never downloaded automatically.
 
 Manual or Azure DevOps intake can include up to five PNG, JPEG, or WebP
-screenshots by file selection or by pressing `Ctrl+V` in the main request
-field, limited to 2 MiB each and 8 MiB total. Files receive generated
+screenshots, limited to 2 MiB each and 8 MiB total. Files receive generated
 names and remain outside tracked source under
 `.git\fixlab\dashboard-artifacts\<job-id>` (or a repository-specific OS
 temporary directory for non-Git repositories). Only local paths and user text
 are sent to the agent. The dashboard removes the prior job's artifacts when a
-new job becomes active, retains queued-job artifacts until their turn, removes
-all active and queued artifacts on clean shutdown, and prunes artifact
+new job starts, removes active artifacts on clean shutdown, and prunes artifact
 directories older than seven days at startup. Abrupt termination can leave
 files until that pruning pass.
 
@@ -292,15 +281,6 @@ receives only the concise profile shape, prior result, and sanitized stage
 summaries. The cache never stores request text, raw logs, credentials,
 screenshots, screenshot paths, or source contents; it is capped at 20 entries
 and 64 KiB.
-
-The dashboard also stores up to 500 privacy-safe job metric records in
-`.git\fixlab\dashboard-metrics.json` in the shared Git directory. Period cards
-cover bugs queued, completed-job counts, average execution time, and exact
-input, cached-input, cache-write, and output token totals when Copilot emits a
-terminal usage summary. **Input cache reuse** is cached input divided by total
-input. It is not labelled token reduction or cost savings because those claims
-require a trustworthy comparable baseline. Metrics exclude request text,
-comments, screenshots, credentials, raw logs, and source contents.
 
 `HEAD` or profile-content changes automatically miss the cache. Instruction
 changes are also prompt-level invalidation boundaries and must be reread. For
