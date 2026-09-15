@@ -15,6 +15,8 @@ const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
+const bugResultsPanel = document.querySelector("#bug-results-panel");
+const bugResultsElement = document.querySelector("#bug-results");
 const logsElement = document.querySelector("#logs");
 const azureDevOpsIntake = document.querySelector("#azure-devops-intake");
 const workItemInput = document.querySelector("#work-item");
@@ -71,6 +73,35 @@ function renderJob(job) {
     message.textContent = escapeText(stage.message) || "Waiting";
     card.append(heading, message);
     stagesElement.append(card);
+  }
+
+  bugResultsElement.replaceChildren();
+  const bugs = job?.bugs ?? [];
+  bugResultsPanel.hidden = bugs.length === 0;
+  for (const bug of bugs) {
+    const row = document.createElement("tr");
+    row.className = `bug-outcome ${bug.outcome}`;
+    const identity = document.createElement("td");
+    const identifier = bug.url
+      ? document.createElement("a")
+      : document.createElement("strong");
+    if (bug.url) {
+      identifier.href = bug.url;
+      identifier.target = "_blank";
+      identifier.rel = "noreferrer";
+    }
+    identifier.textContent = `#${bug.id}`;
+    const title = document.createElement("span");
+    title.textContent = bug.title;
+    identity.append(identifier, title);
+    const outcome = document.createElement("td");
+    outcome.textContent = bug.outcome;
+    const owner = document.createElement("td");
+    owner.textContent = bug.owner || "Pending";
+    const summary = document.createElement("td");
+    summary.textContent = bug.summary || "Waiting for diagnosis";
+    row.append(identity, outcome, owner, summary);
+    bugResultsElement.append(row);
   }
 
   const logLines = job?.logs?.map(

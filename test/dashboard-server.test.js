@@ -38,6 +38,13 @@ test("Agency executor keeps long prompts out of process arguments", () => {
   assert.equal(invocation.input, prompt);
   assert.equal(invocation.args.includes(prompt), false);
   assert.equal(invocation.args.includes("--interactive"), false);
+  assert.deepEqual(invocation.args.slice(0, 5), [
+    "copilot",
+    "--plugin-dir",
+    "C:\\FixLab",
+    "--agent",
+    "fixlab:fixlab"
+  ]);
   assert.deepEqual(invocation.args.slice(-4), [
     "--allow-all-tools",
     "--no-ask-user",
@@ -180,6 +187,10 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
   let receivedPrompt;
   const executor = ({ prompt, onOutput }) => {
     receivedPrompt = prompt;
+    onOutput(
+      "stdout",
+      "FIXLAB_BUG|71|external|MDG|MDG owns the rejected request; no repository change is required.\n"
+    );
     for (const stage of FIXLAB_STAGES) {
       onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
     }
@@ -267,6 +278,14 @@ test("dashboard parses complete stage markers and passes a job", async () => {
   let receivedPrompt;
   const executor = ({ prompt, onOutput }) => {
     receivedPrompt = prompt;
+    onOutput(
+      "stdout",
+      "FIXLAB_BUG|17037209|external|MDG|MDG rejected parent validation and FMDM surfaced the returned error.\n"
+    );
+    onOutput(
+      "stdout",
+      "FIXLAB_BUG|17032997|fixed|FMDM|Generation status displays the generated object type.\n"
+    );
     for (const stage of FIXLAB_STAGES) {
       onOutput(
         "stdout",
@@ -282,7 +301,8 @@ test("dashboard parses complete stage markers and passes a job", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        request: "Repair the observable defect.",
+        request:
+          "Azure DevOps Bug 17037209: Remap failed\nURL: https://dev.azure.com/example/project/_workitems/edit/17037209\n\nAzure DevOps Bug 17032997: Generic generation status",
         mode: "fix-and-validate"
       })
     });
@@ -293,6 +313,25 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.equal(result.body.job.status, "passed");
     assert.equal(result.body.job.error, null);
     assert.equal(result.body.job.requestType, "bug-fix");
+    assert.deepEqual(result.body.job.bugs, [
+      {
+        id: "17037209",
+        title: "Remap failed",
+        url: "https://dev.azure.com/example/project/_workitems/edit/17037209",
+        outcome: "external",
+        owner: "MDG",
+        summary:
+          "MDG rejected parent validation and FMDM surfaced the returned error."
+      },
+      {
+        id: "17032997",
+        title: "Generic generation status",
+        url: "",
+        outcome: "fixed",
+        owner: "FMDM",
+        summary: "Generation status displays the generated object type."
+      }
+    ]);
     assert.match(receivedPrompt, /Read \.github\/fixlab\/repository-profile\.json/i);
     assert.match(receivedPrompt, /smallest complete change/i);
     assert.match(receivedPrompt, /Make no code change/i);
@@ -311,6 +350,9 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.match(receivedPrompt, /commit changes and repository-profile or instruction changes as invalidation boundaries/i);
     assert.match(receivedPrompt, /do not feed unbounded raw output back into prompts/i);
     assert.match(receivedPrompt, /FIXLAB_STAGE\|stage\|status\|message/);
+    assert.match(receivedPrompt, /FIXLAB_BUG\|id\|outcome\|owner\|summary/);
+    assert.match(receivedPrompt, /external with owner MDG/);
+    assert.match(receivedPrompt, /Do not create an empty pull request/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

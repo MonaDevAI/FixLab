@@ -363,7 +363,7 @@ test("run launches the Agency-resolved FixLab agent", () => {
     );
 
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /--agent FixLab:fixlab/);
+    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
     assert.match(result.stdout, /--interactive repair the defect/);
   } finally {
     rmSync(repository, { recursive: true, force: true });

@@ -220,6 +220,58 @@ button:disabled {
   font-size: .9rem;
 }
 
+.table-scroll {
+  overflow-x: auto;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  padding: .75rem;
+  border-bottom: 1px solid #2a3855;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: #b5c0d4;
+}
+
+.bug-outcome td:first-child span {
+  display: block;
+  margin-top: .25rem;
+  color: #b5c0d4;
+}
+
+.bug-outcome a {
+  color: #8ec5ff;
+}
+
+.bug-outcome.external {
+  border-left: 4px solid #e7ad4e;
+  background: rgba(231, 173, 78, .08);
+}
+
+.bug-outcome.external td:nth-child(2),
+.bug-outcome.external td:nth-child(3) {
+  color: #ffd58e;
+  font-weight: 750;
+}
+
+.bug-outcome.fixed,
+.bug-outcome.already-fixed {
+  border-left: 4px solid #37c978;
+}
+
+.bug-outcome.failed,
+.bug-outcome.blocked {
+  border-left: 4px solid #f26363;
+}
+
 pre {
   max-height: 420px;
   margin-bottom: 0;

@@ -11,10 +11,12 @@
 FixLab is a reusable engineering workflow that helps teams turn software
 defects into tested, review-ready changes.
 
-FixLab is **powered by Agency Copilot**. Agency supplies the agent runtime,
+FixLab is a separately branded, independently versioned product that is
+**powered by Agency Copilot**. Agency supplies the agent runtime,
 authentication, plugin loading, tools, and interactive session. FixLab supplies
 the specialized defect investigation, application startup, testing, browser
-validation, and evidence workflow. FixLab does not install or replace Agency.
+validation, and evidence workflow. FixLab does not install, bundle, fork, or
+replace Agency.
 
 It understands the common shape of applications with a React frontend and a
 .NET backend: source code, pull requests, isolated worktrees, tests, local
@@ -105,7 +107,7 @@ maintenance loop, and interpretation rules.
 To run the Agency plugin directly from this checkout:
 
 ```shell
-agency copilot --plugin local:. --agent fixlab:fixlab
+agency copilot --plugin-dir . --agent fixlab:fixlab
 ```
 
 ---
@@ -210,10 +212,11 @@ fixlab dashboard ..\another-repository --port 4318 --no-open
 
 The dashboard reads `.github\fixlab\repository-profile.json`, accepts
 `bug-fix` or `small-enhancement` requests in fix-and-validate or validate-only
-mode, invokes the packaged
-`FixLab:fixlab` Agency plugin from that repository, and displays one staged job
-with polled logs. It runs one job at a time and does not expose a public network
-listener.
+mode, invokes the packaged `fixlab:fixlab` Agency plugin from that repository,
+and displays one staged job with polled logs. Multi-bug requests display one
+outcome per Azure DevOps bug, including the responsible boundary such as the
+application, MDG, data, or deployment. It runs one job at a time and does not
+expose a public network listener.
 
 The primary input is only the bug or required enhancement. FixLab obtains
 commands, applications, allowed systems and environments, and live-test
@@ -300,7 +303,7 @@ prohibits unrelated changes.
 `fixlab validate` commands resolve the installed `agency` executable and launch:
 
 ```shell
-agency copilot --plugin local:<fixlab-package> --agent fixlab:fixlab
+agency copilot --plugin-dir <fixlab-package> --agent fixlab:fixlab
 ```
 
 Run `fixlab doctor` to verify Agency, Git, Node.js, the .NET SDK selected by the

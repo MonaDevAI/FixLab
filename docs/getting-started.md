@@ -56,6 +56,13 @@ type. Start with validate-only when
 onboarding a repository; that mode prohibits edits, commits, pushes, and pull
 request changes.
 
+When one request contains multiple `Azure DevOps Bug <id>:` sections, the
+dashboard shows a result row for each bug. Outcomes distinguish FMDM fixes from
+already-fixed, expected, duplicate, no-change, blocked, and external causes.
+An external MDG result is highlighted with MDG as the owner. FixLab creates a
+combined pull request only when at least one proven repository code change is
+needed; it does not create an empty pull request for external-only outcomes.
+
 The request field should contain only the bug or required enhancement. Do not
 copy profile-owned paths, commands, ports, systems, or environment choices into
 the request. FixLab reads that validation context from

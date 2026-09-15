@@ -37,6 +37,16 @@ export const FIXLAB_STAGES = [
 
 const terminalStatuses = new Set(["passed", "skipped", "failed"]);
 const allStatuses = new Set(["pending", "running", ...terminalStatuses]);
+const bugOutcomeStatuses = new Set([
+  "fixed",
+  "already-fixed",
+  "external",
+  "no-change",
+  "expected",
+  "duplicate",
+  "blocked",
+  "failed"
+]);
 const profileRelativePath = join(
   ".github",
   "fixlab",
@@ -134,6 +144,7 @@ export function buildJobPrompt({
 }) {
   const validateOnly = mode === "validate-only";
   const smallEnhancement = requestType === "small-enhancement";
+  const bugResults = extractBugResults(request, workItem);
   const requestGuidance = smallEnhancement
     ? `- Generate a concise acceptance contract before changing code.
 - Check the affected surface and bound the file scope before editing.
@@ -176,6 +187,13 @@ ${requestGuidance}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
 - Keep stage messages and retained logs concise. Summarize relevant command evidence and preserve exact errors, but do not feed unbounded raw output back into prompts.
 - Keep all execution local unless the repository profile and existing authorization explicitly require an allowed external action.
+- For every Azure DevOps bug listed below, emit one terminal outcome line before finishing:
+  FIXLAB_BUG|id|outcome|owner|summary
+- outcome must be one of: ${[...bugOutcomeStatuses].join(", ")}.
+- owner must identify the responsible boundary, such as FMDM, MDG, data, deployment, or unknown.
+- Use outcome external with owner MDG when FMDM correctly surfaces an error returned by MDG and no FMDM code correction is required.
+- Do not create an empty pull request. When every bug is external, no-change, expected, duplicate, or already-fixed, explicitly skip the fix and pr stages and explain the per-bug outcomes.
+- The expected bug IDs for this request are: ${bugResults.length > 0 ? bugResults.map((bug) => bug.id).join(", ") : "none detected; no FIXLAB_BUG marker is required"}.
 - Emit exactly one or more progress lines in this format:
   FIXLAB_STAGE|stage|status|message
 - stage must be one of: ${FIXLAB_STAGES.join(", ")}.
@@ -186,6 +204,38 @@ ${validateOnly ? "- The fix and pr stages must be explicitly skipped unless they
 
 Request:
 ${request}`;
+}
+
+function extractBugResults(request, workItem) {
+  const bugs = new Map();
+  const lines = String(request ?? "").split(/\r?\n/);
+  for (const [index, line] of lines.entries()) {
+    const match = line.match(/^Azure DevOps Bug (\d+):\s*(.+)$/i);
+    if (!match) {
+      continue;
+    }
+    const nextLine = lines[index + 1]?.trim() ?? "";
+    const url = nextLine.match(/^URL:\s*(https:\/\/dev\.azure\.com\/\S+)$/i);
+    bugs.set(match[1], {
+      id: match[1],
+      title: safeSummary(match[2]),
+      url: url?.[1] ?? "",
+      outcome: "pending",
+      owner: "",
+      summary: ""
+    });
+  }
+  if (workItem?.id && !bugs.has(String(workItem.id))) {
+    bugs.set(String(workItem.id), {
+      id: String(workItem.id),
+      title: safeSummary(workItem.title),
+      url: workItem.webUrl ?? "",
+      outcome: "pending",
+      owner: "",
+      summary: ""
+    });
+  }
+  return [...bugs.values()];
 }
 
 function hash(value) {
@@ -344,10 +394,10 @@ export function buildAgencyInvocation({ packageRoot, prompt }) {
   return {
     args: [
       "copilot",
-      "--plugin",
-      `local:${packageRoot}`,
+      "--plugin-dir",
+      packageRoot,
       "--agent",
-      "FixLab:fixlab",
+      "fixlab:fixlab",
       "--allow-all-tools",
       "--no-ask-user",
       "--stream",
@@ -442,6 +492,7 @@ function publicJob(job) {
     finishedAt: job.finishedAt,
     error: job.error,
     stages: job.stages,
+    bugs: job.bugs,
     logs: job.logs,
     droppedLogs: job.droppedLogs
   };
@@ -529,6 +580,27 @@ function appendLine(job, stream, line) {
     stream,
     message: line
   });
+  const bugMarker = line.match(
+    /^FIXLAB_BUG\|(\d+)\|([^|]+)\|([^|]+)\|(.*)$/
+  );
+  if (bugMarker) {
+    const [, id, outcome, owner, summary] = bugMarker;
+    const bug = job.bugs.find((candidate) => candidate.id === id);
+    if (!bug || !bugOutcomeStatuses.has(outcome)) {
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: `Ignored invalid bug outcome marker: ${line}`
+      });
+      return;
+    }
+    bug.outcome = outcome;
+    bug.owner = safeSummary(owner);
+    bug.summary = safeSummary(summary);
+    return;
+  }
+
   const marker = line.match(
     /^FIXLAB_STAGE\|([^|]+)\|([^|]+)\|(.*)$/
   );
@@ -574,6 +646,9 @@ function finishJob(job, result) {
   const failed = FIXLAB_STAGES.filter(
     (stage) => job.stages[stage].status === "failed"
   );
+  const unresolvedBugs = job.bugs.filter(
+    (bug) => bug.outcome === "pending"
+  );
   if (result?.error && !job.error) {
     job.error = result.error.message;
   }
@@ -589,9 +664,17 @@ function finishJob(job, result) {
   if (failed.length > 0 && !job.error) {
     job.error = `Failed stages: ${failed.join(", ")}`;
   }
-
+  if (unresolvedBugs.length > 0) {
+    const incomplete = `Missing bug outcomes: ${unresolvedBugs
+      .map((bug) => bug.id)
+      .join(", ")}`;
+    job.error = job.error ? `${job.error}; ${incomplete}` : incomplete;
+  }
   job.status =
-    result?.code === 0 && missing.length === 0 && failed.length === 0
+    result?.code === 0 &&
+    missing.length === 0 &&
+    failed.length === 0 &&
+    unresolvedBugs.length === 0
       ? "passed"
       : "failed";
   job.finishedAt = new Date().toISOString();
@@ -772,6 +855,7 @@ export function createDashboardServer({
             { status: "pending", message: "" }
           ])
         ),
+        bugs: extractBugResults(requestText, workItem),
         logs: [],
         droppedLogs: 0,
         nextLogIndex: 0,

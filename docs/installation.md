@@ -208,7 +208,7 @@ fixlab dashboard C:\source\application --port 4318 --no-open
 
 The dashboard requires `.github\fixlab\repository-profile.json` before a job
 can start. It permits one local job at a time and invokes the packaged
-`FixLab:fixlab` plugin with the selected repository as its working directory.
+`fixlab:fixlab` plugin with the selected repository as its working directory.
 
 Start an interactive FixLab session:
 
@@ -231,7 +231,7 @@ fixlab validate --pr 123
 Internally, the CLI launches the packaged plugin through:
 
 ```powershell
-agency copilot --plugin local:<installed-fixlab-package> --agent fixlab:fixlab
+agency copilot --plugin-dir <installed-fixlab-package> --agent fixlab:fixlab
 ```
 
 The dashboard uses the same plugin resolution. Closing the dashboard server
@@ -243,7 +243,7 @@ unrelated repository, browser, or developer processes.
 From a FixLab checkout:
 
 ```powershell
-agency copilot --plugin local:. --agent fixlab:fixlab
+agency copilot --plugin-dir . --agent fixlab:fixlab
 ```
 
 ## Update or uninstall

@@ -551,10 +551,10 @@ function launch(repository, request) {
 
   const args = [
     "copilot",
-    "--plugin",
-    `local:${packageRoot}`,
+    "--plugin-dir",
+    packageRoot,
     "--agent",
-    "FixLab:fixlab"
+    "fixlab:fixlab"
   ];
   if (request) {
     args.push("--interactive", request);
