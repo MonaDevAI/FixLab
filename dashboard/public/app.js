@@ -279,7 +279,9 @@ function renderJob(job, currentActiveJob = job) {
     if (job.status === "blocked") {
       jobInputTitle.textContent = "Action needed";
       jobInputGuidance.textContent =
-        "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
+        job?.stages?.["live-test"]?.status === "blocked"
+          ? "The browser gate could not finish. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
+          : "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
     } else if (job.status === "failed") {
       jobInputTitle.textContent = "Retry or correct this job";
       jobInputGuidance.textContent =

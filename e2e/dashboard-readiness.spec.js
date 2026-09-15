@@ -350,6 +350,42 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
   page
 }) => {
   let submittedInput;
+  const blockedJob = {
+    id: "blocked-job",
+    request: "Validate grouped details",
+    requestType: "bug-fix",
+    status: "blocked",
+    durationMs: 1000,
+    stages: Object.fromEntries(
+      [
+        "intake",
+        "diagnosis",
+        "reproduce",
+        "fix",
+        "review",
+        "local-stack",
+        "live-test",
+        "pr"
+      ].map((stage) => [
+        stage,
+        {
+          status:
+            stage === "live-test"
+              ? "blocked"
+              : stage === "pr"
+                ? "skipped"
+                : "passed",
+          message: ""
+        }
+      ])
+    ),
+    bugs: [],
+    logs: [],
+    canComment: false,
+    canResume: true,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
   await page.route("**/api/status", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -361,42 +397,7 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
           profileName: "Blocked live test",
           error: null
         },
-        job: {
-          id: "blocked-job",
-          request: "Validate grouped details",
-          requestType: "bug-fix",
-          status: "blocked",
-          durationMs: 1000,
-          stages: Object.fromEntries(
-            [
-              "intake",
-              "diagnosis",
-              "reproduce",
-              "fix",
-              "review",
-              "local-stack",
-              "live-test",
-              "pr"
-            ].map((stage) => [
-              stage,
-              {
-                status:
-                  stage === "live-test"
-                    ? "blocked"
-                    : stage === "pr"
-                      ? "skipped"
-                      : "passed",
-                message: ""
-              }
-            ])
-          ),
-          bugs: [],
-          logs: [],
-          canComment: false,
-          canResume: true,
-          inputCount: 0,
-          pendingInputCount: 0
-        },
+        job: blockedJob,
         queue: [],
         history: []
       })
@@ -404,14 +405,17 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
   });
   await page.route("**/api/job/input", async (route) => {
     submittedInput = route.request().postDataJSON();
-    const status = await page.request.get(`${baseUrl}/api/status`);
-    const body = await status.json();
-    body.job.status = "running";
-    body.job.canResume = false;
     await route.fulfill({
       status: 202,
       contentType: "application/json",
-      body: JSON.stringify({ job: body.job, queued: false })
+      body: JSON.stringify({
+        job: {
+          ...blockedJob,
+          status: "running",
+          canResume: false
+        },
+        queued: false
+      })
     });
   });
 
