@@ -215,7 +215,9 @@ The dashboard reads `.github\fixlab\repository-profile.json`, accepts
 mode, invokes the packaged `fixlab:fixlab` Agency plugin from that repository,
 and displays one staged job with polled logs. Multi-bug requests display one
 outcome per Azure DevOps bug, including the responsible boundary such as the
-application, MDG, data, or deployment. It runs one job at a time and does not
+application, MDG, data, or deployment. The Azure DevOps intake accepts up to
+20 comma-, space-, or newline-separated IDs or URLs, authenticates once, and
+loads the unique bugs concurrently. It runs one job at a time and does not
 expose a public network listener.
 
 The primary input is only the bug or required enhancement. FixLab obtains
@@ -231,11 +233,14 @@ pass. It does not ask the user to direct routine steps.
 Human interaction is reserved for authentication, unsafe-data approval,
 deployment or pull-request approval, and genuine blockers. FixLab never
 hardcodes an environment choice; the repository profile supplies and governs
-that context.
+that context. A blocked, failed, or completed job exposes an input panel for
+the prerequisite, manual result, retry instruction, controlled skip, or next
+focused change. FixLab resumes the same Agency session and reuses completed
+diagnosis, validation evidence, branch, and pull request.
 
 Manual entry is the default intake path and remains available for every
-repository. Optionally, paste a full Azure DevOps work-item URL and select
-**Load**, or enter a numeric ID when the repository profile supplies:
+repository. Optionally, paste up to 20 Azure DevOps work-item URLs or IDs and
+select **Load bugs**. Numeric IDs use the repository profile:
 
 ```json
 {

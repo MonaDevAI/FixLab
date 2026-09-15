@@ -56,8 +56,10 @@ type. Start with validate-only when
 onboarding a repository; that mode prohibits edits, commits, pushes, and pull
 request changes.
 
-When one request contains multiple `Azure DevOps Bug <id>:` sections, the
-dashboard shows a result row for each bug. Outcomes distinguish FMDM fixes from
+The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
+IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,
+shows the selected list before submission, and creates one bounded request
+with a result row for every bug. Outcomes distinguish repository fixes from
 already-fixed, expected, duplicate, no-change, blocked, and external causes.
 An external MDG result is highlighted with MDG as the owner. FixLab creates a
 combined pull request only when at least one proven repository code change is
@@ -73,10 +75,11 @@ the request. FixLab reads that validation context from
 **Enter manually** is selected by default and is always available. Type the bug
 or required enhancement and optionally select screenshots.
 
-To load Azure DevOps fields, paste a full URL such as:
+To load Azure DevOps fields, paste one or more IDs or full URLs such as:
 
 ```text
 https://dev.azure.com/your-organization/your-project/_workitems/edit/123
+456
 ```
 
 For ID-only entry, add optional repository-owned context:
@@ -114,6 +117,13 @@ Routine engineering steps require no human direction. Interaction is limited
 to authentication, unsafe-data approval, deployment or pull-request approval,
 or a genuine blocker. Environment choices are never hardcoded by the
 dashboard; the repository profile controls them.
+
+When a stage is blocked, the dashboard displays an **Action needed** panel.
+Enter the missing prerequisite, safe test record, approval, or manual result
+and resume. Failed jobs can be retried with corrected details, and completed
+jobs can accept one focused addition and update the existing pull request.
+FixLab resumes the same Agency session rather than starting diagnosis again.
+A controlled skip remains visibly recorded as an unverified risk.
 
 For efficient repeat work in the same repository, FixLab reads the profile and
 instructions first, checks git status and the effective diff, and searches only

@@ -25,14 +25,17 @@
             <label><input type="radio" name="intakeSource" value="azure-devops"> Load from Azure DevOps</label>
           </fieldset>
           <div id="azure-devops-intake" class="intake-box" hidden>
-            <label for="work-item">Azure DevOps work item URL or ID</label>
+            <label for="work-item">Azure DevOps work item URLs or IDs</label>
             <div class="inline-input">
-              <input id="work-item" type="text" autocomplete="off"
-                placeholder="https://dev.azure.com/org/project/_workitems/edit/123 or 123">
-              <button id="load-work-item" type="button">Load</button>
+              <textarea id="work-item" rows="3" autocomplete="off"
+                placeholder="123, 456, or one URL/ID per line"></textarea>
+              <button id="load-work-item" type="button">Load bugs</button>
             </div>
-            <p class="guidance">ID-only lookup uses optional Azure DevOps organization/project settings from the repository profile. Private attachments are not downloaded.</p>
-            <div id="work-item-summary" class="loaded-summary" hidden></div>
+            <p class="guidance">Load up to 20 unique bugs in one authenticated batch. ID-only lookup uses Azure DevOps settings from the repository profile. Private attachments are not downloaded.</p>
+            <div id="work-item-summary" class="loaded-summary" hidden>
+              <strong id="work-item-count"></strong>
+              <ul id="work-item-list" class="work-item-list"></ul>
+            </div>
           </div>
           <label for="request">Bug or required enhancement</label>
           <textarea id="request" name="request" rows="6" maxlength="10000" required
@@ -84,6 +87,25 @@
             <tbody id="bug-results"></tbody>
           </table>
         </div>
+      </section>
+
+      <section id="job-input-panel" class="panel intervention" hidden>
+        <div class="section-heading">
+          <h2 id="job-input-title">Continue this job</h2>
+          <span id="job-input-count"></span>
+        </div>
+        <p id="job-input-guidance" class="guidance"></p>
+        <label for="job-input-action">Action</label>
+        <select id="job-input-action">
+          <option value="continue">Provide details and continue</option>
+          <option value="retry">Retry with the available prerequisite</option>
+          <option value="skip">Skip the blocked gate and preserve the risk</option>
+        </select>
+        <label for="job-input-details">Additional details or manual result</label>
+        <textarea id="job-input-details" rows="5" maxlength="10000"
+          placeholder="For example: authentication is complete, use this safe test record, or apply this additional requirement."></textarea>
+        <button id="job-input-submit" type="button">Resume FixLab</button>
+        <p id="job-input-message" class="guidance" aria-live="polite"></p>
       </section>
 
       <section class="panel">

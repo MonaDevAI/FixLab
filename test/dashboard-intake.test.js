@@ -141,6 +141,51 @@ test("Azure DevOps loader returns safe fields without exposing tokens", async ()
   );
 });
 
+test("Azure DevOps batch loader authenticates once and loads unique bugs concurrently", async () => {
+  let tokenCalls = 0;
+  const requestedIds = [];
+  const loader = createAzureDevOpsLoader({
+    tokenProvider: () => {
+      tokenCalls += 1;
+      return "batch-token";
+    },
+    requestJson: async (url) => {
+      const id = Number(url.match(/workitems\/(\d+)/i)?.[1]);
+      requestedIds.push(id);
+      return {
+        id,
+        fields: {
+          "System.Id": id,
+          "System.Title": `Bug ${id}`,
+          "System.State": "Active",
+          "System.WorkItemType": "Bug"
+        }
+      };
+    }
+  });
+
+  const workItems = await loader.loadMany({
+    workItems: ["101", "202", "303"],
+    profile: {
+      azureDevOps: {
+        organization: "profile-org",
+        project: "Profile Project"
+      }
+    }
+  });
+
+  assert.equal(tokenCalls, 1);
+  assert.deepEqual(requestedIds.sort((left, right) => left - right), [
+    101,
+    202,
+    303
+  ]);
+  assert.deepEqual(
+    workItems.map((item) => item.title),
+    ["Bug 101", "Bug 202", "Bug 303"]
+  );
+});
+
 test("stores generated screenshot files and rejects unsafe uploads", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-artifacts-"));
   let stored;

@@ -400,42 +400,47 @@ export function createAzureDevOpsLoader({
   tokenProvider = defaultTokenProvider,
   requestJson = defaultRequestJson
 } = {}) {
-  return async ({ workItem, profile }) => {
-    const target = parseAzureDevOpsWorkItem(workItem, profile);
+  async function loadTarget(target, token) {
+    const apiUrl =
+      `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
+      `${encodeURIComponent(target.project)}/_apis/wit/workitems/` +
+      `${target.id}?$expand=all&api-version=7.1`;
+    const item = await requestJson(apiUrl, token);
+    const fields = item?.fields ?? {};
+    const fallbackWebUrl =
+      `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
+      `${encodeURIComponent(target.project)}/_workitems/edit/${target.id}`;
+    const linkedWebUrl = item?._links?.html?.href;
+    const webUrl =
+      typeof linkedWebUrl === "string" &&
+      /^https:\/\/dev\.azure\.com\//i.test(linkedWebUrl)
+        ? linkedWebUrl
+        : fallbackWebUrl;
+    return {
+      id: Number(fields["System.Id"] ?? item.id ?? target.id),
+      title: workItemText(fields["System.Title"], 500),
+      description: workItemText(fields["System.Description"], 10000),
+      reproduction: workItemText(
+        fields["Microsoft.VSTS.TCM.ReproSteps"],
+        10000
+      ),
+      acceptanceCriteria: workItemText(
+        fields["Microsoft.VSTS.Common.AcceptanceCriteria"],
+        10000
+      ),
+      state: workItemText(fields["System.State"], 200),
+      workItemType: workItemText(fields["System.WorkItemType"], 200),
+      webUrl
+    };
+  }
+
+  async function withToken(targets) {
     let token;
     try {
       token = await tokenProvider();
-      const apiUrl =
-        `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
-        `${encodeURIComponent(target.project)}/_apis/wit/workitems/` +
-        `${target.id}?$expand=all&api-version=7.1`;
-      const item = await requestJson(apiUrl, token);
-      const fields = item?.fields ?? {};
-      const fallbackWebUrl =
-        `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
-        `${encodeURIComponent(target.project)}/_workitems/edit/${target.id}`;
-      const linkedWebUrl = item?._links?.html?.href;
-      const webUrl =
-        typeof linkedWebUrl === "string" &&
-        /^https:\/\/dev\.azure\.com\//i.test(linkedWebUrl)
-          ? linkedWebUrl
-          : fallbackWebUrl;
-      return {
-        id: Number(fields["System.Id"] ?? item.id ?? target.id),
-        title: workItemText(fields["System.Title"], 500),
-        description: workItemText(fields["System.Description"], 10000),
-        reproduction: workItemText(
-          fields["Microsoft.VSTS.TCM.ReproSteps"],
-          10000
-        ),
-        acceptanceCriteria: workItemText(
-          fields["Microsoft.VSTS.Common.AcceptanceCriteria"],
-          10000
-        ),
-        state: workItemText(fields["System.State"], 200),
-        workItemType: workItemText(fields["System.WorkItemType"], 200),
-        webUrl
-      };
+      return await Promise.all(
+        targets.map((target) => loadTarget(target, token))
+      );
     } catch (error) {
       const message = String(error?.message ?? error);
       if (token && message.includes(token)) {
@@ -445,7 +450,21 @@ export function createAzureDevOpsLoader({
     } finally {
       token = null;
     }
+  }
+
+  const loader = async ({ workItem, profile }) => {
+    const [result] = await withToken([
+      parseAzureDevOpsWorkItem(workItem, profile)
+    ]);
+    return result;
   };
+  loader.loadMany = async ({ workItems, profile }) => {
+    const targets = workItems.map((workItem) =>
+      parseAzureDevOpsWorkItem(workItem, profile)
+    );
+    return withToken(targets);
+  };
+  return loader;
 }
 
 export function loadRepositoryProfile(repository) {

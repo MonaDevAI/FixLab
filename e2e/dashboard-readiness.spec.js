@@ -45,3 +45,16 @@ test("dashboard exposes repository readiness through the running server", async 
   expect(body.readiness.profileReady).toBe(true);
   expect(body.readiness.profileName).toBe("E2E repository");
 });
+
+test("dashboard exposes multi-bug intake and resumable user input", async ({
+  page
+}) => {
+  await page.goto(baseUrl);
+
+  await page.getByLabel("Load from Azure DevOps").check();
+  await expect(page.getByText("Load bugs")).toBeVisible();
+  await expect(
+    page.getByPlaceholder("123, 456, or one URL/ID per line")
+  ).toBeVisible();
+  await expect(page.getByText("Continue this job")).toBeHidden();
+});
