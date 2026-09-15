@@ -120,7 +120,9 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     page.getByRole("button", { name: "Connect Playwright" })
   ).toBeDisabled();
   await expect(
-    page.getByRole("heading", { name: "Playwright evidence" })
+    page.getByRole("heading", {
+      name: /Playwright screenshot/
+    })
   ).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Refresh screenshots" })

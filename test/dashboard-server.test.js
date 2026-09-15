@@ -680,17 +680,11 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
   );
   const screenshotDirectory = join(
     repository,
-    "test-results",
-    "hold-regression"
+    "test-results"
   );
-  mkdirSync(screenshotDirectory, { recursive: true });
   const screenshot = Buffer.from([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
   ]);
-  writeFileSync(
-    join(screenshotDirectory, "hold-option.png"),
-    screenshot
-  );
   const { dashboard, url } = await startDashboard(
     repository,
     () => ({ completion: new Promise(() => {}), terminate() {} })
@@ -720,16 +714,31 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.equal(status.body.lastResult.ok, true);
     assert.equal(status.body.paths[0].path, "e2e/.auth/user.json");
 
+    const job = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Capture browser evidence.",
+        requestType: "bug-fix",
+        mode: "playwright-only"
+      })
+    });
+    assert.equal(job.response.status, 202);
+    mkdirSync(screenshotDirectory, { recursive: true });
+    writeFileSync(
+      join(screenshotDirectory, "hold-option.png"),
+      screenshot
+    );
     const artifacts = await jsonRequest(
       url,
-      "/api/playwright/artifacts"
+      `/api/playwright/artifacts?jobId=${job.body.job.id}`
     );
     assert.equal(artifacts.response.status, 200);
     assert.equal(artifacts.body.artifacts.length, 1);
     assert.equal(artifacts.body.artifacts[0].name, "hold-option.png");
     assert.match(
       artifacts.body.artifacts[0].relativePath,
-      /test-results[\\/]hold-regression[\\/]hold-option\.png/
+      /test-results[\\/]hold-option\.png/
     );
     const image = await fetch(
       `${url}${artifacts.body.artifacts[0].url}`

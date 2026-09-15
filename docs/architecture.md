@@ -144,12 +144,14 @@ that command and reports only configured/running/ready state; it never reads or
 returns authentication-state contents. The dashboard tracks the owned
 authentication process and terminates that handle during clean shutdown.
 
-The loopback dashboard exposes a bounded Playwright evidence gallery. It scans
+The loopback dashboard exposes a bounded, selected-job Playwright evidence
+gallery. It scans
 only repository-owned `test-results`, `playwright-report`, and `artifacts`
 directories below the configured browser working directory, ignores symbolic
-links and non-image files, and serves at most 20 recent images within the
-normal screenshot size limit. Authentication-state paths are outside these
-allowlisted roots and are never displayed.
+links and non-image files, and serves at most 20 images created after the
+selected job started and within the normal screenshot size limit.
+Authentication-state paths are outside these allowlisted roots and are never
+displayed.
 
 Comments submitted while an agent turn is running are retained only in the
 current in-memory job and delivered by resuming the same runtime session after

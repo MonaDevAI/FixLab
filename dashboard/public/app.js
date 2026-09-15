@@ -54,23 +54,25 @@ const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
 const playwrightCheck = document.querySelector("#playwright-check");
 const playwrightConnect = document.querySelector("#playwright-connect");
-const playwrightPanel = document.querySelector(".connection-panel");
 const playwrightEvidence = document.createElement("div");
 playwrightEvidence.className = "playwright-evidence";
 playwrightEvidence.innerHTML = `
   <div class="section-heading">
-    <h3>Playwright evidence</h3>
+    <h3 id="playwright-evidence-title">Selected job Playwright screenshot</h3>
     <button id="playwright-evidence-refresh" type="button">Refresh screenshots</button>
   </div>
-  <p id="playwright-evidence-guidance" class="guidance">Checking for repository-owned Playwright screenshots.</p>
+  <p id="playwright-evidence-guidance" class="guidance">Select a job to view its browser evidence.</p>
   <div id="playwright-evidence-list" class="evidence-gallery"></div>
 `;
-playwrightPanel.append(playwrightEvidence);
+stagesElement.after(playwrightEvidence);
 const playwrightEvidenceRefresh = document.querySelector(
   "#playwright-evidence-refresh"
 );
 const playwrightEvidenceGuidance = document.querySelector(
   "#playwright-evidence-guidance"
+);
+const playwrightEvidenceTitle = document.querySelector(
+  "#playwright-evidence-title"
 );
 const playwrightEvidenceList = document.querySelector(
   "#playwright-evidence-list"
@@ -88,6 +90,7 @@ let activeJob = null;
 let selectedJobId = null;
 const observedJobs = new Map();
 const expandedJobIds = new Set();
+let renderedEvidenceJobId = null;
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -162,6 +165,22 @@ function renderJob(job, currentActiveJob = job) {
     ? `${job.status} · ${job.requestType} · ${formatDuration(job.durationMs)}`
     : "Not started";
   jobStatusElement.className = `badge ${job?.status ?? ""}`;
+  const bugIdentity =
+    job?.bugs?.length === 1
+      ? `Bug #${job.bugs[0].id}`
+      : job?.request
+        ? escapeText(job.request).slice(0, 80)
+        : "Selected job";
+  if (renderedEvidenceJobId !== job?.id) {
+    renderedEvidenceJobId = job?.id ?? null;
+    playwrightEvidenceTitle.textContent =
+      `${bugIdentity} · Playwright screenshot`;
+    playwrightEvidenceGuidance.textContent = job?.id
+      ? "Checking this job's safe Playwright screenshots."
+      : "Select a job to view its browser evidence.";
+    playwrightEvidenceList.replaceChildren();
+    void refreshPlaywrightEvidence();
+  }
 
   const stageValues = stageNames.map(
     (name) => job?.stages?.[name] ?? { status: "pending", message: "" }
@@ -329,12 +348,21 @@ async function refreshPlaywrightStatus() {
 async function refreshPlaywrightEvidence() {
   playwrightEvidenceRefresh.disabled = true;
   try {
-    const body = await fetchJson("/api/playwright/artifacts");
+    const jobId = selectedJobId ?? activeJob?.id;
+    if (!jobId) {
+      playwrightEvidenceGuidance.textContent =
+        "Select a job to view its browser evidence.";
+      playwrightEvidenceList.replaceChildren();
+      return;
+    }
+    const body = await fetchJson(
+      `/api/playwright/artifacts?jobId=${encodeURIComponent(jobId)}`
+    );
     playwrightEvidenceList.replaceChildren();
     playwrightEvidenceGuidance.textContent =
       body.artifacts.length > 0
-        ? `${body.artifacts.length} recent screenshot(s)`
-        : "No Playwright screenshots found. Successful live tests must save evidence under test-results.";
+        ? `${body.artifacts.length} screenshot(s) for this job`
+        : "No safe screenshot exists for this job yet. This updates automatically while Playwright runs.";
     for (const artifact of body.artifacts) {
       const link = document.createElement("a");
       link.href = artifact.url;

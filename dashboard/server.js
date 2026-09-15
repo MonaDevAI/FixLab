@@ -1252,17 +1252,27 @@ function collectPlaywrightArtifacts(root, directory = root, depth = 0) {
   return files;
 }
 
-function listPlaywrightArtifacts(repository) {
+function listPlaywrightArtifacts(repository, { since = null } = {}) {
   return playwrightArtifactRoots(repository)
     .flatMap((root) =>
-      collectPlaywrightArtifacts(root).map((artifact) => ({
-        ...artifact,
-        relativePath: join(basename(root), artifact.relativePath)
-      }))
+      collectPlaywrightArtifacts(root)
+        .filter(
+          (artifact) =>
+            !artifact.relativePath.includes("\\") &&
+            !artifact.relativePath.includes("/")
+        )
+        .map((artifact) => ({
+          ...artifact,
+          relativePath: join(basename(root), artifact.relativePath)
+        }))
     )
     .sort(
       (left, right) =>
         Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+    )
+    .filter(
+      (artifact) =>
+        !since || Date.parse(artifact.updatedAt) >= Date.parse(since)
     )
     .slice(0, MAX_PLAYWRIGHT_ARTIFACTS);
 }
@@ -1845,9 +1855,23 @@ export function createDashboardServer({
       request.method === "GET" &&
       requestUrl.pathname === "/api/playwright/artifacts"
     ) {
+      const jobId = requestUrl.searchParams.get("jobId");
+      const job = [
+        currentJob,
+        ...queuedJobs,
+        ...completedJobs
+      ].find((entry) => entry?.id === jobId);
+      if (!jobId || !job) {
+        sendJson(response, 404, {
+          error: "FixLab job not found for Playwright evidence"
+        });
+        return;
+      }
       let artifacts;
       try {
-        artifacts = listPlaywrightArtifacts(resolvedRepository);
+        artifacts = listPlaywrightArtifacts(resolvedRepository, {
+          since: job.startedAt ?? job.createdAt
+        });
       } catch (error) {
         sendJson(response, 400, { error: error.message });
         return;
