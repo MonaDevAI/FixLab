@@ -38,6 +38,18 @@ const jobInputAction = document.querySelector("#job-input-action");
 const jobInputDetails = document.querySelector("#job-input-details");
 const jobInputSubmit = document.querySelector("#job-input-submit");
 const jobInputMessage = document.querySelector("#job-input-message");
+const retryLiveTestButton = document.createElement("button");
+retryLiveTestButton.id = "retry-live-test";
+retryLiveTestButton.type = "button";
+retryLiveTestButton.textContent = "Retry Playwright live test";
+retryLiveTestButton.hidden = true;
+const skipLiveTestButton = document.createElement("button");
+skipLiveTestButton.id = "skip-live-test";
+skipLiveTestButton.type = "button";
+skipLiveTestButton.className = "secondary";
+skipLiveTestButton.textContent = "Skip Playwright live test";
+skipLiveTestButton.hidden = true;
+jobInputSubmit.before(retryLiveTestButton, skipLiveTestButton);
 const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
 const playwrightCheck = document.querySelector("#playwright-check");
@@ -238,8 +250,16 @@ function renderJob(job, currentActiveJob = job) {
 
   const canResume = isActive && Boolean(job?.canResume);
   const canComment = isActive && Boolean(job?.canComment);
+  const canRetryLiveTest =
+    canResume &&
+    job?.status === "blocked" &&
+    job?.stages?.["live-test"]?.status === "blocked";
   jobInputPanel.hidden = !(canResume || canComment);
   jobInputSubmit.disabled = !(canResume || canComment);
+  retryLiveTestButton.hidden = !canRetryLiveTest;
+  retryLiveTestButton.disabled = !canRetryLiveTest;
+  skipLiveTestButton.hidden = !canRetryLiveTest;
+  skipLiveTestButton.disabled = !canRetryLiveTest;
   jobInputCount.textContent = job
     ? `${job.inputCount} update(s) · ${job.pendingInputCount} pending`
     : "";
@@ -867,6 +887,58 @@ jobInputSubmit.addEventListener("click", async () => {
   } catch (error) {
     formError.textContent = error.message;
     jobInputSubmit.disabled = false;
+  }
+});
+
+retryLiveTestButton.addEventListener("click", async () => {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  retryLiveTestButton.disabled = true;
+  try {
+    const body = await fetchJson("/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "retry",
+        details:
+          "Reuse the saved authenticated Edge profile and all completed diagnosis, fix, review, and local validation evidence. Rerun only the blocked authenticated Playwright live-test gate with one worker, save at least one non-sensitive screenshot under ms.sap.fmdm.portal/test-results, emit the terminal live-test result, and continue to pull-request creation. Do not skip the live-test or PR stage."
+      })
+    });
+    jobInputMessage.textContent =
+      "Playwright retry started in the same FixLab session.";
+    activeJob = body.job;
+    selectedJobId = body.job?.id ?? selectedJobId;
+    rememberJob(body.job);
+    renderJob(body.job, activeJob);
+  } catch (error) {
+    formError.textContent = error.message;
+    retryLiveTestButton.disabled = false;
+  }
+});
+
+skipLiveTestButton.addEventListener("click", async () => {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  skipLiveTestButton.disabled = true;
+  try {
+    const body = await fetchJson("/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "skip",
+        details:
+          "The user explicitly chose to skip only the blocked authenticated Playwright live-test gate. Mark live-test skipped, preserve the exact unverified browser risk and missing screenshot evidence, do not report it as passed, and continue the safe pull-request outcome according to repository policy without repeating completed work."
+      })
+    });
+    jobInputMessage.textContent =
+      "Playwright live test skipped with risk preserved.";
+    activeJob = body.job;
+    selectedJobId = body.job?.id ?? selectedJobId;
+    rememberJob(body.job);
+    renderJob(body.job, activeJob);
+  } catch (error) {
+    formError.textContent = error.message;
+    skipLiveTestButton.disabled = false;
   }
 });
 

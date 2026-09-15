@@ -190,6 +190,13 @@ button:disabled {
   cursor: not-allowed;
 }
 
+button.secondary {
+  margin-left: .5rem;
+  border: 1px solid #e7ad4e;
+  background: transparent;
+  color: #ffd58e;
+}
+
 .button-row {
   display: flex;
   flex-wrap: wrap;
