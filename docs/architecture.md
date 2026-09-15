@@ -6,10 +6,6 @@ FixLab is distributed and versioned as its own product. Agency Copilot remains
 an external runtime dependency that provides agent execution, authentication,
 plugin loading, and tools; FixLab does not bundle or fork Agency.
 
-FixLab is distributed and versioned as its own product. Agency Copilot remains
-an external runtime dependency that provides agent execution, authentication,
-plugin loading, and tools; FixLab does not bundle or fork Agency.
-
 ```text
 Defect or pull request
         |

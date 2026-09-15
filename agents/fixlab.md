@@ -79,3 +79,9 @@ evidence. Summarize:
 - Which checks passed
 - Which checks failed or were skipped
 - Any remaining risk or human action
+
+Runtime-defined structured output is part of the completion contract. When the
+job prompt requires `FIXLAB_BUG` or `FIXLAB_STAGE` lines, emit every required
+bug outcome and terminal stage line to standard output before calling
+`task_complete` or returning a final response. Never replace required
+machine-readable lines with an equivalent narrative summary.

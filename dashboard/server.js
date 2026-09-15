@@ -189,6 +189,7 @@ ${requestGuidance}
 - Keep all execution local unless the repository profile and existing authorization explicitly require an allowed external action.
 - For every Azure DevOps bug listed below, emit one terminal outcome line before finishing:
   FIXLAB_BUG|id|outcome|owner|summary
+- These bug lines are required machine-readable output, not optional narrative. Emit each line as soon as its diagnosis is final and before the terminal pr stage.
 - outcome must be one of: ${[...bugOutcomeStatuses].join(", ")}.
 - owner must identify the responsible boundary, such as FMDM, MDG, data, deployment, or unknown.
 - Use outcome external with owner MDG when FMDM correctly surfaces an error returned by MDG and no FMDM code correction is required.
@@ -199,6 +200,7 @@ ${requestGuidance}
 - stage must be one of: ${FIXLAB_STAGES.join(", ")}.
 - status must be pending, running, passed, skipped, or failed.
 - Before finishing, emit a terminal passed, skipped, or failed marker for every stage. Never imply an unmarked stage passed.
+- Do not call task_complete or return the final response until every expected FIXLAB_BUG line and every terminal FIXLAB_STAGE line has been emitted.
 - Preserve exact command errors in the stage message or adjacent output.
 ${validateOnly ? "- The fix and pr stages must be explicitly skipped unless they fail for another reason." : ""}
 
