@@ -145,6 +145,45 @@ test("doctor blocks when Playwright is unavailable", () => {
   }
 });
 
+test("doctor blocks when the repository-pinned .NET SDK cannot resolve", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    writeFileSync(
+      join(repository, "global.json"),
+      JSON.stringify({ sdk: { version: "8.0.421" } })
+    );
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "dotnet.cmd" : "dotnet"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\necho A compatible .NET SDK was not found. 1>&2\r\nexit /b 1\r\n"
+        : "#!/bin/sh\nprintf '%s\\n' 'A compatible .NET SDK was not found.' >&2\nexit 1\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(["doctor", repository], repository, {
+      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+    });
+
+    assert.equal(result.status, 1);
+    assert.match(
+      result.stdout,
+      /FAIL  \.NET SDK \(requires 8\.0\.421 from .*global\.json\)/
+    );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("doctor launches the configured Playwright browser", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 

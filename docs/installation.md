@@ -148,7 +148,8 @@ The command checks:
 
 - Git
 - Node.js
-- .NET SDK
+- The .NET SDK selected by the target repository, including any
+  `global.json` requirement
 - PowerShell
 - Agency
 - Repository-local Playwright package
@@ -157,6 +158,9 @@ The command checks:
 - Git repository initialization
 
 Resolve every failed prerequisite before starting a FixLab session.
+The .NET check runs `dotnet --version` from the target repository so the normal
+SDK resolver validates `global.json`, rather than accepting an unrelated SDK
+installed elsewhere on the machine.
 
 The repository profile controls the Playwright check:
 

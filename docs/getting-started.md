@@ -11,7 +11,7 @@ A FixLab runner typically needs:
 - Git
 - Node.js
 - PowerShell 7
-- .NET SDK
+- The .NET SDK selected by the repository's `global.json`, when present
 - Microsoft Edge or another approved Playwright browser
 - Repository access
 - Access to the selected non-production validation environment

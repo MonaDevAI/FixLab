@@ -71,6 +71,61 @@ function findExecutable(command) {
   return result.status === 0;
 }
 
+function checkDotnetSdk(repository) {
+  if (!findExecutable("dotnet")) {
+    return {
+      name: ".NET SDK",
+      ok: false,
+      detail: "dotnet"
+    };
+  }
+
+  const result = spawnSync("dotnet", ["--version"], {
+    cwd: repository,
+    encoding: "utf8",
+    shell: false
+  });
+  const version = result.stdout?.trim();
+  if (result.status === 0 && version) {
+    return {
+      name: ".NET SDK",
+      ok: true,
+      detail: version
+    };
+  }
+
+  const globalJsonPath = join(repository, "global.json");
+  if (existsSync(globalJsonPath)) {
+    try {
+      const requiredVersion = JSON.parse(
+        readFileSync(globalJsonPath, "utf8")
+      )?.sdk?.version;
+      if (typeof requiredVersion === "string" && requiredVersion.trim()) {
+        return {
+          name: ".NET SDK",
+          ok: false,
+          detail: `requires ${requiredVersion.trim()} from ${globalJsonPath}`
+        };
+      }
+    } catch (error) {
+      return {
+        name: ".NET SDK",
+        ok: false,
+        detail: `global.json is invalid JSON: ${error.message}`
+      };
+    }
+  }
+
+  return {
+    name: ".NET SDK",
+    ok: false,
+    detail:
+      result.error?.message ??
+      result.stderr?.trim().split(/\r?\n/, 1)[0] ??
+      "dotnet --version failed"
+  };
+}
+
 function loadProfile(repository) {
   const profilePath = join(repository, profileRelativePath);
   if (!existsSync(profilePath)) {
@@ -254,7 +309,6 @@ function doctor(repository) {
   const checks = [
     ["Git", "git"],
     ["Node.js", "node"],
-    [".NET SDK", "dotnet"],
     ["PowerShell", "pwsh"],
     ["Agency", "agency"]
   ].map(([name, command]) => ({
@@ -262,6 +316,7 @@ function doctor(repository) {
     ok: findExecutable(command),
     detail: command
   }));
+  checks.splice(2, 0, checkDotnetSdk(repository));
 
   const { profilePath, profile, error } = loadProfile(repository);
   checks.push({
