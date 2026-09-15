@@ -793,10 +793,11 @@ test("dashboard queues concurrent jobs and starts the next passed job", async ()
       body: JSON.stringify({
         request: "Keep this job active.",
         requestType: "bug-fix",
-        mode: "validate-only"
+        mode: "playwright-only"
       })
     });
     assert.equal(first.response.status, 202);
+    assert.equal(first.body.job.mode, "playwright-only");
 
     const second = await jsonRequest(url, "/api/jobs", {
       method: "POST",
@@ -1048,6 +1049,26 @@ test("validate-only prompt prohibits repository changes", () => {
   assert.match(prompt, /create pull requests/);
   assert.match(prompt, /without creating or updating a pull request/);
   assert.match(prompt, /fix and pr stages must be explicitly skipped/);
+});
+
+test("playwright-only prompt skips review and runs only required browser steps", () => {
+  const prompt = buildJobPrompt({
+    request: "Validate the Hold option in the browser.",
+    mode: "playwright-only",
+    requestType: "bug-fix"
+  });
+
+  assert.match(prompt, /Run a FixLab playwright-only job/);
+  assert.match(prompt, /minimum setup required by the repository profile/);
+  assert.match(prompt, /verify browser authentication/);
+  assert.match(prompt, /focused Playwright journey/);
+  assert.match(prompt, /Skip source diagnosis, separate reproduction, implementation, diff review/);
+  assert.match(prompt, /Do not edit files/);
+  assert.match(prompt, /Do not reinstall dependencies that are already available/);
+  assert.match(
+    prompt,
+    /diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped/
+  );
 });
 
 test("small-enhancement prompt uses the risk-scaled fast path", () => {

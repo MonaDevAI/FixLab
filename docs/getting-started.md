@@ -85,10 +85,18 @@ fixlab dashboard
 
 Installation and `fixlab init` do not start it automatically. The dashboard
 shows profile readiness, accepts `bug-fix` or `small-enhancement` requests, and
-offers fix-and-validate and validate-only modes. Bug fix is the default request
-type. Start with validate-only when
+offers fix-and-validate, validate-only, and Playwright-validation-only modes.
+Bug fix is the default request type. Start with validate-only when
 onboarding a repository; that mode prohibits edits, commits, pushes, and pull
 request changes.
+
+Choose **Playwright validation only** when a fix already exists and only the
+user-visible browser result needs confirmation. FixLab skips diagnosis,
+separate reproduction, implementation, review, non-browser validation, and
+pull-request work. It retains the required repository-profile setup,
+authentication check, application startup, focused Playwright journey, and
+exact browser evidence. Dependencies and authentication that are already
+available are reused.
 
 The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
 IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,

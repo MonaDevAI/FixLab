@@ -110,6 +110,9 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
   await expect(
     page.getByRole("button", { name: "Connect Playwright" })
   ).toBeDisabled();
+  await expect(
+    page.getByLabel("Playwright validation only")
+  ).toBeVisible();
   await page.getByLabel("Load from Azure DevOps").check();
   await expect(page.getByText("Load bugs")).toBeVisible();
   await expect(

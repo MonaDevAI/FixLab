@@ -215,8 +215,8 @@ fixlab dashboard ..\another-repository --port 4318 --no-open
 ```
 
 The dashboard reads `.github\fixlab\repository-profile.json`, accepts
-`bug-fix` or `small-enhancement` requests in fix-and-validate or validate-only
-mode, invokes the packaged `fixlab:fixlab` plugin through the selected runtime,
+`bug-fix` or `small-enhancement` requests in fix-and-validate, validate-only,
+or Playwright-validation-only mode, invokes the packaged `fixlab:fixlab` plugin through the selected runtime,
 and displays one active staged job with polled logs. Multi-bug requests display one
 outcome per Azure DevOps bug, including the responsible boundary such as the
 application, MDG, data, or deployment. The Azure DevOps intake accepts up to
@@ -225,6 +225,13 @@ loads the unique bugs concurrently. It runs one job at a time, accepts up to
 20 additional jobs in a visible local queue, and does not expose a public
 network listener. A blocked or failed active job pauses the queue until the
 user resumes it; a passed job starts the next queued job automatically.
+
+Playwright-validation-only mode is the shortest browser path. It skips source
+diagnosis, separate reproduction, implementation, diff review, non-browser
+validation, and pull-request work. It still performs repository-profile setup
+required to start the applications, verifies or requests browser
+authentication, executes the focused Playwright journey, and preserves exact
+screenshots, traces, failures, blockers, and skipped-stage evidence.
 
 The primary input is only the bug or required enhancement. FixLab obtains
 commands, applications, allowed systems and environments, and live-test

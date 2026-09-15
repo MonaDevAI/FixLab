@@ -66,7 +66,9 @@
             <legend>Mode</legend>
             <label><input type="radio" name="mode" value="fix-and-validate" checked> Fix and validate</label>
             <label><input type="radio" name="mode" value="validate-only"> Validate only</label>
+            <label><input type="radio" name="mode" value="playwright-only"> Playwright validation only</label>
           </fieldset>
+          <p class="guidance">Playwright validation only skips source diagnosis, implementation, review, and pull-request work. It performs required profile setup, reuses browser authentication, starts required applications, and runs the focused browser journey.</p>
           <button id="start-button" type="submit">Start job</button>
           <p class="guidance">FixLab proceeds autonomously. It asks for human input only for authentication, unsafe-data approval, deployment or PR approval, or a genuine blocker.</p>
           <p id="form-error" class="error" role="alert"></p>

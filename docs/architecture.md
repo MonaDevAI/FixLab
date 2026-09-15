@@ -51,6 +51,14 @@ the profile or user-visible/risk evidence requires them. Unlike a general
 coding agent, FixLab retains explicit review, live-test, pull-request, and
 skipped-stage evidence while prohibiting unrelated changes.
 
+Playwright-validation-only mode provides a narrower read-only path for fixes
+that are already implemented. It skips source diagnosis, separate
+reproduction, implementation, effective-diff review, non-browser validation,
+and pull-request work. The runner performs only profile-required setup,
+browser-authentication readiness, required application startup, and the
+focused Playwright journey. Skipped stages remain explicit rather than being
+reported as passed.
+
 The dashboard's primary free-text input is only the bug or required
 enhancement. Repository/profile-defined context supplies commands,
 applications, systems, environments, and live-test journeys. The agent owns

@@ -171,6 +171,8 @@ export function buildJobPrompt({
   screenshotPaths = []
 }) {
   const validateOnly = mode === "validate-only";
+  const playwrightOnly = mode === "playwright-only";
+  const readOnly = validateOnly || playwrightOnly;
   const smallEnhancement = requestType === "small-enhancement";
   const intakeWorkItems =
     workItems.length > 0 ? workItems : workItem ? [workItem] : [];
@@ -194,7 +196,12 @@ export function buildJobPrompt({
     })
   );
   const bugResults = extractBugResults(request, intakeWorkItems);
-  const requestGuidance = smallEnhancement
+  const requestGuidance = playwrightOnly
+    ? `- Use the request only to select the relevant repository-defined Playwright journey and expected behavior.
+- Perform only the minimum setup required by the repository profile: verify browser authentication, start required applications, and run the focused Playwright journey.
+- Do not diagnose source code, reproduce through separate non-browser checks, review a diff, run unrelated tests, type-checks, or builds, or inspect implementation files unless the Playwright journey cannot be selected or started without that bounded information.
+- Preserve exact browser results, screenshots, traces, skipped gates, blockers, and remaining risks.`
+    : smallEnhancement
     ? `- Generate a concise acceptance contract before changing code.
 - Check the affected surface and bound the file scope before editing.
 - Do not manufacture a failing defect reproduction. Use the smallest existing focused test that proves the acceptance contract.
@@ -203,7 +210,7 @@ export function buildJobPrompt({
     : `- Generate a concise fix contract from the reported behavior and expected outcome.
 - Diagnose and reproduce with repository evidence. Do not claim a cause or reproduction without evidence.
 - Use the smallest focused reproduction that demonstrates the reported defect.`;
-  return `Run a FixLab ${validateOnly ? "validate-only" : "fix-and-validate"} job.
+  return `Run a FixLab ${mode} job.
 Request type: ${requestType}
 Intake source: ${intakeSource}
 ${intakeSummary.length > 0 ? `Loaded Azure DevOps selection:
@@ -227,13 +234,13 @@ Repository requirements:
 - Reuse this job/session context. Do not reread unchanged files, repeat completed diagnosis, reinstall available dependencies, or rerun broad checks without new evidence.
 - Treat commit changes and repository-profile or instruction changes as invalidation boundaries: reread affected context when they change.
 ${requestGuidance}
-- ${validateOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
+- ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
-- Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes.
-- Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results.
+- ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
+- ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
 - Start only the applications defined by the repository profile, then execute the repository-defined live test against the allowed required system or environment from that profile. Do not invent or hardcode environment choices.
-- Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks.
-- ${validateOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update the pull request only after all required gates pass, and include the collected evidence."}
+- ${playwrightOnly ? "Collect evidence for required setup, authentication readiness, application startup, the focused Playwright result, skipped gates, blockers, and remaining risks." : "Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks."}
+- ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update the pull request only after all required gates pass, and include the collected evidence."}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
 - When one of those human actions is required, emit FIXLAB_STAGE|stage|blocked|exact action needed, emit blocked outcomes for affected bugs when applicable, mark later stages skipped because of the blocker, and exit. The dashboard will collect user input and resume this same session.
 - Keep stage messages and retained logs concise. Summarize relevant command evidence and preserve exact errors, but do not feed unbounded raw output back into prompts.
@@ -254,6 +261,7 @@ ${requestGuidance}
 - Do not call task_complete or return the final response until every expected FIXLAB_BUG line and every terminal FIXLAB_STAGE line has been emitted.
 - Preserve exact command errors in the stage message or adjacent output.
 ${validateOnly ? "- The fix and pr stages must be explicitly skipped unless they fail for another reason." : ""}
+${playwrightOnly ? "- The diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped unless a required setup or browser-validation blocker makes the applicable stage blocked or failed." : ""}
 
 Request:
 ${request}`;
@@ -1558,9 +1566,14 @@ export function createDashboardServer({
         });
         return;
       }
-      if (!["fix-and-validate", "validate-only"].includes(body.mode)) {
+      if (
+        !["fix-and-validate", "validate-only", "playwright-only"].includes(
+          body.mode
+        )
+      ) {
         sendJson(response, 400, {
-          error: "mode must be fix-and-validate or validate-only"
+          error:
+            "mode must be fix-and-validate, validate-only, or playwright-only"
         });
         return;
       }
