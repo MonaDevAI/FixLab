@@ -37,6 +37,7 @@ export const MAX_CACHE_ENTRIES = 20;
 export const MAX_CACHE_BYTES = 64 * 1024;
 export const MAX_METRICS_ENTRIES = 500;
 export const MAX_QUEUED_JOBS = 20;
+export const FIXLAB_RUNTIMES = ["agency", "copilot"];
 export const FIXLAB_STAGES = [
   "intake",
   "diagnosis",
@@ -629,27 +630,56 @@ export function buildAgencyInvocation({
   };
 }
 
-export function createAgencyExecutor({ packageRoot }) {
+export function buildCopilotInvocation({
+  packageRoot,
+  prompt,
+  sessionId,
+  resume = false
+}) {
+  if (!sessionId) {
+    throw new Error("Copilot invocation requires a session ID");
+  }
+  return {
+    args: [
+      "--plugin-dir",
+      packageRoot,
+      "--agent",
+      "fixlab",
+      "--allow-all-tools",
+      "--no-ask-user",
+      "--autopilot",
+      "--stream",
+      "on",
+      ...(resume ? [`--resume=${sessionId}`] : ["--session-id", sessionId])
+    ],
+    input: prompt
+  };
+}
+
+function findDirectExecutable(command) {
+  const lookup = spawnSync(
+    process.platform === "win32" ? "where.exe" : "which",
+    [command],
+    { encoding: "utf8", shell: false }
+  );
+  const candidates = lookup.stdout
+    ?.split(/\r?\n/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return process.platform === "win32"
+    ? candidates?.find((value) => /\.exe$/i.test(value))
+    : candidates?.[0];
+}
+
+function createExecutor({ command, packageRoot, buildInvocation }) {
   return ({ repository, prompt, sessionId, resume, onOutput }) => {
-    const lookup = spawnSync(
-      process.platform === "win32" ? "where.exe" : "which",
-      ["agency"],
-      { encoding: "utf8", shell: false }
-    );
-    const candidates = lookup.stdout
-      ?.split(/\r?\n/)
-      .map((value) => value.trim())
-      .filter(Boolean);
-    const executable =
-      process.platform === "win32"
-        ? candidates?.find((value) => /\.exe$/i.test(value))
-        : candidates?.[0];
+    const executable = findDirectExecutable(command);
     if (!executable) {
       throw new Error(
-        "Agency executable is unavailable or is not a directly executable binary"
+        `${command} executable is unavailable or is not a directly executable binary`
       );
     }
-    const invocation = buildAgencyInvocation({
+    const invocation = buildInvocation({
       packageRoot,
       prompt,
       sessionId,
@@ -689,6 +719,33 @@ export function createAgencyExecutor({ packageRoot }) {
   };
 }
 
+export function createAgencyExecutor({ packageRoot }) {
+  return createExecutor({
+    command: "agency",
+    packageRoot,
+    buildInvocation: buildAgencyInvocation
+  });
+}
+
+export function createCopilotExecutor({ packageRoot }) {
+  return createExecutor({
+    command: "copilot",
+    packageRoot,
+    buildInvocation: buildCopilotInvocation
+  });
+}
+
+export function createRuntimeExecutor({ packageRoot, runtime = "agency" }) {
+  if (!FIXLAB_RUNTIMES.includes(runtime)) {
+    throw new Error(
+      `FixLab runtime must be one of: ${FIXLAB_RUNTIMES.join(", ")}`
+    );
+  }
+  return runtime === "copilot"
+    ? createCopilotExecutor({ packageRoot })
+    : createAgencyExecutor({ packageRoot });
+}
+
 function sendJson(response, statusCode, body) {
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
@@ -720,7 +777,9 @@ function publicJob(job) {
     finishedAt: job.finishedAt,
     error: job.error,
     canResume: ["blocked", "failed", "passed"].includes(job.status),
+    canComment: job.status === "running",
     inputCount: job.inputs.length,
+    pendingInputCount: job.pendingInputs.length,
     durationMs: Math.max(
       0,
       job.startedAt
@@ -1048,6 +1107,73 @@ Resume requirements:
 - Do not call task_complete or return the final response until all required machine-readable lines are emitted.`;
 }
 
+function playwrightAuthenticationConfig(repository) {
+  const profile = loadRepositoryProfile(repository);
+  const browserAutomation = profile.browserAutomation ?? {};
+  const authentication = browserAutomation.authentication ?? {};
+  const workingDirectory = resolve(
+    repository,
+    browserAutomation.workingDirectory ??
+      profile.applications?.frontend?.workingDirectory ??
+      "."
+  );
+  const command =
+    typeof authentication.command === "string"
+      ? authentication.command.trim()
+      : "";
+  const statusPaths = Array.isArray(authentication.statusPaths)
+    ? authentication.statusPaths
+        .filter((value) => typeof value === "string" && value.trim())
+        .map((value) => value.trim())
+    : [];
+  const environment = Object.fromEntries(
+    Object.entries(authentication.environment ?? {}).filter(
+      ([name, value]) =>
+        /^[A-Za-z_][A-Za-z0-9_]*$/.test(name) &&
+        typeof value === "string"
+    )
+  );
+  return {
+    command,
+    environment,
+    statusPaths,
+    workingDirectory
+  };
+}
+
+function playwrightAuthenticationStatus(repository, connection) {
+  let configuration;
+  try {
+    configuration = playwrightAuthenticationConfig(repository);
+  } catch (error) {
+    return {
+      configured: false,
+      ready: false,
+      running: Boolean(connection.handle),
+      error: error.message,
+      lastResult: connection.lastResult,
+      paths: []
+    };
+  }
+  const paths = configuration.statusPaths.map((relativePath) => {
+    const path = resolve(configuration.workingDirectory, relativePath);
+    return {
+      path: relativePath,
+      ready: existsSync(path)
+    };
+  });
+  return {
+    configured: Boolean(
+      configuration.command && configuration.statusPaths.length > 0
+    ),
+    ready: paths.length > 0 && paths.every((entry) => entry.ready),
+    running: Boolean(connection.handle),
+    error: "",
+    lastResult: connection.lastResult,
+    paths
+  };
+}
+
 function resetJobForResume(job) {
   const restartIndex =
     job.status === "passed"
@@ -1075,8 +1201,9 @@ function resetJobForResume(job) {
 export function createDashboardServer({
   repository,
   packageRoot,
+  runtime = "agency",
   publicDirectory = join(packageRoot, "dashboard", "public"),
-  executor = createAgencyExecutor({ packageRoot }),
+  executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader()
 }) {
   const resolvedRepository = resolve(repository);
@@ -1084,6 +1211,7 @@ export function createDashboardServer({
   let activeHandle = null;
   const queuedJobs = [];
   const artifactDirectories = new Set();
+  const playwrightConnection = { handle: null, lastResult: null };
   const cacheContext = createCacheContext(resolvedRepository);
   const metricsPath = cacheContext
     ? join(dirname(cacheContext.cachePath), "dashboard-metrics.json")
@@ -1126,6 +1254,29 @@ export function createDashboardServer({
       .finally(() => {
         if (activeHandle === handle) {
           activeHandle = null;
+        }
+        if (job.pendingInputs.length > 0) {
+          const pendingInputs = job.pendingInputs.splice(0);
+          const details = pendingInputs
+            .map(
+              (input, index) =>
+                `Comment ${index + 1} (${input.createdAt}):\n${input.details}`
+            )
+            .join("\n\n");
+          const prompt = buildResumePrompt(job, {
+            action: "continue",
+            details
+          });
+          resetJobForResume(job);
+          recordJobMetric(job);
+          try {
+            startJob(job, prompt, true);
+          } catch (error) {
+            finishJob(job, { code: null, error });
+            recordJobMetric(job);
+            activeHandle = null;
+          }
+          return;
         }
         startNextJob();
       });
@@ -1274,13 +1425,18 @@ export function createDashboardServer({
         sendJson(response, 404, { error: "no FixLab job is available" });
         return;
       }
-      if (!["blocked", "failed", "passed"].includes(currentJob.status)) {
+      const running = currentJob.status === "running" && Boolean(activeHandle);
+      if (
+        !running &&
+        !["blocked", "failed", "passed"].includes(currentJob.status)
+      ) {
         sendJson(response, 409, {
-          error: "user input can resume only a blocked, failed, or completed job"
+          error:
+            "user input can be added only to a running, blocked, failed, or completed job"
         });
         return;
       }
-      if (activeHandle) {
+      if (!running && activeHandle) {
         sendJson(response, 409, {
           error: "the current FixLab agent is still shutting down"
         });
@@ -1310,18 +1466,40 @@ export function createDashboardServer({
         return;
       }
       const action = body.action ?? "continue";
-      if (!["continue", "retry", "skip"].includes(action)) {
+      if (!["comment", "continue", "retry", "skip"].includes(action)) {
         sendJson(response, 400, {
-          error: "action must be continue, retry, or skip"
+          error: "action must be comment, continue, retry, or skip"
+        });
+        return;
+      }
+      if (running && action !== "comment") {
+        sendJson(response, 400, {
+          error: "a running job accepts only comment input"
         });
         return;
       }
 
-      currentJob.inputs.push({
+      const input = {
         action,
         details,
         createdAt: new Date().toISOString()
-      });
+      };
+      currentJob.inputs.push(input);
+      if (running) {
+        currentJob.pendingInputs.push(input);
+        pushLog(currentJob, {
+          index: currentJob.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: `Comment ${currentJob.inputs.length} queued for the same FixLab session after the current agent turn.`
+        });
+        sendJson(response, 202, {
+          job: publicJob(currentJob),
+          queued: true,
+          queue: publicQueue(queuedJobs)
+        });
+        return;
+      }
       pushLog(currentJob, {
         index: currentJob.nextLogIndex,
         timestamp: new Date().toISOString(),
@@ -1478,6 +1656,7 @@ export function createDashboardServer({
         finishedAt: null,
         error: null,
         inputs: [],
+        pendingInputs: [],
         usage: {
           inputTokens: 0,
           cachedInputTokens: 0,
@@ -1533,6 +1712,91 @@ export function createDashboardServer({
       return;
     }
 
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/playwright/status"
+    ) {
+      sendJson(
+        response,
+        200,
+        playwrightAuthenticationStatus(
+          resolvedRepository,
+          playwrightConnection
+        )
+      );
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/playwright/connect"
+    ) {
+      if (playwrightConnection.handle) {
+        sendJson(response, 409, {
+          error: "Playwright authentication is already running"
+        });
+        return;
+      }
+      let configuration;
+      try {
+        configuration = playwrightAuthenticationConfig(resolvedRepository);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (!configuration.command || configuration.statusPaths.length === 0) {
+        sendJson(response, 400, {
+          error:
+            "repository profile must configure browserAutomation.authentication.command and statusPaths"
+        });
+        return;
+      }
+      if (!existsSync(configuration.workingDirectory)) {
+        sendJson(response, 400, {
+          error: "configured Playwright working directory does not exist"
+        });
+        return;
+      }
+      playwrightConnection.lastResult = null;
+      const child = spawn(configuration.command, {
+        cwd: configuration.workingDirectory,
+        env: { ...process.env, ...configuration.environment },
+        shell: true,
+        stdio: "ignore",
+        windowsHide: false
+      });
+      playwrightConnection.handle = child;
+      child.once("error", (error) => {
+        playwrightConnection.lastResult = {
+          ok: false,
+          message: error.message,
+          finishedAt: new Date().toISOString()
+        };
+        playwrightConnection.handle = null;
+      });
+      child.once("close", (code, signal) => {
+        playwrightConnection.lastResult = {
+          ok: code === 0,
+          message:
+            code === 0
+              ? "Playwright authentication completed."
+              : `Playwright authentication exited with code ${code ?? "unknown"}${
+                  signal ? ` (${signal})` : ""
+                }.`,
+          finishedAt: new Date().toISOString()
+        };
+        playwrightConnection.handle = null;
+      });
+      sendJson(response, 202, {
+        ...playwrightAuthenticationStatus(
+          resolvedRepository,
+          playwrightConnection
+        ),
+        started: true
+      });
+      return;
+    }
+
     if (request.method === "GET" && staticFiles.has(requestUrl.pathname)) {
       const fileName = staticFiles.get(requestUrl.pathname);
       const filePath = join(publicDirectory, fileName);
@@ -1575,6 +1839,13 @@ export function createDashboardServer({
     async close() {
       if (activeHandle?.terminate) {
         activeHandle.terminate();
+      }
+      if (
+        playwrightConnection.handle &&
+        playwrightConnection.handle.exitCode === null &&
+        playwrightConnection.handle.signalCode === null
+      ) {
+        playwrightConnection.handle.kill();
       }
       for (const directory of artifactDirectories) {
         removeArtifactDirectory(directory);

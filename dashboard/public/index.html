@@ -17,6 +17,18 @@
         <div id="readiness" class="readiness">Checking repository…</div>
       </header>
 
+      <section class="panel connection-panel">
+        <div class="section-heading">
+          <h2>Playwright authentication</h2>
+          <span id="playwright-status" class="badge">Checking…</span>
+        </div>
+        <p id="playwright-guidance" class="guidance">Checking the repository-owned browser authentication state.</p>
+        <div class="button-row">
+          <button id="playwright-check" type="button">Check status</button>
+          <button id="playwright-connect" type="button">Connect Playwright</button>
+        </div>
+      </section>
+
       <section class="panel">
         <form id="job-form">
           <fieldset>
@@ -127,6 +139,7 @@
         <p id="job-input-guidance" class="guidance"></p>
         <label for="job-input-action">Action</label>
         <select id="job-input-action">
+          <option value="comment">Add comment to the current job</option>
           <option value="continue">Provide details and continue</option>
           <option value="retry">Retry with the available prerequisite</option>
           <option value="skip">Skip the blocked gate and preserve the risk</option>
@@ -134,7 +147,7 @@
         <label for="job-input-details">Additional details or manual result</label>
         <textarea id="job-input-details" rows="5" maxlength="10000"
           placeholder="For example: authentication is complete, use this safe test record, or apply this additional requirement."></textarea>
-        <button id="job-input-submit" type="button">Resume FixLab</button>
+        <button id="job-input-submit" type="button">Add comment</button>
         <p id="job-input-message" class="guidance" aria-live="polite"></p>
       </section>
 

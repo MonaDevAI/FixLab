@@ -4,6 +4,10 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Add an optional direct GitHub Copilot CLI runtime for the CLI and dashboard
+  while retaining Agency as the default compatibility runtime.
+- Add repository-configured Playwright authentication status/connect controls
+  and same-session comments for running dashboard jobs.
 - Load bounded Azure DevOps comments and images, support clipboard-pasted
   screenshot evidence, and expose access warnings without discarding bugs.
 - Add a visible 20-job running queue with same-session blocker handling.

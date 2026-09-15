@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
@@ -10,8 +11,10 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildCopilotInvocation,
   createDashboardServer,
   DEFAULT_DASHBOARD_PORT,
+  FIXLAB_RUNTIMES,
   inspectRepository,
   validatePort
 } from "../dashboard/server.js";
@@ -40,11 +43,11 @@ function printUsage() {
 Usage:
   fixlab init [repository]
   fixlab prepare [repository] [--yes]
-  fixlab doctor [repository]
+  fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
-  fixlab run [repository] [--] [request...]
-  fixlab validate [repository] --pr <number>
-  fixlab dashboard [repository] [--port <number>] [--no-open]
+  fixlab run [repository] [--runtime <agency|copilot>] [--] [request...]
+  fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
+  fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
   fixlab --help
 
 Commands:
@@ -53,9 +56,15 @@ Commands:
   doctor    Check required tools and repository configuration.
   setup-playwright
             Plan or install the repository-local Playwright package and browser.
-  run       Launch the FixLab Agency agent for a request.
+  run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
-  dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).`);
+  dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
+
+Runtime:
+  agency    Use Agency Copilot (default).
+  copilot   Use GitHub Copilot CLI directly.
+
+Set FIXLAB_RUNTIME or pass --runtime to select the runtime.`);
 }
 
 function resolveRepository(value) {
@@ -305,12 +314,63 @@ function init(repository) {
   return 0;
 }
 
-function doctor(repository) {
+function validateRuntime(value) {
+  const runtime = String(value ?? "").trim().toLowerCase();
+  if (!FIXLAB_RUNTIMES.includes(runtime)) {
+    throw new Error(
+      `runtime must be one of: ${FIXLAB_RUNTIMES.join(", ")}`
+    );
+  }
+  return runtime;
+}
+
+function parseRuntimeArguments(args) {
+  let runtime;
+  try {
+    runtime = validateRuntime(process.env.FIXLAB_RUNTIME ?? "agency");
+  } catch (error) {
+    return { error: `FIXLAB_RUNTIME ${error.message}` };
+  }
+  const remaining = [];
+  let afterSeparator = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--") {
+      afterSeparator = true;
+      remaining.push(argument);
+      continue;
+    }
+    if (!afterSeparator && argument === "--runtime") {
+      if (!args[index + 1]) {
+        return { error: "--runtime requires agency or copilot" };
+      }
+      try {
+        runtime = validateRuntime(args[index + 1]);
+      } catch (error) {
+        return { error: error.message };
+      }
+      index += 1;
+      continue;
+    }
+    if (!afterSeparator && argument.startsWith("--runtime=")) {
+      try {
+        runtime = validateRuntime(argument.slice("--runtime=".length));
+      } catch (error) {
+        return { error: error.message };
+      }
+      continue;
+    }
+    remaining.push(argument);
+  }
+  return { runtime, args: remaining };
+}
+
+function doctor(repository, runtime) {
   const checks = [
     ["Git", "git"],
     ["Node.js", "node"],
     ["PowerShell", "pwsh"],
-    ["Agency", "agency"]
+    [runtime === "copilot" ? "GitHub Copilot CLI" : "Agency", runtime]
   ].map(([name, command]) => ({
     name,
     ok: findExecutable(command),
@@ -533,7 +593,7 @@ function setupPlaywright(repository, approved) {
   return 0;
 }
 
-function launch(repository, request) {
+function launch(repository, request, runtime) {
   const { error } = loadProfile(repository);
   if (error) {
     console.error(
@@ -542,27 +602,34 @@ function launch(repository, request) {
     return 1;
   }
 
-  if (!findExecutable("agency")) {
+  if (!findExecutable(runtime)) {
     console.error(
-      "Cannot launch FixLab because Agency Copilot is unavailable. Install and authenticate Agency first."
+      `Cannot launch FixLab because ${runtime} is unavailable. Install and authenticate the selected runtime first.`
     );
     return 1;
   }
 
-  const args = [
-    "copilot",
-    "--plugin-dir",
-    packageRoot,
-    "--agent",
-    "fixlab:fixlab"
-  ];
-  if (request) {
-    args.push("--interactive", request);
-  }
-
-  const result = spawnSync("agency", args, {
+  const invocation =
+    runtime === "copilot"
+      ? buildCopilotInvocation({
+          packageRoot,
+          prompt: request,
+          sessionId: randomUUID()
+        })
+      : {
+          args: [
+            "copilot",
+            "--plugin-dir",
+            packageRoot,
+            "--agent",
+            "fixlab:fixlab",
+            ...(request ? ["--interactive", request] : [])
+          ]
+        };
+  const result = spawnSync(runtime, invocation.args, {
     cwd: repository,
-    stdio: "inherit",
+    stdio: request && runtime === "copilot" ? ["pipe", "inherit", "inherit"] : "inherit",
+    input: runtime === "copilot" ? invocation.input : undefined,
     shell: process.platform === "win32"
   });
   return result.status ?? 1;
@@ -644,7 +711,7 @@ function openBrowser(url) {
   child.unref();
 }
 
-async function dashboard(repository, port, shouldOpen) {
+async function dashboard(repository, port, shouldOpen, runtime) {
   const readiness = inspectRepository(repository);
   if (!readiness.repositoryReady) {
     console.error(`Cannot start FixLab dashboard: ${readiness.error}`);
@@ -652,7 +719,8 @@ async function dashboard(repository, port, shouldOpen) {
   }
   const dashboardServer = createDashboardServer({
     repository,
-    packageRoot
+    packageRoot,
+    runtime
   });
   let address;
   try {
@@ -664,6 +732,7 @@ async function dashboard(repository, port, shouldOpen) {
 
   console.log(`FixLab dashboard: ${address.url}`);
   console.log(`Repository: ${repository}`);
+  console.log(`Runtime: ${runtime}`);
   console.log("Press Ctrl+C to stop the local dashboard.");
   if (shouldOpen) {
     openBrowser(address.url);
@@ -694,7 +763,12 @@ async function main(args) {
   }
 
   if (command === "doctor") {
-    return doctor(resolveRepository(rest[0]));
+    const parsed = parseRuntimeArguments(rest);
+    if (parsed.error) {
+      console.error(parsed.error);
+      return 1;
+    }
+    return doctor(resolveRepository(parsed.args[0]), parsed.runtime);
   }
 
   if (command === "prepare") {
@@ -714,35 +788,57 @@ async function main(args) {
   }
 
   if (command === "run") {
-    const repository = resolveRepository(rest[0]);
-    const requestStart = rest[0] && !rest[0].startsWith("-") ? 1 : 0;
-    const request = rest
+    const parsed = parseRuntimeArguments(rest);
+    if (parsed.error) {
+      console.error(parsed.error);
+      return 1;
+    }
+    const repository = resolveRepository(parsed.args[0]);
+    const requestStart =
+      parsed.args[0] && !parsed.args[0].startsWith("-") ? 1 : 0;
+    const request = parsed.args
       .slice(requestStart)
       .filter((value) => value !== "--")
       .join(" ")
       .trim();
-    return launch(repository, request);
+    return launch(repository, request, parsed.runtime);
   }
 
   if (command === "validate") {
-    const parsed = parseValidateArguments(rest);
+    const runtimeArguments = parseRuntimeArguments(rest);
+    if (runtimeArguments.error) {
+      console.error(runtimeArguments.error);
+      return 1;
+    }
+    const parsed = parseValidateArguments(runtimeArguments.args);
     if (parsed.error) {
       console.error(parsed.error);
       return 1;
     }
     return launch(
       parsed.repository,
-      `Validate pull request ${parsed.pullRequest} without modifying source code or the pull request.`
+      `Validate pull request ${parsed.pullRequest} without modifying source code or the pull request.`,
+      runtimeArguments.runtime
     );
   }
 
   if (command === "dashboard") {
-    const parsed = parseDashboardArguments(rest);
+    const runtimeArguments = parseRuntimeArguments(rest);
+    if (runtimeArguments.error) {
+      console.error(runtimeArguments.error);
+      return 1;
+    }
+    const parsed = parseDashboardArguments(runtimeArguments.args);
     if (parsed.error) {
       console.error(parsed.error);
       return 1;
     }
-    return dashboard(parsed.repository, parsed.port, parsed.open);
+    return dashboard(
+      parsed.repository,
+      parsed.port,
+      parsed.open,
+      runtimeArguments.runtime
+    );
   }
 
   console.error(`Unknown command: ${command}`);

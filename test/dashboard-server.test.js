@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import test from "node:test";
 import {
   buildAgencyInvocation,
+  buildCopilotInvocation,
   buildJobPrompt,
   createCacheContext,
   createDashboardServer,
@@ -34,6 +35,41 @@ test("Agency executor keeps long prompts out of process arguments", () => {
     packageRoot: "C:\\FixLab",
     prompt,
     sessionId: "11111111-1111-4111-8111-111111111111"
+  });
+
+  test("direct Copilot executor preserves stdin sessions and resume", () => {
+    const prompt = `Validate this batch:\n${"x".repeat(40000)}`;
+    const invocation = buildCopilotInvocation({
+      packageRoot: "C:\\FixLab",
+      prompt,
+      sessionId: "22222222-2222-4222-8222-222222222222"
+    });
+
+    assert.equal(invocation.input, prompt);
+    assert.equal(invocation.args.includes(prompt), false);
+    assert.deepEqual(invocation.args.slice(0, 4), [
+      "--plugin-dir",
+      "C:\\FixLab",
+      "--agent",
+      "fixlab"
+    ]);
+    assert.equal(invocation.args.includes("--autopilot"), true);
+    assert.deepEqual(invocation.args.slice(-2), [
+      "--session-id",
+      "22222222-2222-4222-8222-222222222222"
+    ]);
+
+    const resumed = buildCopilotInvocation({
+      packageRoot: "C:\\FixLab",
+      prompt,
+      sessionId: "22222222-2222-4222-8222-222222222222",
+      resume: true
+    });
+    assert.equal(resumed.args.includes("--session-id"), false);
+    assert.equal(
+      resumed.args.at(-1),
+      "--resume=22222222-2222-4222-8222-222222222222"
+    );
   });
 
   assert.equal(invocation.input, prompt);
@@ -539,6 +575,133 @@ test("blocked job accepts user input and resumes the same Agency session", async
     assert.equal(calls[1].sessionId, calls[0].sessionId);
     assert.match(calls[1].prompt, /Authentication is complete/);
     assert.match(calls[1].prompt, /Resume the existing FixLab dashboard session/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("running job queues a comment and resumes the same session", async () => {
+  const repository = createRepository();
+  const calls = [];
+  let completeFirst;
+  let firstOutput;
+  const executor = ({ prompt, sessionId, resume, onOutput }) => {
+    calls.push({ prompt, sessionId, resume });
+    if (!resume) {
+      firstOutput = onOutput;
+      return {
+        completion: new Promise((resolve) => {
+          completeFirst = resolve;
+        }),
+        terminate() {}
+      };
+    }
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|comment applied\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Validate the current bug batch.",
+        mode: "validate-only"
+      })
+    });
+    const sessionId = started.body.job.id;
+
+    const commented = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "comment",
+        details:
+          "Keep every validated outcome attached to the existing pull request."
+      })
+    });
+    assert.equal(commented.response.status, 202);
+    assert.equal(commented.body.queued, true);
+    assert.equal(commented.body.job.inputCount, 1);
+    assert.equal(commented.body.job.pendingInputCount, 1);
+
+    for (const stage of FIXLAB_STAGES) {
+      firstOutput("stdout", `FIXLAB_STAGE|${stage}|passed|initial result\n`);
+    }
+    completeFirst({ code: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const completed = await jsonRequest(url, "/api/job");
+    assert.equal(completed.body.job.status, "passed");
+    assert.equal(completed.body.job.pendingInputCount, 0);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].resume, true);
+    assert.equal(calls[1].sessionId, sessionId);
+    assert.match(calls[1].prompt, /existing pull request/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard checks and starts repository-owned Playwright authentication", async () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  writeFileSync(
+    profilePath,
+    JSON.stringify({
+      name: "Playwright authentication repository",
+      browserAutomation: {
+        workingDirectory: ".",
+        authentication: {
+          command: "node playwright-auth.js",
+          statusPaths: ["e2e/.auth/user.json"]
+        }
+      }
+    })
+  );
+  writeFileSync(
+    join(repository, "playwright-auth.js"),
+    'const fs = require("node:fs"); fs.mkdirSync("e2e/.auth", { recursive: true }); fs.writeFileSync("e2e/.auth/user.json", "{}");'
+  );
+  const { dashboard, url } = await startDashboard(
+    repository,
+    () => ({ completion: new Promise(() => {}), terminate() {} })
+  );
+
+  try {
+    const initial = await jsonRequest(url, "/api/playwright/status");
+    assert.equal(initial.response.status, 200);
+    assert.equal(initial.body.configured, true);
+    assert.equal(initial.body.ready, false);
+
+    const started = await jsonRequest(url, "/api/playwright/connect", {
+      method: "POST"
+    });
+    assert.equal(started.response.status, 202);
+    assert.equal(started.body.started, true);
+
+    let status;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      status = await jsonRequest(url, "/api/playwright/status");
+      if (!status.body.running) {
+        break;
+      }
+    }
+    assert.equal(status.body.ready, true);
+    assert.equal(status.body.lastResult.ok, true);
+    assert.equal(status.body.paths[0].path, "e2e/.auth/user.json");
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

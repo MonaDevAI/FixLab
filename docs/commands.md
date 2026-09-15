@@ -52,7 +52,7 @@ fixlab dashboard [repository] [--port <number>] [--no-open]
 
 The command starts the packaged local UI on `127.0.0.1:4317` by default and
 opens the system browser unless `--no-open` is supplied. It does not run during
-installation or `fixlab init`. The UI starts one Agency-backed job at a time
+installation or `fixlab init`. The UI starts one selected-runtime job at a time
 and displays the intake, diagnosis, reproduce, fix, review, local-stack,
 live-test, and pull-request stages with polled logs.
 

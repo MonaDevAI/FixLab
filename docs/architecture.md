@@ -2,9 +2,10 @@
 
 FixLab separates orchestration from repository-specific behavior.
 
-FixLab is distributed and versioned as its own product. Agency Copilot remains
-an external runtime dependency that provides agent execution, authentication,
-plugin loading, and tools; FixLab does not bundle or fork Agency.
+FixLab is distributed and versioned as its own product. It supports Agency
+Copilot as the default compatibility runtime and GitHub Copilot CLI as an
+optional direct runtime. Both provide agent execution, authentication, plugin
+loading, and tools; FixLab does not bundle or fork either runtime.
 
 ```text
 Defect or pull request
@@ -87,7 +88,8 @@ active job removes its files, clean shutdown removes active and queued files,
 and startup prunes directories older than seven days. Abrupt process
 termination can retain artifacts until the next pruning pass.
 
-Each job receives a UUID-backed Agency session. When the agent reports a
+Each job receives a UUID-backed session from the selected runtime. When the
+agent reports a
 blocked stage, the local dashboard accepts the required user input and resumes
 that same session. Failed jobs can retry, and completed jobs can accept a
 focused addition while reusing prior evidence, the branch, and an existing
@@ -100,7 +102,7 @@ failed jobs pause queue advancement so the same session remains resumable.
 
 Each job reads the repository profile and existing instructions first, then
 uses git status, the effective diff, and task-relevant symbol/file searches to
-bound investigation. Work continues in one Agency job/session context.
+bound investigation. Work continues in one selected-runtime job/session context.
 Unchanged files, completed diagnosis, available dependencies, and broad checks
 are not repeated without new risk evidence. Tests and validation are focused
 and risk-scaled.
@@ -111,10 +113,30 @@ omitted; it does not feed unbounded logs back into prompts.
 Polled job responses expose only Azure DevOps identity and state summaries,
 not the full loaded descriptions and reproduction text.
 
-The dashboard streams the generated agent prompt through standard input rather
+Both runtime adapters stream the generated agent prompt through standard input rather
 than placing it on the process command line. This keeps multi-bug requests and
 other long inputs below operating-system command-line limits while preserving
 the same in-memory prompt and output stream.
+
+The Agency adapter invokes `agency copilot` with the plugin-qualified
+`fixlab:fixlab` agent. The direct adapter invokes `copilot`, where the packaged
+agent is registered as `fixlab`, with explicit UUID session or resume identity,
+streaming output, non-interactive blocker behavior, and the same tool approval
+contract. Direct mode additionally enables Copilot autopilot.
+Runtime selection changes only execution transport; queueing, marker parsing,
+metrics, evidence, validation gates, and pull-request rules remain shared.
+
+Repository profiles may define a Playwright authentication command, non-secret
+environment values, and local status paths. The loopback dashboard can start
+that command and reports only configured/running/ready state; it never reads or
+returns authentication-state contents. The dashboard tracks the owned
+authentication process and terminates that handle during clean shutdown.
+
+Comments submitted while an agent turn is running are retained only in the
+current in-memory job and delivered by resuming the same runtime session after
+that turn completes. This preserves the bug batch, branch, evidence, and
+existing pull request without interrupting an in-flight tool operation or
+creating a second job.
 
 Git repositories also receive a bounded durable metadata cache in
 `.git/fixlab/dashboard-cache.json`, using the shared Git directory for

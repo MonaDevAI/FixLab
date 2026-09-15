@@ -11,12 +11,11 @@
 FixLab is a reusable engineering workflow that helps teams turn software
 defects into tested, review-ready changes.
 
-FixLab is a separately branded, independently versioned product that is
-**powered by Agency Copilot**. Agency supplies the agent runtime,
-authentication, plugin loading, tools, and interactive session. FixLab supplies
-the specialized defect investigation, application startup, testing, browser
-validation, and evidence workflow. FixLab does not install, bundle, fork, or
-replace Agency.
+FixLab is a separately branded, independently versioned product that can run
+through **Agency Copilot** or directly through **GitHub Copilot CLI**. Agency
+remains the default compatibility runtime. FixLab supplies the specialized
+defect investigation, application startup, testing, browser validation, and
+evidence workflow without bundling or forking either runtime.
 
 It understands the common shape of applications with a React frontend and a
 .NET backend: source code, pull requests, isolated worktrees, tests, local
@@ -33,15 +32,17 @@ passed, what was skipped, and what still needs human attention.
 
 ## Get started
 
-1. **Install and sign in to Agency Copilot.**
+1. **Install and sign in to a supported runtime.**
 
-   Follow your organization's supported Agency installation and authentication
-   instructions, then verify:
+   Agency remains the default:
 
    ```shell
    agency --version
    agency copilot
    ```
+
+   To use GitHub Copilot CLI directly, install and authenticate `copilot`, then
+   select it with `--runtime copilot` or `FIXLAB_RUNTIME=copilot`.
 
 2. **Install or run the FixLab CLI package.**
 
@@ -104,10 +105,11 @@ Run the /codeblend-ai-composite skill against the current repository root.
 See [AI-readiness engineering](docs/ai-readiness.md) for the baseline,
 maintenance loop, and interpretation rules.
 
-To run the Agency plugin directly from this checkout:
+To run the plugin through either runtime from this checkout:
 
 ```shell
 agency copilot --plugin-dir . --agent fixlab:fixlab
+copilot --plugin-dir . --agent fixlab
 ```
 
 ---
@@ -199,20 +201,22 @@ addition to the reusable architecture, onboarding contract, and repository
 profile template. The CLI provides repository initialization, prerequisite
 diagnostics, direct agent launch, and validation-only pull request launch.
 
-The current package launches Agency locally. A shared dashboard, durable broker,
-and registered runner service remain separate future distribution layers. The
-included dashboard is a single-user local interface bound to `127.0.0.1`.
+The current package launches Agency locally by default and can launch GitHub
+Copilot CLI directly. A shared dashboard, durable broker, and registered runner
+service remain separate future distribution layers. The included dashboard is
+a single-user local interface bound to `127.0.0.1`.
 
 Start it from an onboarded repository:
 
 ```shell
 fixlab dashboard
+fixlab dashboard --runtime copilot
 fixlab dashboard ..\another-repository --port 4318 --no-open
 ```
 
 The dashboard reads `.github\fixlab\repository-profile.json`, accepts
 `bug-fix` or `small-enhancement` requests in fix-and-validate or validate-only
-mode, invokes the packaged `fixlab:fixlab` Agency plugin from that repository,
+mode, invokes the packaged `fixlab:fixlab` plugin through the selected runtime,
 and displays one active staged job with polled logs. Multi-bug requests display one
 outcome per Azure DevOps bug, including the responsible boundary such as the
 application, MDG, data, or deployment. The Azure DevOps intake accepts up to
@@ -237,7 +241,7 @@ deployment or pull-request approval, and genuine blockers. FixLab never
 hardcodes an environment choice; the repository profile supplies and governs
 that context. A blocked, failed, or completed job exposes an input panel for
 the prerequisite, manual result, retry instruction, controlled skip, or next
-focused change. FixLab resumes the same Agency session and reuses completed
+focused change. FixLab resumes the same runtime session and reuses completed
 diagnosis, validation evidence, branch, and pull request.
 
 Manual entry is the default intake path and remains available for every
@@ -281,7 +285,7 @@ files until that pruning pass.
 
 Within a job, FixLab reads the profile and repository instructions first,
 checks git status and the effective diff, and focuses searches on relevant
-symbols and files. It reuses the same Agency session context and avoids
+symbols and files. It reuses the same runtime session context and avoids
 rereading unchanged files, repeating completed diagnosis, reinstalling
 available dependencies, or rerunning broad checks without risk evidence.
 Validation remains focused and risk-scaled. Stage summaries are retained
@@ -320,19 +324,42 @@ evidence requires them. Unlike a general coding agent, this path still requires
 explicit review, live-test, pull-request, and skipped-stage evidence and
 prohibits unrelated changes.
 
-### Runtime dependency
+### Runtime selection
 
-`@fixlab/cli` intentionally does not bundle Agency. The `fixlab run` and
-`fixlab validate` commands resolve the installed `agency` executable and launch:
+`@fixlab/cli` intentionally does not bundle Agency or GitHub Copilot CLI.
+Agency is the default compatibility runtime:
 
 ```shell
 agency copilot --plugin-dir <fixlab-package> --agent fixlab:fixlab
 ```
 
-Run `fixlab doctor` to verify Agency, Git, Node.js, the .NET SDK selected by the
-target repository (including `global.json`), PowerShell, the repository-local
-Playwright package, a real headless browser launch, and the repository profile
-before starting a job.
+Direct mode uses the same packaged plugin. Copilot CLI registers its agent as
+`fixlab`, while Agency uses the plugin-qualified `fixlab:fixlab` name:
+
+```shell
+fixlab run --runtime copilot -- "fix this defect"
+fixlab validate --pr 123 --runtime copilot
+fixlab dashboard --runtime copilot
+```
+
+Set `FIXLAB_RUNTIME=copilot` to make direct mode the local default. Long
+dashboard prompts continue to travel over standard input rather than process
+arguments. Session IDs, resume, streaming output, stage markers, queueing,
+metrics, evidence, and validation gates remain identical across adapters.
+
+The dashboard includes **Check status** and **Connect Playwright** controls when
+the repository profile defines `browserAutomation.authentication`. Status is
+based only on repository-owned local state paths; authentication output and
+browser-state contents are not returned to the browser or stored by FixLab.
+While a job is running, **Add comment to current job** queues a focused
+instruction for the same runtime session. It is delivered automatically after
+the current agent turn and does not create another dashboard job or pull
+request.
+
+Run `fixlab doctor --runtime copilot` or `fixlab doctor --runtime agency` to
+verify the selected runtime plus Git, Node.js, the repository-selected .NET
+SDK, PowerShell, repository-local Playwright package, a real headless browser
+launch, and the repository profile before starting a job.
 
 ---
 

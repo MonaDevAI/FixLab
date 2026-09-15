@@ -38,6 +38,10 @@ const jobInputAction = document.querySelector("#job-input-action");
 const jobInputDetails = document.querySelector("#job-input-details");
 const jobInputSubmit = document.querySelector("#job-input-submit");
 const jobInputMessage = document.querySelector("#job-input-message");
+const playwrightStatus = document.querySelector("#playwright-status");
+const playwrightGuidance = document.querySelector("#playwright-guidance");
+const playwrightCheck = document.querySelector("#playwright-check");
+const playwrightConnect = document.querySelector("#playwright-connect");
 const metricsPeriod = document.querySelector("#metrics-period");
 const metricBugs = document.querySelector("#metric-bugs");
 const metricCompleted = document.querySelector("#metric-completed");
@@ -159,10 +163,25 @@ function renderJob(job) {
   formError.textContent = job?.error ?? "";
 
   const canResume = Boolean(job?.canResume);
-  jobInputPanel.hidden = !canResume;
-  jobInputSubmit.disabled = !canResume;
-  jobInputCount.textContent = job ? `${job.inputCount} update(s)` : "";
-  if (canResume) {
+  const canComment = Boolean(job?.canComment);
+  jobInputPanel.hidden = !(canResume || canComment);
+  jobInputSubmit.disabled = !(canResume || canComment);
+  jobInputCount.textContent = job
+    ? `${job.inputCount} update(s) · ${job.pendingInputCount} pending`
+    : "";
+  if (canComment) {
+    jobInputTitle.textContent = "Add comment to current job";
+    jobInputGuidance.textContent =
+      "The comment will be delivered to this same session automatically after its current agent turn finishes.";
+    jobInputAction.value = "comment";
+    jobInputAction.disabled = true;
+    jobInputSubmit.textContent = "Queue comment";
+  } else if (canResume) {
+    jobInputAction.disabled = false;
+    if (jobInputAction.value === "comment") {
+      jobInputAction.value = "continue";
+    }
+    jobInputSubmit.textContent = "Resume FixLab";
     if (job.status === "blocked") {
       jobInputTitle.textContent = "Action needed";
       jobInputGuidance.textContent =
@@ -176,6 +195,36 @@ function renderJob(job) {
       jobInputGuidance.textContent =
         "Continue this completed session with one focused addition. FixLab reuses its evidence, branch, and pull request.";
     }
+  }
+}
+
+function renderPlaywrightStatus(status) {
+  playwrightStatus.className = `badge ${
+    status.running ? "running" : status.ready ? "passed" : "blocked"
+  }`;
+  playwrightStatus.textContent = status.running
+    ? "Connecting"
+    : status.ready
+      ? "Connected"
+      : status.configured
+        ? "Not connected"
+        : "Not configured";
+  playwrightConnect.disabled = status.running || !status.configured;
+  const pathSummary = status.paths
+    .map((entry) => `${entry.ready ? "ready" : "missing"}: ${entry.path}`)
+    .join(" · ");
+  playwrightGuidance.textContent =
+    status.error ||
+    status.lastResult?.message ||
+    pathSummary ||
+    "Add browserAutomation.authentication to the repository profile.";
+}
+
+async function refreshPlaywrightStatus() {
+  try {
+    renderPlaywrightStatus(await fetchJson("/api/playwright/status"));
+  } catch (error) {
+    playwrightGuidance.textContent = error.message;
   }
 }
 
@@ -574,7 +623,9 @@ jobInputSubmit.addEventListener("click", async () => {
     });
     jobInputDetails.value = "";
     jobInputMessage.textContent =
-      "Input accepted. FixLab resumed the same session.";
+      body.queued
+        ? "Comment queued for the current session."
+        : "Input accepted. FixLab resumed the same session.";
     renderJob(body.job);
   } catch (error) {
     formError.textContent = error.message;
@@ -582,7 +633,24 @@ jobInputSubmit.addEventListener("click", async () => {
   }
 });
 
+playwrightCheck.addEventListener("click", refreshPlaywrightStatus);
+
+playwrightConnect.addEventListener("click", async () => {
+  formError.textContent = "";
+  playwrightConnect.disabled = true;
+  try {
+    renderPlaywrightStatus(
+      await fetchJson("/api/playwright/connect", { method: "POST" })
+    );
+  } catch (error) {
+    formError.textContent = error.message;
+    await refreshPlaywrightStatus();
+  }
+});
+
 refresh();
 refreshMetrics();
+refreshPlaywrightStatus();
 setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
+setInterval(refreshPlaywrightStatus, 5000);

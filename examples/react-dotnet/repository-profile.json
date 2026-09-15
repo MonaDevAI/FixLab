@@ -45,6 +45,15 @@
     "workingDirectory": "frontend",
     "package": "@playwright/test",
     "browser": "chromium",
+    "authentication": {
+      "command": "npm run test:e2e:auth",
+      "environment": {
+        "E2E_START": "npm start"
+      },
+      "statusPaths": [
+        "e2e/.auth/user.json"
+      ]
+    },
     "channel": "msedge"
   },
   "environments": ["local", "development", "integration"],

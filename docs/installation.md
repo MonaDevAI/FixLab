@@ -1,13 +1,14 @@
 # Installation
 
-FixLab is an Agency Copilot-powered workflow. Install and authenticate Agency
-before installing FixLab.
+FixLab supports Agency Copilot and direct GitHub Copilot CLI execution. Install
+and authenticate the runtime selected for the local runner before installing
+FixLab.
 
 ## Prerequisites
 
 The machine running FixLab needs:
 
-- Agency with GitHub Copilot CLI support
+- Agency with GitHub Copilot CLI support, or GitHub Copilot CLI directly
 - Git
 - Node.js 18 or later
 - PowerShell 7
@@ -21,15 +22,19 @@ Azure DevOps work items. Authenticate with `az login` using the developer
 identity that already has access to the requested organization and project.
 FixLab does not persist the resulting Azure DevOps resource token.
 
-Use your organization's supported Agency installation and authentication
-instructions. Verify the runtime before continuing:
+Agency remains the default compatibility runtime. Use your organization's
+supported installation and authentication instructions, then verify:
 
 ```powershell
 agency --version
 agency copilot
 ```
 
-FixLab does not install Agency or manage Agency authentication.
+For direct mode, install and authenticate GitHub Copilot CLI, then verify
+`copilot --help`. Select direct mode with `--runtime copilot` or
+`FIXLAB_RUNTIME=copilot`.
+
+FixLab does not install either runtime or manage its authentication.
 Installing FixLab does not start a server or background service. The local
 dashboard starts only when you run `fixlab dashboard`.
 
@@ -42,8 +47,8 @@ npm install --global github:MonaDevAI/FixLab
 fixlab --help
 ```
 
-This installs the CLI, dashboard assets, and packaged Agency plugin. Agency
-itself remains a separate prerequisite.
+This installs the CLI, dashboard assets, and packaged FixLab plugin. The
+selected runtime remains a separate prerequisite.
 
 After `fixlab init` and profile configuration, review and run the target
 repository's own dependency restore commands:
@@ -158,7 +163,7 @@ The command checks:
 - The .NET SDK selected by the target repository, including any
   `global.json` requirement
 - PowerShell
-- Agency
+- The selected Agency or GitHub Copilot CLI runtime
 - Repository-local Playwright package
 - A successful headless launch of the configured Playwright browser
 - The FixLab repository profile
@@ -182,7 +187,16 @@ The repository profile controls the Playwright check:
     "workingDirectory": "frontend",
     "package": "@playwright/test",
     "browser": "chromium",
-    "channel": "msedge"
+    "channel": "msedge",
+    "authentication": {
+      "command": "npm run test:e2e:auth",
+      "environment": {
+        "E2E_START": "npm start"
+      },
+      "statusPaths": [
+        "e2e/.auth/user.json"
+      ]
+    }
   }
 }
 ```
@@ -191,12 +205,17 @@ The repository profile controls the Playwright check:
 installed branded browser such as Microsoft Edge. Omit `channel` when the
 repository uses Playwright's bundled Chromium.
 
+The optional `authentication` block enables the dashboard's **Check status**
+and **Connect Playwright** controls. `statusPaths` are checked for existence
+only; FixLab never reads or returns their browser-state contents.
+
 ## Run FixLab
 
 Start the local dashboard from an onboarded repository:
 
 ```powershell
 fixlab dashboard
+fixlab dashboard --runtime copilot
 ```
 
 It binds only to `127.0.0.1`, uses port `4317` by default, and opens the system
@@ -228,15 +247,22 @@ Validate a pull request without changing it:
 fixlab validate --pr 123
 ```
 
-Internally, the CLI launches the packaged plugin through:
+Agency mode launches:
 
 ```powershell
 agency copilot --plugin-dir <installed-fixlab-package> --agent fixlab:fixlab
 ```
 
-The dashboard uses the same plugin resolution. Closing the dashboard server
-terminates only its active Agency child process; it does not terminate
-unrelated repository, browser, or developer processes.
+Direct mode launches:
+
+```powershell
+copilot --plugin-dir <installed-fixlab-package> --agent fixlab
+```
+
+The dashboard uses the same plugin resolution and streams long prompts through
+standard input. Closing it terminates only its tracked runtime and Playwright
+authentication handles; it does not terminate unrelated repository, browser,
+or developer processes.
 
 ## Run the plugin without installing the CLI
 
@@ -244,6 +270,7 @@ From a FixLab checkout:
 
 ```powershell
 agency copilot --plugin-dir . --agent fixlab:fixlab
+copilot --plugin-dir . --agent fixlab
 ```
 
 ## Update or uninstall
@@ -260,5 +287,5 @@ To remove the CLI:
 npm uninstall --global @fixlab/cli
 ```
 
-FixLab does not remove Agency, repository profiles, worktrees, evidence, or
-application dependencies when the CLI is uninstalled.
+FixLab does not remove Agency, GitHub Copilot CLI, repository profiles,
+worktrees, evidence, or application dependencies when the CLI is uninstalled.

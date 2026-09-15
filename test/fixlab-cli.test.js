@@ -32,6 +32,8 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /fixlab prepare/);
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
+  assert.match(result.stdout, /--runtime <agency\|copilot>/);
+  assert.match(result.stdout, /FIXLAB_RUNTIME/);
   assert.match(result.stdout, /127\.0\.0\.1:4317/);
 });
 
@@ -368,4 +370,62 @@ test("run launches the Agency-resolved FixLab agent", () => {
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+test("run launches the FixLab plugin directly through Copilot", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "copilot.cmd" : "copilot"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\nset /p PROMPT=\r\necho ARGS:%*\r\necho PROMPT:%PROMPT%\r\n"
+        : "#!/bin/sh\nIFS= read -r prompt\nprintf 'ARGS:%s\\nPROMPT:%s\\n' \"$*\" \"$prompt\"\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(
+      [
+        "run",
+        repository,
+        "--runtime",
+        "copilot",
+        "--",
+        "repair",
+        "the",
+        "defect"
+      ],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      }
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab/);
+    assert.match(result.stdout, /--autopilot/);
+    assert.match(result.stdout, /PROMPT:repair the defect/);
+    assert.doesNotMatch(result.stdout, /--interactive repair the defect/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("runtime selection rejects unsupported values", () => {
+  const result = run(
+    ["run", "--runtime", "unknown", "--", "validate"],
+    process.cwd()
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /runtime must be one of: agency, copilot/);
 });

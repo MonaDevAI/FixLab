@@ -29,7 +29,7 @@ operations. Treat every runner as privileged engineering infrastructure.
   public network endpoint.
 - Installation never starts a listener. `fixlab dashboard` is an explicit,
   foreground local command.
-- The dashboard accepts one job at a time and executes Agency with the selected
+- The dashboard accepts one job at a time and executes the selected runtime with the
   repository as its working directory.
 - Validate-only dashboard jobs prohibit edits, commits, pushes, and pull
   request creation or updates.

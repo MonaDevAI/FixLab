@@ -7,7 +7,7 @@ repository.
 
 A FixLab runner typically needs:
 
-- Agency Copilot
+- Agency Copilot or GitHub Copilot CLI
 - Git
 - Node.js
 - PowerShell 7
@@ -41,7 +41,41 @@ The first command prints the frontend and backend restore plan without making
 changes. The approved command runs only `frontendRestore` and `backendRestore`
 from the repository profile in their configured application directories.
 
-Run `fixlab doctor` after preparation.
+Run `fixlab doctor` after preparation. Agency is the default runtime. To run
+the packaged plugin directly through GitHub Copilot CLI, use:
+
+```powershell
+fixlab doctor --runtime copilot
+fixlab dashboard --runtime copilot
+```
+
+The same selection can be made with `FIXLAB_RUNTIME=copilot`.
+
+To enable the dashboard authentication controls, define the repository-owned
+login command and the local files or directories that prove the session is
+ready:
+
+```json
+{
+  "browserAutomation": {
+    "workingDirectory": "frontend",
+    "authentication": {
+      "command": "npm run test:e2e:auth",
+      "environment": {
+        "E2E_START": "npm start"
+      },
+      "statusPaths": [
+        "e2e/.auth/user.json"
+      ]
+    }
+  }
+}
+```
+
+Do not place credentials, tokens, cookies, or browser-state contents in the
+profile. **Connect Playwright** runs only the configured local command.
+**Check status** reports whether every configured path exists without reading
+or returning its contents.
 
 Start the local dashboard explicitly:
 
@@ -68,6 +102,10 @@ While a job is running, the submit action changes to **Add to queue**. Up to 20
 pending jobs are shown by position. A passed job starts the next automatically;
 a blocked or failed job pauses the queue so its action-needed state remains
 available for same-session resume.
+Use **Add comment to current job** for a new instruction that belongs to the
+active bug batch or existing pull request. FixLab queues the text for the same
+session and delivers it after the current agent turn instead of creating a
+separate job.
 
 The request field should contain only the bug or required enhancement. Do not
 copy profile-owned paths, commands, ports, systems, or environment choices into
@@ -134,7 +172,8 @@ When a stage is blocked, the dashboard displays an **Action needed** panel.
 Enter the missing prerequisite, safe test record, approval, or manual result
 and resume. Failed jobs can be retried with corrected details, and completed
 jobs can accept one focused addition and update the existing pull request.
-FixLab resumes the same Agency session rather than starting diagnosis again.
+FixLab resumes the same selected-runtime session rather than starting
+diagnosis again.
 A controlled skip remains visibly recorded as an unverified risk.
 
 For efficient repeat work in the same repository, FixLab reads the profile and

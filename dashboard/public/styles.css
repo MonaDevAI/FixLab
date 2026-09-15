@@ -190,6 +190,13 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .75rem;
+  margin-top: 1rem;
+}
+
 .readiness,
 .badge {
   padding: .4rem .65rem;

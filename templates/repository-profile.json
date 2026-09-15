@@ -53,7 +53,12 @@
   "browserAutomation": {
     "workingDirectory": "frontend",
     "package": "@playwright/test",
-    "browser": "chromium"
+    "browser": "chromium",
+    "authentication": {
+      "command": "",
+      "environment": {},
+      "statusPaths": []
+    }
   },
   "environments": [
     "local",
