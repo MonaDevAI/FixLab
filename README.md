@@ -63,6 +63,7 @@ passed, what was skipped, and what still needs human attention.
    updating the pull request.
 
    ```shell
+   fixlab prepare
    fixlab doctor
    fixlab setup-playwright
    fixlab validate --pr 123

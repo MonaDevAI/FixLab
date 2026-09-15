@@ -29,6 +29,7 @@ test("help lists supported commands", () => {
 
   assert.equal(result.status, 0);
   assert.match(result.stdout, /fixlab init/);
+  assert.match(result.stdout, /fixlab prepare/);
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
   assert.match(result.stdout, /127\.0\.0\.1:4317/);
@@ -177,6 +178,57 @@ test("doctor launches the configured Playwright browser", () => {
     assert.match(
       result.stdout,
       /PASS  Playwright browser \(chromium channel msedge launched successfully\)/
+    );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("prepare plans and runs repository-owned restore commands", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.validation.commands.frontendRestore = "node prepare.js";
+    profile.validation.commands.backendRestore = "node prepare.js";
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    for (const application of ["frontend", "backend/src"]) {
+      const workingDirectory = join(repository, application);
+      mkdirSync(workingDirectory, { recursive: true });
+      writeFileSync(
+        join(workingDirectory, "prepare.js"),
+        'require("node:fs").writeFileSync("prepared.txt", "ready");'
+      );
+    }
+
+    const planned = run(["prepare", repository], repository);
+    assert.equal(planned.status, 0);
+    assert.match(planned.stdout, /Repository preparation plan/);
+    assert.match(planned.stdout, /No commands executed/);
+    assert.equal(
+      existsSync(join(repository, "frontend", "prepared.txt")),
+      false
+    );
+
+    const prepared = run(["prepare", repository, "--yes"], repository);
+    assert.equal(prepared.status, 0);
+    assert.match(prepared.stdout, /PASS  frontend restore/);
+    assert.match(prepared.stdout, /PASS  backend restore/);
+    assert.equal(
+      readFileSync(join(repository, "frontend", "prepared.txt"), "utf8"),
+      "ready"
+    );
+    assert.equal(
+      readFileSync(join(repository, "backend", "src", "prepared.txt"), "utf8"),
+      "ready"
     );
   } finally {
     rmSync(repository, { recursive: true, force: true });

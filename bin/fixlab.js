@@ -39,6 +39,7 @@ function printUsage() {
 
 Usage:
   fixlab init [repository]
+  fixlab prepare [repository] [--yes]
   fixlab doctor [repository]
   fixlab setup-playwright [repository] [--yes]
   fixlab run [repository] [--] [request...]
@@ -48,6 +49,7 @@ Usage:
 
 Commands:
   init      Add the FixLab repository profile template.
+  prepare   Plan or run repository-owned frontend and backend restore commands.
   doctor    Check required tools and repository configuration.
   setup-playwright
             Plan or install the repository-local Playwright package and browser.
@@ -286,6 +288,80 @@ function doctor(repository) {
   }
 
   console.log(`FixLab is ready for ${profile.name ?? repository}.`);
+  return 0;
+}
+
+function prepare(repository, approved) {
+  const { profile, error } = loadProfile(repository);
+  if (error) {
+    console.error(
+      `Cannot prepare repository because ${error}. Run "fixlab init ${repository}" first.`
+    );
+    return 1;
+  }
+
+  const commands = profile.validation?.commands ?? {};
+  const steps = [
+    ["frontend", commands.frontendRestore],
+    ["backend", commands.backendRestore]
+  ]
+    .filter(([, command]) => typeof command === "string" && command.trim())
+    .map(([application, command]) => ({
+      application,
+      command: command.trim(),
+      workingDirectory: resolve(
+        repository,
+        profile.applications?.[application]?.workingDirectory ?? "."
+      )
+    }));
+
+  if (steps.length === 0) {
+    console.error(
+      "Repository profile has no frontendRestore or backendRestore command."
+    );
+    return 1;
+  }
+
+  for (const step of steps) {
+    if (!existsSync(step.workingDirectory)) {
+      console.error(
+        `${step.application} restore directory is missing: ${step.workingDirectory}`
+      );
+      return 1;
+    }
+  }
+
+  console.log("Repository preparation plan:");
+  for (const step of steps) {
+    console.log(
+      `  ${step.application}: ${step.command} (${step.workingDirectory})`
+    );
+  }
+
+  if (!approved) {
+    console.log(
+      "No commands executed. Review the plan and rerun with --yes to prepare the repository."
+    );
+    return 0;
+  }
+
+  for (const step of steps) {
+    const result = spawnSync(step.command, {
+      cwd: step.workingDirectory,
+      stdio: "inherit",
+      shell: true,
+      windowsHide: true
+    });
+    if (result.status !== 0) {
+      console.error(
+        `${step.application} restore failed: ${step.command}`
+      );
+      return result.status ?? 1;
+    }
+    console.log(`PASS  ${step.application} restore (${step.command})`);
+  }
+
+  console.log("Repository preparation completed.");
   return 0;
 }
 
@@ -564,6 +640,14 @@ async function main(args) {
 
   if (command === "doctor") {
     return doctor(resolveRepository(rest[0]));
+  }
+
+  if (command === "prepare") {
+    const repositoryArgument = rest.find((value) => !value.startsWith("-"));
+    return prepare(
+      resolveRepository(repositoryArgument),
+      rest.includes("--yes")
+    );
   }
 
   if (command === "setup-playwright") {

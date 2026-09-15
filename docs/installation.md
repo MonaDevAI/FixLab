@@ -45,6 +45,19 @@ fixlab --help
 This installs the CLI, dashboard assets, and packaged Agency plugin. Agency
 itself remains a separate prerequisite.
 
+After `fixlab init` and profile configuration, review and run the target
+repository's own dependency restore commands:
+
+```powershell
+fixlab prepare
+fixlab prepare --yes
+```
+
+`fixlab prepare` executes only the configured `frontendRestore` and
+`backendRestore` commands, and only after `--yes`. This keeps a fresh
+installation reproducible without hard-coding npm or .NET assumptions into
+FixLab.
+
 FixLab can inspect the repository profile and prepare the repository-local
 Playwright installation commands:
 

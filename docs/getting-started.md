@@ -30,7 +30,18 @@ Install only the tools required by the repository profile.
 6. Document the repository's process ownership and cleanup rules.
 7. Validate the profile before enabling pull request creation.
 
-Run `fixlab doctor` after editing the profile.
+Review the repository-owned restore commands, then prepare the fresh checkout:
+
+```powershell
+fixlab prepare
+fixlab prepare --yes
+```
+
+The first command prints the frontend and backend restore plan without making
+changes. The approved command runs only `frontendRestore` and `backendRestore`
+from the repository profile in their configured application directories.
+
+Run `fixlab doctor` after preparation.
 
 Start the local dashboard explicitly:
 
