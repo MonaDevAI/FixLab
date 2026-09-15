@@ -478,6 +478,10 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.match(receivedPrompt, /tests, type-checks, and builds/i);
     assert.match(receivedPrompt, /applications defined by the repository profile/i);
     assert.match(receivedPrompt, /repository-defined live test/i);
+    assert.match(
+      receivedPrompt,
+      /save at least one non-sensitive screenshot/i
+    );
     assert.match(receivedPrompt, /Do not invent or hardcode environment choices/i);
     assert.match(receivedPrompt, /Create or update the pull request only after all required gates pass/i);
     assert.match(receivedPrompt, /authentication, unsafe-data approval/i);
@@ -674,6 +678,19 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     join(repository, "playwright-auth.js"),
     'const fs = require("node:fs"); fs.mkdirSync("e2e/.auth", { recursive: true }); fs.writeFileSync("e2e/.auth/user.json", "{}");'
   );
+  const screenshotDirectory = join(
+    repository,
+    "test-results",
+    "hold-regression"
+  );
+  mkdirSync(screenshotDirectory, { recursive: true });
+  const screenshot = Buffer.from([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+  ]);
+  writeFileSync(
+    join(screenshotDirectory, "hold-option.png"),
+    screenshot
+  );
   const { dashboard, url } = await startDashboard(
     repository,
     () => ({ completion: new Promise(() => {}), terminate() {} })
@@ -702,6 +719,24 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.equal(status.body.ready, true);
     assert.equal(status.body.lastResult.ok, true);
     assert.equal(status.body.paths[0].path, "e2e/.auth/user.json");
+
+    const artifacts = await jsonRequest(
+      url,
+      "/api/playwright/artifacts"
+    );
+    assert.equal(artifacts.response.status, 200);
+    assert.equal(artifacts.body.artifacts.length, 1);
+    assert.equal(artifacts.body.artifacts[0].name, "hold-option.png");
+    assert.match(
+      artifacts.body.artifacts[0].relativePath,
+      /test-results[\\/]hold-regression[\\/]hold-option\.png/
+    );
+    const image = await fetch(
+      `${url}${artifacts.body.artifacts[0].url}`
+    );
+    assert.equal(image.status, 200);
+    assert.equal(image.headers.get("content-type"), "image/png");
+    assert.deepEqual(Buffer.from(await image.arrayBuffer()), screenshot);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

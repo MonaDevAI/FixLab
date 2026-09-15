@@ -42,6 +42,27 @@ const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
 const playwrightCheck = document.querySelector("#playwright-check");
 const playwrightConnect = document.querySelector("#playwright-connect");
+const playwrightPanel = document.querySelector(".connection-panel");
+const playwrightEvidence = document.createElement("div");
+playwrightEvidence.className = "playwright-evidence";
+playwrightEvidence.innerHTML = `
+  <div class="section-heading">
+    <h3>Playwright evidence</h3>
+    <button id="playwright-evidence-refresh" type="button">Refresh screenshots</button>
+  </div>
+  <p id="playwright-evidence-guidance" class="guidance">Checking for repository-owned Playwright screenshots.</p>
+  <div id="playwright-evidence-list" class="evidence-gallery"></div>
+`;
+playwrightPanel.append(playwrightEvidence);
+const playwrightEvidenceRefresh = document.querySelector(
+  "#playwright-evidence-refresh"
+);
+const playwrightEvidenceGuidance = document.querySelector(
+  "#playwright-evidence-guidance"
+);
+const playwrightEvidenceList = document.querySelector(
+  "#playwright-evidence-list"
+);
 const metricsPeriod = document.querySelector("#metrics-period");
 const metricBugs = document.querySelector("#metric-bugs");
 const metricCompleted = document.querySelector("#metric-completed");
@@ -256,7 +277,9 @@ function renderPlaywrightStatus(status) {
     status.running ? "running" : status.ready ? "passed" : "blocked"
   }`;
   playwrightStatus.textContent = status.running
-    ? "Connecting"
+    ? status.ready
+      ? "Connected · helper running"
+      : "Authentication open"
     : status.ready
       ? "Connected"
       : status.configured
@@ -278,6 +301,35 @@ async function refreshPlaywrightStatus() {
     renderPlaywrightStatus(await fetchJson("/api/playwright/status"));
   } catch (error) {
     playwrightGuidance.textContent = error.message;
+  }
+}
+
+async function refreshPlaywrightEvidence() {
+  playwrightEvidenceRefresh.disabled = true;
+  try {
+    const body = await fetchJson("/api/playwright/artifacts");
+    playwrightEvidenceList.replaceChildren();
+    playwrightEvidenceGuidance.textContent =
+      body.artifacts.length > 0
+        ? `${body.artifacts.length} recent screenshot(s)`
+        : "No Playwright screenshots found. Successful live tests must save evidence under test-results.";
+    for (const artifact of body.artifacts) {
+      const link = document.createElement("a");
+      link.href = artifact.url;
+      link.target = "_blank";
+      link.rel = "noreferrer";
+      const image = document.createElement("img");
+      image.src = artifact.url;
+      image.alt = `Playwright evidence: ${artifact.name}`;
+      const caption = document.createElement("span");
+      caption.textContent = artifact.relativePath;
+      link.append(image, caption);
+      playwrightEvidenceList.append(link);
+    }
+  } catch (error) {
+    playwrightEvidenceGuidance.textContent = error.message;
+  } finally {
+    playwrightEvidenceRefresh.disabled = false;
   }
 }
 
@@ -819,6 +871,10 @@ jobInputSubmit.addEventListener("click", async () => {
 });
 
 playwrightCheck.addEventListener("click", refreshPlaywrightStatus);
+playwrightEvidenceRefresh.addEventListener(
+  "click",
+  refreshPlaywrightEvidence
+);
 
 playwrightConnect.addEventListener("click", async () => {
   formError.textContent = "";
@@ -836,6 +892,8 @@ playwrightConnect.addEventListener("click", async () => {
 refresh();
 refreshMetrics();
 refreshPlaywrightStatus();
+refreshPlaywrightEvidence();
 setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);
+setInterval(refreshPlaywrightEvidence, 10000);

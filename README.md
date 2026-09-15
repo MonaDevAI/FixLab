@@ -361,6 +361,11 @@ The dashboard includes **Check status** and **Connect Playwright** controls when
 the repository profile defines `browserAutomation.authentication`. Status is
 based only on repository-owned local state paths; authentication output and
 browser-state contents are not returned to the browser or stored by FixLab.
+It also displays up to 20 recent PNG, JPEG, or WebP screenshots from
+repository-owned `test-results`, `playwright-report`, and `artifacts`
+directories. Each Playwright live test must save at least one non-sensitive
+screenshot under `test-results`; authentication-state files are never scanned
+or served.
 While a job is running, **Add comment to current job** queues a focused
 instruction for the same runtime session. It is delivered automatically after
 the current agent turn and does not create another dashboard job or pull

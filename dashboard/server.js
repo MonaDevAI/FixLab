@@ -4,6 +4,7 @@ import {
   createReadStream,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -17,6 +18,7 @@ import {
   extname,
   isAbsolute,
   join,
+  relative,
   resolve
 } from "node:path";
 import {
@@ -37,6 +39,7 @@ export const MAX_CACHE_ENTRIES = 20;
 export const MAX_CACHE_BYTES = 64 * 1024;
 export const MAX_METRICS_ENTRIES = 500;
 export const MAX_QUEUED_JOBS = 20;
+export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
 export const FIXLAB_STAGES = [
   "intake",
@@ -250,6 +253,7 @@ ${requestGuidance}
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
 - ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
 - Start only the applications defined by the repository profile, then execute the repository-defined live test against the allowed required system or environment from that profile. Do not invent or hardcode environment choices.
+- For every Playwright live test, save at least one non-sensitive screenshot under the test's repository-owned test-results directory so the dashboard can display the browser evidence.
 - ${playwrightOnly ? "Collect evidence for required setup, authentication readiness, application startup, the focused Playwright result, skipped gates, blockers, and remaining risks." : "Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks."}
 - ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update the pull request only after all required gates pass, and include the collected evidence."}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
@@ -1193,6 +1197,76 @@ function playwrightAuthenticationStatus(repository, connection) {
   };
 }
 
+function playwrightArtifactRoots(repository) {
+  const configuration = playwrightAuthenticationConfig(repository);
+  return ["test-results", "playwright-report", "artifacts"]
+    .map((directory) => resolve(configuration.workingDirectory, directory))
+    .filter((directory) => existsSync(directory));
+}
+
+function collectPlaywrightArtifacts(root, directory = root, depth = 0) {
+  if (depth > 6) {
+    return [];
+  }
+  const files = [];
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (entry.isSymbolicLink()) {
+      continue;
+    }
+    const path = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...collectPlaywrightArtifacts(root, path, depth + 1));
+      continue;
+    }
+    const extension = extname(entry.name).toLowerCase();
+    if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+      continue;
+    }
+    const resolvedPath = realpathSync(path);
+    const relativePath = relative(root, resolvedPath);
+    if (
+      relativePath.startsWith("..") ||
+      isAbsolute(relativePath)
+    ) {
+      continue;
+    }
+    const stats = statSync(resolvedPath);
+    if (stats.size > MAX_SCREENSHOT_BYTES) {
+      continue;
+    }
+    files.push({
+      id: createHash("sha256").update(resolvedPath).digest("hex").slice(0, 24),
+      path: resolvedPath,
+      name: basename(resolvedPath),
+      relativePath,
+      bytes: stats.size,
+      updatedAt: stats.mtime.toISOString(),
+      mimeType:
+        extension === ".png"
+          ? "image/png"
+          : extension === ".webp"
+            ? "image/webp"
+            : "image/jpeg"
+    });
+  }
+  return files;
+}
+
+function listPlaywrightArtifacts(repository) {
+  return playwrightArtifactRoots(repository)
+    .flatMap((root) =>
+      collectPlaywrightArtifacts(root).map((artifact) => ({
+        ...artifact,
+        relativePath: join(basename(root), artifact.relativePath)
+      }))
+    )
+    .sort(
+      (left, right) =>
+        Date.parse(right.updatedAt) - Date.parse(left.updatedAt)
+    )
+    .slice(0, MAX_PLAYWRIGHT_ARTIFACTS);
+}
+
 function resetJobForResume(job) {
   const restartIndex =
     job.status === "passed"
@@ -1232,6 +1306,7 @@ export function createDashboardServer({
   const completedJobs = [];
   const artifactDirectories = new Set();
   const playwrightConnection = { handle: null, lastResult: null };
+  const playwrightArtifacts = new Map();
   const cacheContext = createCacheContext(resolvedRepository);
   const metricsPath = cacheContext
     ? join(dirname(cacheContext.cachePath), "dashboard-metrics.json")
@@ -1763,6 +1838,55 @@ export function createDashboardServer({
           playwrightConnection
         )
       );
+      return;
+    }
+
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/playwright/artifacts"
+    ) {
+      let artifacts;
+      try {
+        artifacts = listPlaywrightArtifacts(resolvedRepository);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      playwrightArtifacts.clear();
+      for (const artifact of artifacts) {
+        playwrightArtifacts.set(artifact.id, artifact);
+      }
+      sendJson(response, 200, {
+        artifacts: artifacts.map(
+          ({ id, name, relativePath, bytes, updatedAt }) => ({
+            id,
+            name,
+            relativePath,
+            bytes,
+            updatedAt,
+            url: `/api/playwright/artifacts/${id}`
+          })
+        )
+      });
+      return;
+    }
+
+    const artifactMatch = requestUrl.pathname.match(
+      /^\/api\/playwright\/artifacts\/([a-f0-9]{24})$/
+    );
+    if (request.method === "GET" && artifactMatch) {
+      const artifact = playwrightArtifacts.get(artifactMatch[1]);
+      if (!artifact || !existsSync(artifact.path)) {
+        sendJson(response, 404, { error: "Playwright artifact not found" });
+        return;
+      }
+      response.writeHead(200, {
+        "Content-Type": artifact.mimeType,
+        "Content-Length": artifact.bytes,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff"
+      });
+      createReadStream(artifact.path).pipe(response);
       return;
     }
 
