@@ -31,7 +31,7 @@
                 placeholder="123, 456, or one URL/ID per line"></textarea>
               <button id="load-work-item" type="button">Load bugs</button>
             </div>
-            <p class="guidance">Load up to 20 unique bugs in one authenticated batch. ID-only lookup uses Azure DevOps settings from the repository profile. Private attachments are not downloaded.</p>
+            <p class="guidance">Load up to 20 unique bugs in one authenticated batch. ID-only lookup uses Azure DevOps settings from the repository profile. Up to five attached or embedded images are loaded locally; non-image attachments are not downloaded.</p>
             <div id="work-item-summary" class="loaded-summary" hidden>
               <strong id="work-item-count"></strong>
               <ul id="work-item-list" class="work-item-list"></ul>
@@ -43,7 +43,7 @@
           <label for="screenshots">Screenshots (optional)</label>
           <input id="screenshots" name="screenshots" type="file"
             accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple>
-          <p class="guidance">Paste images into the bug description with Ctrl+V, or select up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Files remain local and are removed when replaced or when the dashboard stops.</p>
+          <p class="guidance">Copy an image and press Ctrl+V anywhere on this page, or select up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Other clipboard image formats are converted to PNG. Files remain local and are removed when replaced or when the dashboard stops.</p>
           <ul id="screenshot-list" class="file-list"></ul>
           <fieldset>
             <legend>Request type</legend>

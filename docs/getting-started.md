@@ -103,15 +103,19 @@ unavailable. The access token is used only by the local HTTPS request and is
 not shown or retained. FixLab loads the newest 20 non-deleted comments along
 with the work-item text fields. If comment access alone fails, the selected bug
 shows an explicit comments warning and remains available. Comment attachments
-and other private work-item attachments are never downloaded automatically.
+or attached files that are PNG, JPEG, or WebP are loaded locally within the
+same screenshot limits. Non-image attachments are never downloaded
+automatically.
 
 Up to five PNG, JPEG, or WebP screenshots may be attached, with limits of
-2 MiB per file and 8 MiB total. Select files or click the main bug/request
-textarea and press `Ctrl+V` after copying an image; a local thumbnail confirms
-the paste. Images are stored locally with generated names outside tracked
-source, passed to the agent by local path, and excluded from durable metadata
-and metrics. Clean shutdown and job replacement remove them; directories older
-than seven days are pruned when the dashboard starts.
+2 MiB per file and 8 MiB total. Select files or copy an image and press
+`Ctrl+V` anywhere on the dashboard; a local thumbnail confirms the paste.
+Other browser-readable clipboard image formats are converted to PNG. Images
+loaded from Azure DevOps share these count and size limits. All images are
+stored locally with generated names outside tracked source, passed to the agent
+by local path, and excluded from durable metadata and metrics. Clean shutdown
+and job replacement remove them; directories older than seven days are pruned
+when the dashboard starts.
 
 After submission, the agent owns the complete lifecycle: acceptance or fix
 contract, diagnosis or affected-surface inspection, smallest required

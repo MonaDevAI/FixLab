@@ -34,6 +34,28 @@ function executor({ onOutput }) {
   };
 }
 
+const loadedPng = Buffer.from([
+  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+]).toString("base64");
+
+const workItemLoader = async () => ({
+  id: 123,
+  title: "Loaded browser bug",
+  state: "Active",
+  workItemType: "Bug",
+  webUrl:
+    "https://dev.azure.com/example/Example/_workitems/edit/123",
+  comments: [],
+  screenshots: [
+    {
+      name: "123-bug.png",
+      mimeType: "image/png",
+      base64: loadedPng
+    }
+  ]
+});
+workItemLoader.loadMany = async () => [await workItemLoader()];
+
 test.beforeAll(async () => {
   repository = mkdtempSync(join(tmpdir(), "fixlab-e2e-"));
   const profileDirectory = join(repository, ".github", "fixlab");
@@ -46,7 +68,8 @@ test.beforeAll(async () => {
   dashboard = createDashboardServer({
     repository,
     packageRoot,
-    executor
+    executor,
+    workItemLoader
   });
   await new Promise((resolve, reject) => {
     dashboard.server.once("error", reject);
@@ -83,6 +106,12 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
   await expect(
     page.getByPlaceholder("123, 456, or one URL/ID per line")
   ).toBeVisible();
+  await page
+    .getByPlaceholder("123, 456, or one URL/ID per line")
+    .fill("123");
+  await page.getByRole("button", { name: "Load bugs" }).click();
+  await expect(page.getByAltText("Preview of 123-bug.png")).toBeVisible();
+  await expect(page.getByText("1 image(s)")).toBeVisible();
   await expect(page.getByText("Continue this job")).toBeHidden();
   await expect(page.getByText("Workflow statistics")).toBeVisible();
 });
@@ -106,7 +135,7 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
   });
   expect(textPastePrevented).toBe(false);
 
-  const imagePastePrevented = await requestField.evaluate((element) => {
+  const imagePastePrevented = await page.locator("body").evaluate((element) => {
     const transfer = new DataTransfer();
     transfer.items.add(
       new File(

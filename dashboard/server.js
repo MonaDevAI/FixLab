@@ -11,10 +11,20 @@ import {
   writeFileSync
 } from "node:fs";
 import { createServer } from "node:http";
-import { dirname, extname, isAbsolute, join, resolve } from "node:path";
+import {
+  basename,
+  dirname,
+  extname,
+  isAbsolute,
+  join,
+  resolve
+} from "node:path";
 import {
   createAzureDevOpsLoader,
   loadRepositoryProfile,
+  MAX_SCREENSHOT_BYTES,
+  MAX_SCREENSHOT_TOTAL_BYTES,
+  MAX_SCREENSHOTS,
   pruneArtifactDirectories,
   removeArtifactDirectory,
   storeScreenshots
@@ -201,7 +211,7 @@ The bounded bug evidence is included in the request below.
 ` : ""}
 ${screenshotPaths.length > 0 ? `User-provided screenshots stored locally for this job:
 ${screenshotPaths.map((path) => `- ${path}`).join("\n")}
-Inspect only these local files. Do not search for or download Azure DevOps attachments.
+Inspect only these local files. Do not search for or download additional Azure DevOps attachments.
 ` : ""}
 ${cacheSummary ? `
 Verified same-repository cache summary for the current HEAD and profile:
@@ -842,6 +852,56 @@ function validateWorkItemSummary(value) {
   return result;
 }
 
+function validateLoadedScreenshots(value, state) {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("loaded Azure DevOps screenshots must be an array");
+  }
+  const result = [];
+  for (const screenshot of value) {
+    if (state.count >= MAX_SCREENSHOTS) {
+      throw new Error(
+        `loaded Azure DevOps screenshots exceed the ${MAX_SCREENSHOTS}-image limit`
+      );
+    }
+    if (!screenshot || typeof screenshot !== "object") {
+      throw new Error("loaded Azure DevOps screenshots must be objects");
+    }
+    const name =
+      typeof screenshot.name === "string" ? screenshot.name.trim() : "";
+    const mimeType =
+      typeof screenshot.mimeType === "string"
+        ? screenshot.mimeType.toLowerCase()
+        : "";
+    const base64 =
+      typeof screenshot.base64 === "string" ? screenshot.base64 : "";
+    if (
+      !name ||
+      name !== basename(name) ||
+      name.includes("..") ||
+      !["image/png", "image/jpeg", "image/webp"].includes(mimeType) ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+        base64
+      )
+    ) {
+      throw new Error("loaded Azure DevOps screenshot metadata is invalid");
+    }
+    const bytes = Buffer.from(base64, "base64").length;
+    if (bytes > MAX_SCREENSHOT_BYTES) {
+      throw new Error("loaded Azure DevOps screenshot exceeds 2 MiB");
+    }
+    state.totalBytes += bytes;
+    if (state.totalBytes > MAX_SCREENSHOT_TOTAL_BYTES) {
+      throw new Error("loaded Azure DevOps screenshots exceed 8 MiB total");
+    }
+    state.count += 1;
+    result.push({ name, mimeType, base64 });
+  }
+  return result;
+}
+
 function appendOutput(job, stream, text) {
   const normalized = text.replace(/\r\n/g, "\n");
   job.partial[stream] += normalized;
@@ -1178,7 +1238,19 @@ export function createDashboardServer({
                   workItemLoader({ workItem, profile })
                 )
               );
-        const workItems = loaded.map(validateWorkItemSummary);
+        const screenshotState = { count: 0, totalBytes: 0 };
+        const workItems = loaded.map((item) => {
+          const workItem = validateWorkItemSummary(item);
+          workItem.screenshots = validateLoadedScreenshots(
+            item.screenshots,
+            screenshotState
+          );
+          workItem.imagesWarning =
+            typeof item.imagesWarning === "string"
+              ? item.imagesWarning.trim().slice(0, 500)
+              : "";
+          return workItem;
+        });
         sendJson(response, 200, {
           workItem: workItems.length === 1 ? workItems[0] : null,
           workItems

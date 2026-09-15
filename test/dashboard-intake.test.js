@@ -279,6 +279,75 @@ test("Azure DevOps loader bounds comments and reports comment-only failures", as
   );
 });
 
+test("Azure DevOps loader includes bounded attached and embedded images", async () => {
+  const requestedImages = [];
+  const loader = createAzureDevOpsLoader({
+    tokenProvider: () => "image-token",
+    requestJson: async (url) => {
+      if (url.includes("/comments?")) {
+        return {
+          comments: [
+            {
+              text:
+                '<p>Inline</p><img src="https://dev.azure.com/profile-org/Profile%20Project/_apis/wit/attachments/inline?fileName=inline.png&amp;download=true">'
+            }
+          ]
+        };
+      }
+      return {
+        id: 93,
+        fields: {
+          "System.Id": 93,
+          "System.Title": "Bug with images"
+        },
+        relations: [
+          {
+            rel: "AttachedFile",
+            url:
+              "https://dev.azure.com/profile-org/Profile%20Project/_apis/wit/attachments/attached",
+            attributes: { name: "evidence.png" }
+          },
+          {
+            rel: "AttachedFile",
+            url:
+              "https://dev.azure.com/profile-org/Profile%20Project/_apis/wit/attachments/ignored",
+            attributes: { name: "notes.txt" }
+          }
+        ]
+      };
+    },
+    requestBuffer: async (url, token) => {
+      assert.equal(token, "image-token");
+      requestedImages.push(url);
+      return { buffer: png, contentType: "image/png" };
+    }
+  });
+
+  const item = await loader({
+    workItem: "93",
+    profile: {
+      azureDevOps: {
+        organization: "profile-org",
+        project: "Profile Project"
+      }
+    }
+  });
+
+  assert.equal(requestedImages.length, 2);
+  assert.deepEqual(
+    item.screenshots.map(({ name, mimeType, base64 }) => ({
+      name,
+      mimeType,
+      bytes: Buffer.from(base64, "base64").length
+    })),
+    [
+      { name: "93-evidence.png", mimeType: "image/png", bytes: 8 },
+      { name: "93-inline.png", mimeType: "image/png", bytes: 8 }
+    ]
+  );
+  assert.equal(item.imagesWarning, "");
+});
+
 test("stores generated screenshot files and rejects unsafe uploads", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-artifacts-"));
   let stored;

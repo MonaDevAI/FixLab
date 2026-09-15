@@ -193,6 +193,16 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     acceptanceCriteria: "Loaded acceptance",
     state: "Active",
     workItemType: "Bug",
+    screenshots: [
+      {
+        name: "71-loaded.png",
+        mimeType: "image/png",
+        base64: Buffer.from([
+          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+        ]).toString("base64")
+      }
+    ],
+    imagesWarning: "",
     webUrl:
       "https://dev.azure.com/profile-org/Profile%20Project/_workitems/edit/71"
   };
@@ -228,6 +238,8 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     });
     assert.equal(loaded.response.status, 200);
     assert.equal(loaded.body.workItem.title, "Loaded bug");
+    assert.equal(loaded.body.workItem.screenshots.length, 1);
+    assert.equal(loaded.body.workItem.screenshots[0].name, "71-loaded.png");
     assert.equal(
       loaderInput.profile.azureDevOps.organization,
       "profile-org"
@@ -269,7 +281,10 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     assert.ok(screenshotPath);
     assert.equal(existsSync(screenshotPath), true);
     assert.match(receivedPrompt, /Loaded Azure DevOps selection/);
-    assert.match(receivedPrompt, /Do not search for or download Azure DevOps attachments/);
+    assert.match(
+      receivedPrompt,
+      /Do not search for or download additional Azure DevOps attachments/
+    );
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     const cacheContext = createCacheContext(repository);

@@ -73,11 +73,13 @@ the browser, job state, logs, prompts, or cache.
 The loader keeps ID, title, description, reproduction or acceptance text,
 state, type, web URL, and the newest 20 non-deleted comments after converting
 HTML to text. A comment-request failure becomes a bounded explicit warning
-without hiding the accessible work item. It does not download comment
-attachments or other work-item attachments. User-selected or clipboard-pasted
-PNG, JPEG, or WebP screenshots are validated by count, declared type,
-extension, base64 encoding, signature, per-file size, and total size. Generated
-local files live under the Git directory or a repository-specific OS temporary
+without hiding the accessible work item. The loader discovers supported
+attached files and authenticated embedded-image URLs, downloads at most five
+PNG, JPEG, or WebP images within the shared 2 MiB per-image and 8 MiB total
+limits, and skips non-image attachments. Azure-loaded, user-selected, or
+clipboard-pasted screenshots are validated by count, declared type, extension,
+base64 encoding, signature, per-file size, and total size. Generated local
+files live under the Git directory or a repository-specific OS temporary
 directory. Only their local paths are placed in the job prompt.
 
 Artifacts belong to active or queued dashboard jobs. Replacing a completed

@@ -23,6 +23,12 @@ const imageTypes = new Map([
   ["image/jpeg", new Set([".jpg", ".jpeg"])],
   ["image/webp", new Set([".webp"])]
 ]);
+const imageMimeTypesByExtension = new Map([
+  [".png", "image/png"],
+  [".jpg", "image/jpeg"],
+  [".jpeg", "image/jpeg"],
+  [".webp", "image/webp"]
+]);
 
 function runGit(repository, args) {
   const result = spawnSync("git", args, {
@@ -396,9 +402,154 @@ function defaultRequestJson(url, token) {
   });
 }
 
+function defaultRequestBuffer(url, token) {
+  return new Promise((resolveRequest, reject) => {
+    const request = httpsRequest(
+      url,
+      {
+        method: "GET",
+        headers: {
+          Accept: "image/png,image/jpeg,image/webp",
+          Authorization: `Bearer ${token}`
+        }
+      },
+      (response) => {
+        const chunks = [];
+        let size = 0;
+        response.on("data", (chunk) => {
+          size += chunk.length;
+          if (size <= MAX_SCREENSHOT_BYTES) {
+            chunks.push(chunk);
+          }
+        });
+        response.on("end", () => {
+          if (response.statusCode < 200 || response.statusCode >= 300) {
+            reject(
+              new Error(
+                `Azure DevOps image returned HTTP ${response.statusCode}`
+              )
+            );
+            return;
+          }
+          if (size > MAX_SCREENSHOT_BYTES) {
+            reject(
+              new Error(
+                `Azure DevOps image exceeded ${MAX_SCREENSHOT_BYTES} bytes`
+              )
+            );
+            return;
+          }
+          resolveRequest({
+            buffer: Buffer.concat(chunks),
+            contentType: String(response.headers["content-type"] ?? "")
+              .split(";")[0]
+              .trim()
+              .toLowerCase()
+          });
+        });
+      }
+    );
+    request.setTimeout(15000, () => {
+      request.destroy(new Error("Azure DevOps image request timed out"));
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+function embeddedImageUrls(values) {
+  const urls = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const pattern = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
+    for (const match of value.matchAll(pattern)) {
+      const source = (match[1] ?? match[2] ?? "").replace(/&amp;/gi, "&");
+      try {
+        const url = new URL(source);
+        if (
+          url.protocol === "https:" &&
+          url.hostname.toLowerCase() === "dev.azure.com" &&
+          /\/_apis\/wit\/attachments\//i.test(url.pathname)
+        ) {
+          urls.push(url.toString());
+        }
+      } catch {
+        // Ignore non-URL and relative image sources.
+      }
+    }
+  }
+  return urls;
+}
+
+function imageCandidates(item, fields, comments) {
+  const candidates = [];
+  for (const relation of item?.relations ?? []) {
+    const name =
+      typeof relation?.attributes?.name === "string"
+        ? relation.attributes.name
+        : "";
+    if (
+      relation?.rel === "AttachedFile" &&
+      typeof relation.url === "string" &&
+      imageMimeTypesByExtension.has(extension(name))
+    ) {
+      candidates.push({ url: relation.url, name });
+    }
+  }
+  for (const url of embeddedImageUrls([
+    fields["System.Description"],
+    fields["Microsoft.VSTS.TCM.ReproSteps"],
+    fields["Microsoft.VSTS.Common.AcceptanceCriteria"],
+    ...comments.map((comment) => comment?.text)
+  ])) {
+    const parsed = new URL(url);
+    candidates.push({
+      url,
+      name: parsed.searchParams.get("fileName") ?? ""
+    });
+  }
+  return [
+    ...new Map(
+      candidates
+        .filter(({ url }) => {
+          try {
+            const parsed = new URL(url);
+            return (
+              parsed.protocol === "https:" &&
+              parsed.hostname.toLowerCase() === "dev.azure.com"
+            );
+          } catch {
+            return false;
+          }
+        })
+        .map((candidate) => [candidate.url, candidate])
+    ).values()
+  ];
+}
+
+function downloadedImageName(workItemId, candidate, mimeType, index) {
+  const candidateName = basename(candidate.name || "");
+  const candidateExtension = extension(candidateName);
+  if (
+    candidateName &&
+    imageMimeTypesByExtension.get(candidateExtension) === mimeType
+  ) {
+    return `${workItemId}-${candidateName}`;
+  }
+  const generatedExtension = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp"
+  }[mimeType];
+  return `${workItemId}-azure-image-${index + 1}${generatedExtension}`;
+}
+
 export function createAzureDevOpsLoader({
   tokenProvider = defaultTokenProvider,
-  requestJson = defaultRequestJson
+  requestJson = defaultRequestJson,
+  requestBuffer = defaultRequestBuffer
 } = {}) {
   async function loadTarget(target, token) {
     const apiUrl =
@@ -458,17 +609,77 @@ export function createAzureDevOpsLoader({
         }))
         .filter((comment) => comment.text),
       commentsWarning: commentResult.warning,
+      imageCandidates: imageCandidates(
+        item,
+        fields,
+        commentResponse?.comments ?? []
+      ),
       webUrl
     };
+  }
+
+  async function loadImages(items, token) {
+    let totalBytes = 0;
+    let count = 0;
+    for (const item of items) {
+      item.screenshots = [];
+      item.imagesWarning = "";
+      for (const candidate of item.imageCandidates) {
+        if (count >= MAX_SCREENSHOTS) {
+          item.imagesWarning =
+            "Additional Azure DevOps images were omitted by the five-image limit.";
+          break;
+        }
+        try {
+          const downloaded = await requestBuffer(candidate.url, token);
+          const mimeType =
+            imageTypes.has(downloaded.contentType)
+              ? downloaded.contentType
+              : imageMimeTypesByExtension.get(extension(candidate.name));
+          if (
+            !mimeType ||
+            !hasValidSignature(downloaded.buffer, mimeType)
+          ) {
+            throw new Error("unsupported Azure DevOps image content");
+          }
+          if (
+            totalBytes + downloaded.buffer.length >
+            MAX_SCREENSHOT_TOTAL_BYTES
+          ) {
+            item.imagesWarning =
+              "Additional Azure DevOps images were omitted by the total-size limit.";
+            break;
+          }
+          item.screenshots.push({
+            name: downloadedImageName(
+              item.id,
+              candidate,
+              mimeType,
+              count
+            ),
+            mimeType,
+            base64: downloaded.buffer.toString("base64")
+          });
+          totalBytes += downloaded.buffer.length;
+          count += 1;
+        } catch {
+          item.imagesWarning =
+            "One or more Azure DevOps images could not be loaded.";
+        }
+      }
+      delete item.imageCandidates;
+    }
   }
 
   async function withToken(targets) {
     let token;
     try {
       token = await tokenProvider();
-      return await Promise.all(
+      const items = await Promise.all(
         targets.map((target) => loadTarget(target, token))
       );
+      await loadImages(items, token);
+      return items;
     } catch (error) {
       const message = String(error?.message ?? error);
       if (token && message.includes(token)) {

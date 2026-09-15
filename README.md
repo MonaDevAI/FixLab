@@ -261,12 +261,15 @@ fallback, work-item access, or malformed URLs fail explicitly. Loaded intake
 includes safe text fields such as title, description, reproduction steps,
 acceptance criteria, state, type, web URL, and the newest 20 non-deleted
 comments; HTML is converted to readable text. A comment-only access failure is
-shown explicitly without discarding the rest of the bug. Comment attachments
-and other private work-item attachments are never downloaded automatically.
+shown explicitly without discarding the rest of the bug. FixLab downloads up
+to five supported attached or embedded images with the same local token.
+Non-image attachments are never downloaded automatically.
 
 Manual or Azure DevOps intake can include up to five PNG, JPEG, or WebP
-screenshots by file selection or by pressing `Ctrl+V` in the main request
-field, limited to 2 MiB each and 8 MiB total. Files receive generated
+screenshots by file selection or by pressing `Ctrl+V` anywhere on the
+dashboard, limited to 2 MiB each and 8 MiB total. Other browser-readable
+clipboard image formats are converted to PNG. Azure DevOps images share the
+same count and size limits. Files receive generated
 names and remain outside tracked source under
 `.git\fixlab\dashboard-artifacts\<job-id>` (or a repository-specific OS
 temporary directory for non-Git repositories). Only local paths and user text

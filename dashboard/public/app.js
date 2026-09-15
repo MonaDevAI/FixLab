@@ -249,7 +249,7 @@ function renderWorkItems(workItems) {
     link.textContent = `#${workItem.id}`;
     item.append(
       link,
-      ` · ${workItem.state || "Unknown"} · ${workItem.title} · ${workItem.commentCount || 0} comment(s)${workItem.commentsWarning ? " · comments unavailable" : ""}`
+      ` · ${workItem.state || "Unknown"} · ${workItem.title} · ${workItem.commentCount || 0} comment(s) · ${workItem.imageCount || 0} image(s)${workItem.commentsWarning ? " · comments unavailable" : ""}${workItem.imagesWarning ? " · some images unavailable" : ""}`
     );
     workItemList.append(item);
   }
@@ -275,6 +275,7 @@ function workItemsRequest(workItems) {
         workItem.reproduction,
         workItem.acceptanceCriteria,
         workItem.commentsWarning,
+        workItem.imagesWarning,
         ...(workItem.comments ?? []).map(
           (comment) =>
             `Comment by ${comment.author || "Unknown"}${comment.createdAt ? ` at ${comment.createdAt}` : ""}:\n${comment.text}`
@@ -376,6 +377,31 @@ function normalizeClipboardScreenshot(file, index) {
   );
 }
 
+async function convertClipboardScreenshot(file, index) {
+  if (allowedScreenshotTypes.has(file.type)) {
+    return normalizeClipboardScreenshot(file, index);
+  }
+  const bitmap = await createImageBitmap(file);
+  try {
+    const canvas = document.createElement("canvas");
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    canvas.getContext("2d").drawImage(bitmap, 0, 0);
+    const blob = await new Promise((resolve) =>
+      canvas.toBlob(resolve, "image/png")
+    );
+    if (!blob) {
+      throw new Error("The clipboard image could not be converted to PNG.");
+    }
+    return new File([blob], `pasted-${Date.now()}-${index + 1}.png`, {
+      type: "image/png",
+      lastModified: Date.now()
+    });
+  } finally {
+    bitmap.close();
+  }
+}
+
 function fileBase64(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -399,6 +425,18 @@ function fileBase64(file) {
   });
 }
 
+function loadedScreenshotFile(screenshot) {
+  const binary = atob(screenshot.base64);
+  const bytes = Uint8Array.from(
+    binary,
+    (character) => character.charCodeAt(0)
+  );
+  return new File([bytes], screenshot.name, {
+    type: screenshot.mimeType,
+    lastModified: Date.now()
+  });
+}
+
 document.querySelectorAll("input[name='intakeSource']").forEach((input) => {
   input.addEventListener("change", () => {
     azureDevOpsIntake.hidden = selectedIntakeSource() !== "azure-devops";
@@ -418,7 +456,16 @@ loadWorkItemButton.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ workItems: inputs })
     });
-    loadedWorkItems = body.workItems;
+    const loadedScreenshots = body.workItems.flatMap(
+      (workItem) => workItem.screenshots ?? []
+    );
+    loadedWorkItems = body.workItems.map(
+      ({ screenshots = [], ...workItem }) => ({
+        ...workItem,
+        imageCount: screenshots.length
+      })
+    );
+    addScreenshots(loadedScreenshots.map(loadedScreenshotFile));
     renderWorkItems(loadedWorkItems);
     requestInput.value = workItemsRequest(loadedWorkItems);
   } catch (error) {
@@ -441,23 +488,25 @@ screenshotInput.addEventListener("change", () => {
   }
 });
 
-requestInput.addEventListener("paste", (event) => {
-  const files = [...(event.clipboardData?.items ?? [])]
-    .filter(
-      (item) => item.kind === "file" && allowedScreenshotTypes.has(item.type)
-    )
-    .map((item) => item.getAsFile())
-    .filter(Boolean)
-    .map(normalizeClipboardScreenshot);
-  if (files.length === 0) {
+document.addEventListener("paste", async (event) => {
+  const items = [...(event.clipboardData?.items ?? [])].filter(
+    (item) => item.kind === "file" && item.type.startsWith("image/")
+  );
+  if (items.length === 0) {
     return;
   }
   event.preventDefault();
   formError.textContent = "";
   try {
-    addScreenshots(files);
+    const files = items
+    .map((item) => item.getAsFile())
+      .filter(Boolean);
+    addScreenshots(
+      await Promise.all(files.map(convertClipboardScreenshot))
+    );
   } catch (error) {
-    formError.textContent = error.message;
+    formError.textContent =
+      error.message || "The clipboard image could not be added.";
   }
 });
 
