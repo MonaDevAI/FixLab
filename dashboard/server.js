@@ -97,9 +97,20 @@ function publicQueue(jobs) {
     request: safeSummary(job.request),
     requestType: job.requestType,
     intakeSource: job.intakeSource,
+    mode: job.mode,
+    status: job.status,
     bugCount: job.bugs.length,
+    bugs: job.bugs,
     screenshotCount: job.screenshots.length,
+    stages: job.stages,
     createdAt: job.createdAt
+  }));
+}
+
+function publicHistory(jobs) {
+  return jobs.map((job) => ({
+    ...publicJob(job),
+    logs: []
   }));
 }
 
@@ -1218,6 +1229,7 @@ export function createDashboardServer({
   let currentJob = null;
   let activeHandle = null;
   const queuedJobs = [];
+  const completedJobs = [];
   const artifactDirectories = new Set();
   const playwrightConnection = { handle: null, lastResult: null };
   const cacheContext = createCacheContext(resolvedRepository);
@@ -1237,6 +1249,14 @@ export function createDashboardServer({
       metricsWarning =
         "Dashboard metrics were updated in memory but could not be persisted.";
     }
+  }
+
+  function archiveJob(job) {
+    if (!job || completedJobs.some((entry) => entry.id === job.id)) {
+      return;
+    }
+    completedJobs.unshift(job);
+    completedJobs.splice(20);
   }
 
   function startJob(job, prompt, resume = false) {
@@ -1302,6 +1322,7 @@ export function createDashboardServer({
       removeArtifactDirectory(currentJob.artifactDirectory);
       artifactDirectories.delete(currentJob.artifactDirectory);
     }
+    archiveJob(currentJob);
     currentJob = queuedJobs.shift();
     currentJob.status = "running";
     currentJob.startedAt = new Date().toISOString();
@@ -1326,7 +1347,8 @@ export function createDashboardServer({
       sendJson(response, 200, {
         readiness: inspectRepository(resolvedRepository),
         job: publicJob(currentJob),
-        queue: publicQueue(queuedJobs)
+        queue: publicQueue(queuedJobs),
+        history: publicHistory(completedJobs)
       });
       return;
     }
@@ -1334,7 +1356,8 @@ export function createDashboardServer({
     if (request.method === "GET" && requestUrl.pathname === "/api/job") {
       sendJson(response, 200, {
         job: publicJob(currentJob),
-        queue: publicQueue(queuedJobs)
+        queue: publicQueue(queuedJobs),
+        history: publicHistory(completedJobs)
       });
       return;
     }
@@ -1636,6 +1659,9 @@ export function createDashboardServer({
       if (!shouldQueue && currentJob?.artifactDirectory) {
         removeArtifactDirectory(currentJob.artifactDirectory);
         artifactDirectories.delete(currentJob.artifactDirectory);
+      }
+      if (!shouldQueue) {
+        archiveJob(currentJob);
       }
       const jobId = randomUUID();
       let storedScreenshots;

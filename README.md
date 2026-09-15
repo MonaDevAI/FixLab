@@ -224,7 +224,10 @@ application, MDG, data, or deployment. The Azure DevOps intake accepts up to
 loads the unique bugs concurrently. It runs one job at a time, accepts up to
 20 additional jobs in a visible local queue, and does not expose a public
 network listener. A blocked or failed active job pauses the queue until the
-user resumes it; a passed job starts the next queued job automatically.
+user resumes it; a passed job starts the next queued job automatically. The
+job list is selectable: users can inspect the active roadmap, pending
+roadmaps, and up to 20 recently completed roadmaps without changing which job
+the runner is executing.
 
 Playwright-validation-only mode is the shortest browser path. It skips source
 diagnosis, separate reproduction, implementation, diff review, non-browser

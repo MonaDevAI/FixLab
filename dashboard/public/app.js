@@ -15,11 +15,6 @@ const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
-const currentStageElement = document.createElement("div");
-currentStageElement.id = "current-stage";
-currentStageElement.className = "current-stage";
-currentStageElement.hidden = true;
-stagesElement.before(currentStageElement);
 const queuePanel = document.querySelector("#queue-panel");
 const queueCount = document.querySelector("#queue-count");
 const queueList = document.querySelector("#queue-list");
@@ -56,6 +51,9 @@ const metricStatuses = document.querySelector("#metric-statuses");
 let loadedWorkItems = [];
 let selectedScreenshots = [];
 let screenshotPreviewUrls = [];
+let activeJob = null;
+let selectedJobId = null;
+const observedJobs = new Map();
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -96,11 +94,34 @@ function renderReadiness(readiness) {
   startButton.disabled = !ready;
 }
 
-function renderJob(job) {
+function inferActiveStageFromLogs(logs = []) {
+  const stagePatterns = [
+    ["live-test", /\b(live[- ]test|browser validation|run(?:ning)? playwright)\b/i],
+    ["local-stack", /\b(start(?:ing)? (?:the )?(?:local )?(?:stack|app|server)|local-stack)\b/i],
+    ["review", /\b(self-review|code-review|review(?:ing)? (?:the )?(?:effective )?diff)\b/i],
+    ["fix", /\b(edit|apply(?:ing)? patch|implement(?:ing)?|correct(?:ing)?|fix(?:ing)?)\b/i],
+    ["reproduce", /\b(reproduc(?:e|ing)|focused test|run(?:ning)? tests?)\b/i],
+    ["diagnosis", /\b(diagnos(?:e|ing|is)|root cause|trac(?:e|ing)|inspect(?:ing)? the affected)\b/i]
+  ];
+  for (const entry of [...logs].reverse()) {
+    const message = String(entry?.message ?? "");
+    const match = stagePatterns.find(([, pattern]) => pattern.test(message));
+    if (match) {
+      return match[0];
+    }
+  }
+  return null;
+}
+
+function renderJob(job, currentActiveJob = job) {
   const running = job?.status === "running";
+  const isActive = Boolean(job?.id && job.id === currentActiveJob?.id);
+  const activeNeedsQueue =
+    currentActiveJob &&
+    ["running", "blocked", "failed"].includes(currentActiveJob.status);
   startButton.disabled = readinessElement.classList.contains("blocked");
   startButton.textContent =
-    running || ["blocked", "failed"].includes(job?.status)
+    activeNeedsQueue
       ? "Add to queue"
       : "Start job";
   jobStatusElement.textContent = job
@@ -116,18 +137,11 @@ function renderJob(job) {
     !stageValues.some((stage) =>
       ["running", "blocked", "failed"].includes(stage.status)
     )
-      ? stageNames[
+      ? inferActiveStageFromLogs(job?.logs) ??
+        stageNames[
           stageValues.findIndex((stage) => stage.status === "pending")
         ]
       : null;
-  const reportedActiveStage = running
-    ? stageNames.find((name) => job?.stages?.[name]?.status === "running")
-    : null;
-  const activeStage = reportedActiveStage ?? inferredActiveStage;
-  currentStageElement.hidden = !activeStage;
-  currentStageElement.textContent = activeStage
-    ? `Current step: ${activeStage} — active now`
-    : "";
   stagesElement.replaceChildren();
   for (const name of stageNames) {
     const reportedStage =
@@ -200,8 +214,8 @@ function renderJob(job) {
   logsElement.scrollTop = logsElement.scrollHeight;
   formError.textContent = job?.error ?? "";
 
-  const canResume = Boolean(job?.canResume);
-  const canComment = Boolean(job?.canComment);
+  const canResume = isActive && Boolean(job?.canResume);
+  const canComment = isActive && Boolean(job?.canComment);
   jobInputPanel.hidden = !(canResume || canComment);
   jobInputSubmit.disabled = !(canResume || canComment);
   jobInputCount.textContent = job
@@ -266,18 +280,99 @@ async function refreshPlaywrightStatus() {
   }
 }
 
-function renderQueue(queue = []) {
-  queuePanel.hidden = queue.length === 0;
-  queueCount.textContent = `${queue.length} waiting`;
-  queueList.replaceChildren();
+function queuedJobView(job) {
+  return {
+    ...job,
+    status: job.status ?? "queued",
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    canResume: false,
+    canComment: false,
+    inputCount: 0,
+    pendingInputCount: 0,
+    durationMs: 0,
+    usage: {},
+    stages:
+      job.stages ??
+      Object.fromEntries(
+        stageNames.map((stage) => [
+          stage,
+          { status: "pending", message: "" }
+        ])
+      ),
+    bugs: job.bugs ?? [],
+    logs: [],
+    droppedLogs: 0
+  };
+}
+
+function rememberJob(job) {
+  if (job?.id) {
+    observedJobs.set(job.id, job);
+  }
+}
+
+function selectJob(jobId) {
+  selectedJobId = jobId;
+  const selectedJob = observedJobs.get(jobId);
+  if (selectedJob) {
+    renderJob(selectedJob, activeJob);
+  }
+}
+
+function renderQueue(currentJob, queue = [], history = []) {
+  rememberJob(currentJob);
+  for (const job of history) {
+    rememberJob(job);
+  }
   for (const job of queue) {
+    if (!observedJobs.has(job.id)) {
+      observedJobs.set(job.id, queuedJobView(job));
+    }
+  }
+  const queuedIds = new Set(queue.map((job) => job.id));
+  const recentJobs = [...observedJobs.values()]
+    .filter(
+      (job) =>
+        job.id !== currentJob?.id &&
+        !queuedIds.has(job.id) &&
+        job.status !== "queued"
+    )
+    .reverse();
+  const entries = [
+    ...(currentJob ? [{ job: currentJob, label: "Current" }] : []),
+    ...queue.map((job) => ({
+      job: observedJobs.get(job.id),
+      label: `Waiting #${job.position}`
+    })),
+    ...recentJobs.map((job) => ({ job, label: "Recent" }))
+  ];
+
+  queuePanel.hidden = entries.length < 2;
+  queuePanel.querySelector("h3").textContent = "Jobs";
+  queueCount.textContent =
+    `${queue.length} waiting · ${recentJobs.length} recent`;
+  queueList.replaceChildren();
+  for (const { job, label } of entries) {
     const item = document.createElement("li");
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "job-selector";
+    if ((selectedJobId ?? currentJob?.id) === job.id) {
+      button.classList.add("selected");
+    }
     const summary = document.createElement("strong");
-    summary.textContent = `#${job.position} · ${job.requestType}`;
+    summary.textContent = `${label} · ${job.status} · ${job.requestType}`;
     const details = document.createElement("span");
     details.textContent =
-      ` · ${job.bugCount} bug(s) · ${job.screenshotCount} screenshot(s) · ${job.request}`;
-    item.append(summary, details);
+      ` · ${job.bugCount ?? job.bugs?.length ?? 0} bug(s) · ${job.request}`;
+    button.append(summary, details);
+    button.addEventListener("click", () => {
+      selectJob(job.id);
+      renderQueue(currentJob, queue, history);
+    });
+    item.append(button);
     queueList.append(item);
   }
 }
@@ -585,9 +680,24 @@ document.addEventListener("paste", async (event) => {
 async function refresh() {
   try {
     const body = await fetchJson("/api/status");
+    activeJob = body.job;
+    rememberJob(activeJob);
+    for (const queuedJob of body.queue) {
+      const existing = observedJobs.get(queuedJob.id);
+      observedJobs.set(
+        queuedJob.id,
+        queuedJobView(existing ? { ...existing, ...queuedJob } : queuedJob)
+      );
+    }
+    for (const historicalJob of body.history ?? []) {
+      rememberJob(historicalJob);
+    }
+    if (!selectedJobId || !observedJobs.has(selectedJobId)) {
+      selectedJobId = activeJob?.id ?? null;
+    }
     renderReadiness(body.readiness);
-    renderJob(body.job);
-    renderQueue(body.queue);
+    renderJob(observedJobs.get(selectedJobId) ?? activeJob, activeJob);
+    renderQueue(activeJob, body.queue, body.history);
   } catch (error) {
     formError.textContent = error.message;
   }
@@ -633,8 +743,11 @@ form.addEventListener("submit", async (event) => {
     });
     selectedScreenshots = [];
     renderScreenshots();
-    renderJob(body.job);
-    renderQueue(body.queue);
+    activeJob = body.job;
+    selectedJobId = body.job?.id ?? null;
+    rememberJob(body.job);
+    renderJob(body.job, activeJob);
+    renderQueue(activeJob, body.queue, body.history);
     await refreshMetrics();
   } catch (error) {
     formError.textContent = error.message;

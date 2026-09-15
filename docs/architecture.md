@@ -105,6 +105,10 @@ pull request. Running jobs are not interrupted by dashboard input.
 New requests submitted while a job is running, blocked, or failed enter the
 bounded queue. A passed active job starts the next queued job. Blocked and
 failed jobs pause queue advancement so the same session remains resumable.
+The dashboard job list is read-only selectable. Selecting an active, queued,
+or recently completed job changes only the displayed roadmap and evidence; it
+does not reorder, start, stop, or resume execution. The local server retains
+up to 20 completed job summaries in memory for this view.
 
 ## Context and token efficiency
 

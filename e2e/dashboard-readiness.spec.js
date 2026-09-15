@@ -12,6 +12,10 @@ let dashboard;
 let baseUrl;
 
 function executor({ onOutput }) {
+  onOutput(
+    "stdout",
+    "Tracing the affected workflow to diagnose the reported behavior.\n"
+  );
   const completion = new Promise((resolve) => {
     setTimeout(() => {
       for (const stage of [
@@ -178,11 +182,11 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
 
   await requestField.fill("Validate pasted screenshot");
   await page.getByRole("button", { name: "Start job" }).click();
-  await expect(page.locator("#current-stage")).toHaveText(
-    "Current step: intake — active now"
-  );
+  await expect(page.locator(".stage.inferred strong")).toHaveText("diagnosis");
   await expect(page.locator(".stage.inferred")).toContainText("active now");
-  await expect(page.getByText("passed · bug-fix")).toBeVisible();
+  await expect(page.locator("#job-status")).toContainText(
+    "passed · bug-fix"
+  );
 
   const jobResponse = await request.get(`${baseUrl}/api/job`);
   const job = (await jobResponse.json()).job;
@@ -209,4 +213,119 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
   expect(metrics.cacheReusePercent).toBe(79.2);
   await expect(page.getByText("79.2%")).toBeVisible();
   await expect(page.getByText("2,400,000")).toBeHidden();
+});
+
+test("dashboard lets users select active and queued job roadmaps", async ({
+  page
+}) => {
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "Queued jobs",
+          error: null
+        },
+        job: {
+          id: "active-job",
+          request: "Active bug",
+          requestType: "bug-fix",
+          status: "running",
+          durationMs: 1000,
+          stages: Object.fromEntries(
+            [
+              "intake",
+              "diagnosis",
+              "reproduce",
+              "fix",
+              "review",
+              "local-stack",
+              "live-test",
+              "pr"
+            ].map((stage) => [
+              stage,
+              { status: "pending", message: "" }
+            ])
+          ),
+          bugs: [],
+          logs: [{ message: "Diagnosing the active bug." }],
+          canComment: true,
+          canResume: false,
+          inputCount: 0,
+          pendingInputCount: 0
+        },
+        queue: [
+          {
+            id: "queued-job",
+            position: 1,
+            request: "Queued bug",
+            requestType: "bug-fix",
+            mode: "playwright-only",
+            status: "queued",
+            bugCount: 1,
+            screenshotCount: 0,
+            stages: Object.fromEntries(
+              [
+                "intake",
+                "diagnosis",
+                "reproduce",
+                "fix",
+                "review",
+                "local-stack",
+                "live-test",
+                "pr"
+              ].map((stage) => [
+                stage,
+                { status: "pending", message: "" }
+              ])
+            ),
+            bugs: []
+          }
+        ],
+        history: [
+          {
+            id: "completed-job",
+            request: "Completed bug",
+            requestType: "bug-fix",
+            status: "passed",
+            durationMs: 2000,
+            stages: Object.fromEntries(
+              [
+                "intake",
+                "diagnosis",
+                "reproduce",
+                "fix",
+                "review",
+                "local-stack",
+                "live-test",
+                "pr"
+              ].map((stage) => [
+                stage,
+                { status: "passed", message: "done" }
+              ])
+            ),
+            bugs: [],
+            logs: [],
+            canComment: false,
+            canResume: true,
+            inputCount: 0,
+            pendingInputCount: 0
+          }
+        ]
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+  await page.getByRole("button", { name: /Waiting #1/ }).click();
+  await expect(page.locator("#job-status")).toContainText("queued · bug-fix");
+  await expect(page.locator(".stage.pending")).toHaveCount(8);
+  await page.getByRole("button", { name: /Current/ }).click();
+  await expect(page.locator(".stage.inferred strong")).toHaveText("diagnosis");
+  await page.getByRole("button", { name: /Recent · passed/ }).click();
+  await expect(page.locator("#job-status")).toContainText("passed · bug-fix");
+  await expect(page.locator(".stage.passed")).toHaveCount(8);
 });

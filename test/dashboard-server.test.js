@@ -812,6 +812,12 @@ test("dashboard queues concurrent jobs and starts the next passed job", async ()
     assert.equal(second.body.queued, true);
     assert.equal(second.body.queue.length, 1);
     assert.equal(second.body.queue[0].position, 1);
+    assert.equal(second.body.queue[0].status, "queued");
+    assert.equal(second.body.queue[0].mode, "validate-only");
+    assert.deepEqual(
+      Object.keys(second.body.queue[0].stages),
+      FIXLAB_STAGES
+    );
 
     for (const stage of FIXLAB_STAGES) {
       firstOutput(
@@ -828,6 +834,16 @@ test("dashboard queues concurrent jobs and starts the next passed job", async ()
     assert.equal(status.body.job.request, "Run this job second.");
     assert.equal(status.body.job.status, "running");
     assert.deepEqual(status.body.queue, []);
+    assert.equal(status.body.history.length, 1);
+    assert.equal(status.body.history[0].request, "Keep this job active.");
+    assert.equal(status.body.history[0].status, "passed");
+    assert.deepEqual(
+      Object.values(status.body.history[0].stages).map(
+        (stage) => stage.status
+      ),
+      FIXLAB_STAGES.map(() => "passed")
+    );
+    assert.deepEqual(status.body.history[0].logs, []);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
