@@ -23,12 +23,6 @@ const imageTypes = new Map([
   ["image/jpeg", new Set([".jpg", ".jpeg"])],
   ["image/webp", new Set([".webp"])]
 ]);
-const imageMimeTypesByExtension = new Map([
-  [".png", "image/png"],
-  [".jpg", "image/jpeg"],
-  [".jpeg", "image/jpeg"],
-  [".webp", "image/webp"]
-]);
 
 function runGit(repository, args) {
   const result = spawnSync("git", args, {
@@ -402,284 +396,46 @@ function defaultRequestJson(url, token) {
   });
 }
 
-function defaultRequestBuffer(url, token) {
-  return new Promise((resolveRequest, reject) => {
-    const request = httpsRequest(
-      url,
-      {
-        method: "GET",
-        headers: {
-          Accept: "image/png,image/jpeg,image/webp",
-          Authorization: `Bearer ${token}`
-        }
-      },
-      (response) => {
-        const chunks = [];
-        let size = 0;
-        response.on("data", (chunk) => {
-          size += chunk.length;
-          if (size <= MAX_SCREENSHOT_BYTES) {
-            chunks.push(chunk);
-          }
-        });
-        response.on("end", () => {
-          if (response.statusCode < 200 || response.statusCode >= 300) {
-            reject(
-              new Error(
-                `Azure DevOps image returned HTTP ${response.statusCode}`
-              )
-            );
-            return;
-          }
-          if (size > MAX_SCREENSHOT_BYTES) {
-            reject(
-              new Error(
-                `Azure DevOps image exceeded ${MAX_SCREENSHOT_BYTES} bytes`
-              )
-            );
-            return;
-          }
-          resolveRequest({
-            buffer: Buffer.concat(chunks),
-            contentType: String(response.headers["content-type"] ?? "")
-              .split(";")[0]
-              .trim()
-              .toLowerCase()
-          });
-        });
-      }
-    );
-    request.setTimeout(15000, () => {
-      request.destroy(new Error("Azure DevOps image request timed out"));
-    });
-    request.on("error", reject);
-    request.end();
-  });
-}
-
-function embeddedImageUrls(values) {
-  const urls = [];
-  for (const value of values) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const pattern = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)')/gi;
-    for (const match of value.matchAll(pattern)) {
-      const source = (match[1] ?? match[2] ?? "").replace(/&amp;/gi, "&");
-      try {
-        const url = new URL(source);
-        if (
-          url.protocol === "https:" &&
-          url.hostname.toLowerCase() === "dev.azure.com" &&
-          /\/_apis\/wit\/attachments\//i.test(url.pathname)
-        ) {
-          urls.push(url.toString());
-        }
-      } catch {
-        // Ignore non-URL and relative image sources.
-      }
-    }
-  }
-  return urls;
-}
-
-function imageCandidates(item, fields, comments) {
-  const candidates = [];
-  for (const relation of item?.relations ?? []) {
-    const name =
-      typeof relation?.attributes?.name === "string"
-        ? relation.attributes.name
-        : "";
-    if (
-      relation?.rel === "AttachedFile" &&
-      typeof relation.url === "string" &&
-      imageMimeTypesByExtension.has(extension(name))
-    ) {
-      candidates.push({ url: relation.url, name });
-    }
-  }
-  for (const url of embeddedImageUrls([
-    fields["System.Description"],
-    fields["Microsoft.VSTS.TCM.ReproSteps"],
-    fields["Microsoft.VSTS.Common.AcceptanceCriteria"],
-    ...comments.map((comment) => comment?.text)
-  ])) {
-    const parsed = new URL(url);
-    candidates.push({
-      url,
-      name: parsed.searchParams.get("fileName") ?? ""
-    });
-  }
-  return [
-    ...new Map(
-      candidates
-        .filter(({ url }) => {
-          try {
-            const parsed = new URL(url);
-            return (
-              parsed.protocol === "https:" &&
-              parsed.hostname.toLowerCase() === "dev.azure.com"
-            );
-          } catch {
-            return false;
-          }
-        })
-        .map((candidate) => [candidate.url, candidate])
-    ).values()
-  ];
-}
-
-function downloadedImageName(workItemId, candidate, mimeType, index) {
-  const candidateName = basename(candidate.name || "");
-  const candidateExtension = extension(candidateName);
-  if (
-    candidateName &&
-    imageMimeTypesByExtension.get(candidateExtension) === mimeType
-  ) {
-    return `${workItemId}-${candidateName}`;
-  }
-  const generatedExtension = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/webp": ".webp"
-  }[mimeType];
-  return `${workItemId}-azure-image-${index + 1}${generatedExtension}`;
-}
-
 export function createAzureDevOpsLoader({
   tokenProvider = defaultTokenProvider,
-  requestJson = defaultRequestJson,
-  requestBuffer = defaultRequestBuffer
+  requestJson = defaultRequestJson
 } = {}) {
-  async function loadTarget(target, token) {
-    const apiUrl =
-      `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
-      `${encodeURIComponent(target.project)}/_apis/wit/workitems/` +
-      `${target.id}?$expand=all&api-version=7.1`;
-    const commentsUrl =
-      `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
-      `${encodeURIComponent(target.project)}/_apis/wit/workItems/` +
-      `${target.id}/comments?$top=20&order=desc&api-version=7.1-preview.4`;
-    const [item, commentResult] = await Promise.all([
-      requestJson(apiUrl, token),
-      requestJson(commentsUrl, token).then(
-        (response) => ({ response, warning: "" }),
-        () => ({
-          response: { comments: [] },
-          warning:
-            "Azure DevOps comments could not be loaded. Verify comment access and retry if comments are required."
-        })
-      )
-    ]);
-    const commentResponse = commentResult.response;
-    const fields = item?.fields ?? {};
-    const fallbackWebUrl =
-      `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
-      `${encodeURIComponent(target.project)}/_workitems/edit/${target.id}`;
-    const linkedWebUrl = item?._links?.html?.href;
-    const webUrl =
-      typeof linkedWebUrl === "string" &&
-      /^https:\/\/dev\.azure\.com\//i.test(linkedWebUrl)
-        ? linkedWebUrl
-        : fallbackWebUrl;
-    return {
-      id: Number(fields["System.Id"] ?? item.id ?? target.id),
-      title: workItemText(fields["System.Title"], 500),
-      description: workItemText(fields["System.Description"], 10000),
-      reproduction: workItemText(
-        fields["Microsoft.VSTS.TCM.ReproSteps"],
-        10000
-      ),
-      acceptanceCriteria: workItemText(
-        fields["Microsoft.VSTS.Common.AcceptanceCriteria"],
-        10000
-      ),
-      state: workItemText(fields["System.State"], 200),
-      workItemType: workItemText(fields["System.WorkItemType"], 200),
-      comments: (commentResponse?.comments ?? [])
-        .filter((comment) => !comment?.isDeleted)
-        .slice(0, 20)
-        .map((comment) => ({
-          author: workItemText(comment?.createdBy?.displayName, 200),
-          createdAt:
-            typeof comment?.createdDate === "string"
-              ? comment.createdDate.slice(0, 100)
-              : "",
-          text: workItemText(comment?.text, 2000)
-        }))
-        .filter((comment) => comment.text),
-      commentsWarning: commentResult.warning,
-      imageCandidates: imageCandidates(
-        item,
-        fields,
-        commentResponse?.comments ?? []
-      ),
-      webUrl
-    };
-  }
-
-  async function loadImages(items, token) {
-    let totalBytes = 0;
-    let count = 0;
-    for (const item of items) {
-      item.screenshots = [];
-      item.imagesWarning = "";
-      for (const candidate of item.imageCandidates) {
-        if (count >= MAX_SCREENSHOTS) {
-          item.imagesWarning =
-            "Additional Azure DevOps images were omitted by the five-image limit.";
-          break;
-        }
-        try {
-          const downloaded = await requestBuffer(candidate.url, token);
-          const mimeType =
-            imageTypes.has(downloaded.contentType)
-              ? downloaded.contentType
-              : imageMimeTypesByExtension.get(extension(candidate.name));
-          if (
-            !mimeType ||
-            !hasValidSignature(downloaded.buffer, mimeType)
-          ) {
-            throw new Error("unsupported Azure DevOps image content");
-          }
-          if (
-            totalBytes + downloaded.buffer.length >
-            MAX_SCREENSHOT_TOTAL_BYTES
-          ) {
-            item.imagesWarning =
-              "Additional Azure DevOps images were omitted by the total-size limit.";
-            break;
-          }
-          item.screenshots.push({
-            name: downloadedImageName(
-              item.id,
-              candidate,
-              mimeType,
-              count
-            ),
-            mimeType,
-            base64: downloaded.buffer.toString("base64")
-          });
-          totalBytes += downloaded.buffer.length;
-          count += 1;
-        } catch {
-          item.imagesWarning =
-            "One or more Azure DevOps images could not be loaded.";
-        }
-      }
-      delete item.imageCandidates;
-    }
-  }
-
-  async function withToken(targets) {
+  return async ({ workItem, profile }) => {
+    const target = parseAzureDevOpsWorkItem(workItem, profile);
     let token;
     try {
       token = await tokenProvider();
-      const items = await Promise.all(
-        targets.map((target) => loadTarget(target, token))
-      );
-      await loadImages(items, token);
-      return items;
+      const apiUrl =
+        `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
+        `${encodeURIComponent(target.project)}/_apis/wit/workitems/` +
+        `${target.id}?$expand=all&api-version=7.1`;
+      const item = await requestJson(apiUrl, token);
+      const fields = item?.fields ?? {};
+      const fallbackWebUrl =
+        `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
+        `${encodeURIComponent(target.project)}/_workitems/edit/${target.id}`;
+      const linkedWebUrl = item?._links?.html?.href;
+      const webUrl =
+        typeof linkedWebUrl === "string" &&
+        /^https:\/\/dev\.azure\.com\//i.test(linkedWebUrl)
+          ? linkedWebUrl
+          : fallbackWebUrl;
+      return {
+        id: Number(fields["System.Id"] ?? item.id ?? target.id),
+        title: workItemText(fields["System.Title"], 500),
+        description: workItemText(fields["System.Description"], 10000),
+        reproduction: workItemText(
+          fields["Microsoft.VSTS.TCM.ReproSteps"],
+          10000
+        ),
+        acceptanceCriteria: workItemText(
+          fields["Microsoft.VSTS.Common.AcceptanceCriteria"],
+          10000
+        ),
+        state: workItemText(fields["System.State"], 200),
+        workItemType: workItemText(fields["System.WorkItemType"], 200),
+        webUrl
+      };
     } catch (error) {
       const message = String(error?.message ?? error);
       if (token && message.includes(token)) {
@@ -689,21 +445,7 @@ export function createAzureDevOpsLoader({
     } finally {
       token = null;
     }
-  }
-
-  const loader = async ({ workItem, profile }) => {
-    const [result] = await withToken([
-      parseAzureDevOpsWorkItem(workItem, profile)
-    ]);
-    return result;
   };
-  loader.loadMany = async ({ workItems, profile }) => {
-    const targets = workItems.map((workItem) =>
-      parseAzureDevOpsWorkItem(workItem, profile)
-    );
-    return withToken(targets);
-  };
-  return loader;
 }
 
 export function loadRepositoryProfile(repository) {
