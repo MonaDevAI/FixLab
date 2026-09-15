@@ -15,6 +15,11 @@ const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
+const currentStageElement = document.createElement("div");
+currentStageElement.id = "current-stage";
+currentStageElement.className = "current-stage";
+currentStageElement.hidden = true;
+stagesElement.before(currentStageElement);
 const queuePanel = document.querySelector("#queue-panel");
 const queueCount = document.querySelector("#queue-count");
 const queueList = document.querySelector("#queue-list");
@@ -115,6 +120,14 @@ function renderJob(job) {
           stageValues.findIndex((stage) => stage.status === "pending")
         ]
       : null;
+  const reportedActiveStage = running
+    ? stageNames.find((name) => job?.stages?.[name]?.status === "running")
+    : null;
+  const activeStage = reportedActiveStage ?? inferredActiveStage;
+  currentStageElement.hidden = !activeStage;
+  currentStageElement.textContent = activeStage
+    ? `Current step: ${activeStage} — active now`
+    : "";
   stagesElement.replaceChildren();
   for (const name of stageNames) {
     const reportedStage =

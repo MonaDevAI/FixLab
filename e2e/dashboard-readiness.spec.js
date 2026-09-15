@@ -12,24 +12,29 @@ let dashboard;
 let baseUrl;
 
 function executor({ onOutput }) {
-  for (const stage of [
-    "intake",
-    "diagnosis",
-    "reproduce",
-    "fix",
-    "review",
-    "local-stack",
-    "live-test",
-    "pr"
-  ]) {
-    onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|done\n`);
-  }
-  onOutput(
-    "stdout",
-    "Tokens ↑ 2.4m (1.9m cached, 367.4k written) • ↓ 14.8k\n"
-  );
+  const completion = new Promise((resolve) => {
+    setTimeout(() => {
+      for (const stage of [
+        "intake",
+        "diagnosis",
+        "reproduce",
+        "fix",
+        "review",
+        "local-stack",
+        "live-test",
+        "pr"
+      ]) {
+        onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|done\n`);
+      }
+      onOutput(
+        "stdout",
+        "Tokens ↑ 2.4m (1.9m cached, 367.4k written) • ↓ 14.8k\n"
+      );
+      resolve({ code: 0 });
+    }, 500);
+  });
   return {
-    completion: Promise.resolve({ code: 0 }),
+    completion,
     stop() {}
   };
 }
@@ -173,6 +178,10 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
 
   await requestField.fill("Validate pasted screenshot");
   await page.getByRole("button", { name: "Start job" }).click();
+  await expect(page.locator("#current-stage")).toHaveText(
+    "Current step: intake — active now"
+  );
+  await expect(page.locator(".stage.inferred")).toContainText("active now");
   await expect(page.getByText("passed · bug-fix")).toBeVisible();
 
   const jobResponse = await request.get(`${baseUrl}/api/job`);
