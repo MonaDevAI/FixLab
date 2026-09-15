@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import test from "node:test";
 import {
   buildAgencyInvocation,
@@ -32,8 +32,7 @@ test("Agency executor keeps long prompts out of process arguments", () => {
   const prompt = `Fix this batch:\n${"x".repeat(40000)}`;
   const invocation = buildAgencyInvocation({
     packageRoot: "C:\\FixLab",
-    prompt,
-    sessionId: "11111111-1111-4111-8111-111111111111"
+    prompt
   });
 
   assert.equal(invocation.input, prompt);
@@ -46,22 +45,12 @@ test("Agency executor keeps long prompts out of process arguments", () => {
     "--agent",
     "fixlab:fixlab"
   ]);
-  assert.deepEqual(invocation.args.slice(-2), [
-    "--session-id",
-    "11111111-1111-4111-8111-111111111111"
+  assert.deepEqual(invocation.args.slice(-4), [
+    "--allow-all-tools",
+    "--no-ask-user",
+    "--stream",
+    "on"
   ]);
-
-  const resumed = buildAgencyInvocation({
-    packageRoot: "C:\\FixLab",
-    prompt,
-    sessionId: "11111111-1111-4111-8111-111111111111",
-    resume: true
-  });
-  assert.equal(resumed.args.includes("--session-id"), false);
-  assert.equal(
-    resumed.args.at(-1),
-    "--resume=11111111-1111-4111-8111-111111111111"
-  );
 });
 
 async function availablePort() {
@@ -147,8 +136,6 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.match(pageText, /Bug or required enhancement/);
     assert.match(pageText, /Enter manually/);
     assert.match(pageText, /Load from Azure DevOps/);
-    assert.match(pageText, /Load bugs/);
-    assert.match(pageText, /Continue this job/);
     assert.match(pageText, /Screenshots \(optional\)/);
     assert.match(pageText, /Repository-defined validation context is loaded automatically/);
     assert.match(pageText, /proceeds autonomously/);
@@ -193,16 +180,6 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     acceptanceCriteria: "Loaded acceptance",
     state: "Active",
     workItemType: "Bug",
-    screenshots: [
-      {
-        name: "71-loaded.png",
-        mimeType: "image/png",
-        base64: Buffer.from([
-          0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
-        ]).toString("base64")
-      }
-    ],
-    imagesWarning: "",
     webUrl:
       "https://dev.azure.com/profile-org/Profile%20Project/_workitems/edit/71"
   };
@@ -238,8 +215,6 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     });
     assert.equal(loaded.response.status, 200);
     assert.equal(loaded.body.workItem.title, "Loaded bug");
-    assert.equal(loaded.body.workItem.screenshots.length, 1);
-    assert.equal(loaded.body.workItem.screenshots[0].name, "71-loaded.png");
     assert.equal(
       loaderInput.profile.azureDevOps.organization,
       "profile-org"
@@ -280,11 +255,8 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     screenshotPath = pathLine?.slice(2);
     assert.ok(screenshotPath);
     assert.equal(existsSync(screenshotPath), true);
-    assert.match(receivedPrompt, /Loaded Azure DevOps selection/);
-    assert.match(
-      receivedPrompt,
-      /Do not search for or download additional Azure DevOps attachments/
-    );
+    assert.match(receivedPrompt, /Azure DevOps work item/);
+    assert.match(receivedPrompt, /Do not search for or download Azure DevOps attachments/);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     const cacheContext = createCacheContext(repository);
@@ -297,81 +269,6 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     if (screenshotPath) {
       assert.equal(existsSync(screenshotPath), false);
     }
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("loads and starts one Azure DevOps multi-bug batch", async () => {
-  const repository = createRepository();
-  const workItemLoader = async () => {
-    throw new Error("single-item loader should not run");
-  };
-  workItemLoader.loadMany = async ({ workItems }) =>
-    workItems.map((value) => ({
-      id: Number(value),
-      title: `Loaded bug ${value}`,
-      description: "",
-      reproduction: "",
-      acceptanceCriteria: "",
-      state: "Active",
-      workItemType: "Bug",
-      webUrl: `https://dev.azure.com/example/project/_workitems/edit/${value}`
-    }));
-  const executor = ({ onOutput }) => {
-    for (const id of ["101", "202"]) {
-      onOutput(
-        "stdout",
-        `FIXLAB_BUG|${id}|no-change|FMDM|No repository change is required.\n`
-      );
-    }
-    for (const stage of FIXLAB_STAGES) {
-      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
-    }
-    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
-  };
-  const { dashboard, url } = await startDashboard(
-    repository,
-    executor,
-    workItemLoader
-  );
-
-  try {
-    const loaded = await jsonRequest(url, "/api/azure-devops/load", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workItems: ["101", "202"] })
-    });
-    assert.equal(loaded.response.status, 200, JSON.stringify(loaded.body));
-    assert.equal(loaded.body.workItem, null);
-    assert.deepEqual(
-      loaded.body.workItems.map((item) => item.id),
-      [101, 202]
-    );
-
-    const started = await jsonRequest(url, "/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        request:
-          "Azure DevOps Bug 101: First bug\n\nAzure DevOps Bug 202: Second bug",
-        mode: "fix-and-validate",
-        intakeSource: "azure-devops",
-        workItems: loaded.body.workItems
-      })
-    });
-    assert.equal(started.response.status, 202, JSON.stringify(started.body));
-    assert.equal(started.body.job.workItems.length, 2);
-    assert.equal("description" in started.body.job.workItems[0], false);
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const completed = await jsonRequest(url, "/api/job");
-    assert.equal(completed.body.job.status, "passed");
-    assert.deepEqual(
-      completed.body.job.bugs.map((bug) => bug.id),
-      ["101", "202"]
-    );
-  } finally {
-    await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -468,83 +365,6 @@ test("dashboard parses complete stage markers and passes a job", async () => {
   }
 });
 
-test("blocked job accepts user input and resumes the same Agency session", async () => {
-  const repository = createRepository();
-  const calls = [];
-  const executor = ({ prompt, sessionId, resume, onOutput }) => {
-    calls.push({ prompt, sessionId, resume });
-    if (!resume) {
-      for (const stage of FIXLAB_STAGES) {
-        const status =
-          stage === "live-test"
-            ? "blocked"
-            : stage === "pr"
-              ? "skipped"
-              : "passed";
-        onOutput(
-          "stdout",
-          `FIXLAB_STAGE|${stage}|${status}|${stage} result\n`
-        );
-      }
-    } else {
-      for (const stage of FIXLAB_STAGES) {
-        onOutput(
-          "stdout",
-          `FIXLAB_STAGE|${stage}|passed|${stage} resumed\n`
-        );
-      }
-    }
-    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
-  };
-  const { dashboard, url } = await startDashboard(repository, executor);
-
-  try {
-    const started = await jsonRequest(url, "/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        request: "Validate an authenticated browser workflow.",
-        mode: "validate-only"
-      })
-    });
-    assert.equal(started.response.status, 202);
-    assert.match(
-      started.body.job.id,
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
-    );
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const blocked = await jsonRequest(url, "/api/job");
-    assert.equal(blocked.body.job.status, "blocked");
-    assert.equal(blocked.body.job.canResume, true);
-    assert.equal(blocked.body.job.stages["live-test"].status, "blocked");
-
-    const resumed = await jsonRequest(url, "/api/job/input", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "continue",
-        details: "Authentication is complete. Continue the browser validation."
-      })
-    });
-    assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
-    assert.equal(resumed.body.job.inputCount, 1);
-
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const completed = await jsonRequest(url, "/api/job");
-    assert.equal(completed.body.job.status, "passed");
-    assert.equal(calls.length, 2);
-    assert.equal(calls[0].resume, false);
-    assert.equal(calls[1].resume, true);
-    assert.equal(calls[1].sessionId, calls[0].sessionId);
-    assert.match(calls[1].prompt, /Authentication is complete/);
-    assert.match(calls[1].prompt, /Resume the existing FixLab dashboard session/);
-  } finally {
-    await dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
 test("zero exit with missing terminal markers fails as incomplete", async () => {
   const repository = createRepository();
   const executor = ({ onOutput }) => {
@@ -582,22 +402,13 @@ test("zero exit with missing terminal markers fails as incomplete", async () => 
   }
 });
 
-test("dashboard queues concurrent jobs and starts the next passed job", async () => {
+test("dashboard rejects concurrent and invalid job starts", async () => {
   const repository = createRepository();
   let resolveJob;
-  let firstOutput;
-  let executorCalls = 0;
   const completion = new Promise((resolve) => {
     resolveJob = resolve;
   });
-  const executor = ({ onOutput }) => {
-    executorCalls += 1;
-    if (executorCalls === 1) {
-      firstOutput = onOutput;
-      return { completion, terminate() {} };
-    }
-    return { completion: new Promise(() => {}), terminate() {} };
-  };
+  const executor = () => ({ completion, terminate() {} });
   const { dashboard, url } = await startDashboard(repository, executor);
 
   try {
@@ -639,101 +450,16 @@ test("dashboard queues concurrent jobs and starts the next passed job", async ()
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        request: "Run this job second.",
+        request: "This job must be rejected.",
         requestType: "bug-fix",
         mode: "validate-only"
       })
     });
-    assert.equal(second.response.status, 202);
-    assert.equal(second.body.queued, true);
-    assert.equal(second.body.queue.length, 1);
-    assert.equal(second.body.queue[0].position, 1);
-
-    for (const stage of FIXLAB_STAGES) {
-      firstOutput(
-        "stdout",
-        `FIXLAB_STAGE|${stage}|passed|completed\n`
-      );
-    }
-    resolveJob({ code: 0 });
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const status = await jsonRequest(url, "/api/status");
-    assert.equal(executorCalls, 2);
-    assert.equal(status.body.job.request, "Run this job second.");
-    assert.equal(status.body.job.status, "running");
-    assert.deepEqual(status.body.queue, []);
+    assert.equal(second.response.status, 409);
+    assert.match(second.body.error, /already running/);
   } finally {
+    resolveJob({ code: 1 });
     await dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("dashboard persists privacy-safe token and duration metrics", async () => {
-  const repository = createGitRepository();
-  const executor = ({ onOutput }) => {
-    for (const stage of FIXLAB_STAGES) {
-      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|completed\n`);
-    }
-    onOutput(
-      "stdout",
-      "Tokens ↑ 2.4m (1.9m cached, 367.4k written) • ↓ 14.8k\n"
-    );
-    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
-  };
-  const first = await startDashboard(repository, executor);
-
-  try {
-    const started = await jsonRequest(first.url, "/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        request: "Private request text must not persist.",
-        requestType: "bug-fix",
-        mode: "validate-only"
-      })
-    });
-    assert.equal(started.response.status, 202);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-
-    const metrics = await jsonRequest(
-      first.url,
-      "/api/metrics?period=24h"
-    );
-    assert.equal(metrics.body.metrics.queued, 1);
-    assert.equal(metrics.body.metrics.completed, 1);
-    assert.equal(metrics.body.metrics.totalInputTokens, 2_400_000);
-    assert.equal(metrics.body.metrics.totalCachedInputTokens, 1_900_000);
-    assert.equal(metrics.body.metrics.totalCacheWriteTokens, 367_400);
-    assert.equal(metrics.body.metrics.totalOutputTokens, 14_800);
-    assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
-
-    const context = createCacheContext(repository);
-    const metricsPath = join(
-      dirname(context.cachePath),
-      "dashboard-metrics.json"
-    );
-    const persisted = readFileSync(metricsPath, "utf8");
-    assert.doesNotMatch(persisted, /Private request text/);
-    assert.doesNotMatch(persisted, /comments|screenshots|logs/);
-  } finally {
-    await first.dashboard.close();
-  }
-
-  const second = await startDashboard(repository, () => {
-    throw new Error("executor should not run while reading metrics");
-  });
-  try {
-    const metrics = await jsonRequest(
-      second.url,
-      "/api/metrics?period=all"
-    );
-    assert.equal(metrics.body.metrics.queued, 1);
-    assert.equal(metrics.body.metrics.completed, 1);
-    assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
-  } finally {
-    await second.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });
