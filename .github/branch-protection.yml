@@ -10,6 +10,7 @@
   "pullRequest": {
     "requiredApprovingReviews": 1,
     "dismissStaleApprovals": true,
+    "requireCodeOwnerReview": true,
     "requireReviewThreadResolution": true,
     "allowedMergeMethods": [
       "squash"

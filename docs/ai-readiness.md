@@ -44,6 +44,8 @@ documentation drift controls.
 - The versioned contracts under `specs/v1/` define autofix behavior and
   evidence requirements, while the repository policy checker keeps local
   branch-protection intent aligned with CI and rollback controls.
+- The active `main` ruleset requires an approving code-owner review, dismisses
+  stale approvals, and blocks merging until `test` and `analyze` succeed.
 - The scheduled `agentic-rule-review` workflow reviews independent run
   evidence and may open a bounded candidate-rule issue; promotion remains a
   human-reviewed pull-request change.

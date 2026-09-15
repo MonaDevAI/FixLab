@@ -12,6 +12,8 @@ All notable changes to FixLab are documented in this file.
   pull-request proposals for failed trusted pushes.
 - Add executable proof-of-bug/proof-of-fix coverage for flaky containment and
   multi-commit rollback restoration, plus a scheduled proof drill.
+- Require code-owner review, stale-approval dismissal, and passing CI/CodeQL
+  checks for normal changes to `main`.
 
 ## 0.5.1
 

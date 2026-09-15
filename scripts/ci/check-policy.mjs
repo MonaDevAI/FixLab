@@ -49,6 +49,9 @@ export function checkPolicy(root) {
   if (policy.pullRequest?.dismissStaleApprovals !== true) {
     failures.push("branch policy must dismiss stale approvals");
   }
+  if (policy.pullRequest?.requireCodeOwnerReview !== true) {
+    failures.push("branch policy must require code-owner review");
+  }
   if (policy.pullRequest?.requireReviewThreadResolution !== true) {
     failures.push("branch policy must require review-thread resolution");
   }
