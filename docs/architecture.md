@@ -90,6 +90,11 @@ Stage summaries remain structured independently of raw output. The dashboard
 retains a bounded local log window and reports how many older entries were
 omitted; it does not feed unbounded logs back into prompts.
 
+The dashboard streams the generated agent prompt through standard input rather
+than placing it on the process command line. This keeps multi-bug requests and
+other long inputs below operating-system command-line limits while preserving
+the same in-memory prompt and output stream.
+
 Git repositories also receive a bounded durable metadata cache in
 `.git/fixlab/dashboard-cache.json`, using the shared Git directory for
 worktrees. Its key combines a hashed repository identity, current `HEAD`, and

@@ -58,6 +58,13 @@ fixlab prepare --yes
 installation reproducible without hard-coding npm or .NET assumptions into
 FixLab.
 
+Authenticate to repository-owned private package feeds before approving the
+plan. Use the organization's supported credential provider (for example, the
+Azure Artifacts **Connect to feed** instructions for local development or
+`npmAuthenticate` in Azure Pipelines). Credentials belong in the developer or
+runner credential store, never in the repository profile or a committed
+`.npmrc`.
+
 FixLab can inspect the repository profile and prepare the repository-local
 Playwright installation commands:
 
@@ -161,6 +168,11 @@ Resolve every failed prerequisite before starting a FixLab session.
 The .NET check runs `dotnet --version` from the target repository so the normal
 SDK resolver validates `global.json`, rather than accepting an unrelated SDK
 installed elsewhere on the machine.
+
+For a long local batch, run `/keep-alive` in GitHub Copilot CLI before starting
+the job. Locking the screen does not stop ordinary commands, but system sleep,
+hibernation, process termination, and network loss can interrupt a local
+runner. Browser interactions may still require an unlocked desktop.
 
 The repository profile controls the Playwright check:
 

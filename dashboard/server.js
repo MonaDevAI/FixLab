@@ -340,6 +340,23 @@ function writeCacheSummary(context, job) {
   }
 }
 
+export function buildAgencyInvocation({ packageRoot, prompt }) {
+  return {
+    args: [
+      "copilot",
+      "--plugin",
+      `local:${packageRoot}`,
+      "--agent",
+      "FixLab:fixlab",
+      "--allow-all-tools",
+      "--no-ask-user",
+      "--stream",
+      "on"
+    ],
+    input: prompt
+  };
+}
+
 export function createAgencyExecutor({ packageRoot }) {
   return ({ repository, prompt, onOutput }) => {
     const lookup = spawnSync(
@@ -360,26 +377,19 @@ export function createAgencyExecutor({ packageRoot }) {
         "Agency executable is unavailable or is not a directly executable binary"
       );
     }
-    const child = spawn(
-      executable,
-      [
-        "copilot",
-        "--plugin",
-        `local:${packageRoot}`,
-        "--agent",
-        "FixLab:fixlab",
-        "--interactive",
-        prompt
-      ],
-      {
-        cwd: repository,
-        shell: false,
-        stdio: ["ignore", "pipe", "pipe"]
-      }
-    );
+    const invocation = buildAgencyInvocation({ packageRoot, prompt });
+    const child = spawn(executable, invocation.args, {
+      cwd: repository,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
 
     child.stdout.on("data", (chunk) => onOutput("stdout", chunk.toString()));
     child.stderr.on("data", (chunk) => onOutput("stderr", chunk.toString()));
+    child.stdin.on("error", (error) =>
+      onOutput("stderr", `Could not send the FixLab prompt: ${error.message}\n`)
+    );
+    child.stdin.end(invocation.input);
 
     const completion = new Promise((resolveCompletion) => {
       child.once("error", (error) => {

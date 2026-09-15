@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import {
+  buildAgencyInvocation,
   buildJobPrompt,
   createCacheContext,
   createDashboardServer,
@@ -26,6 +27,24 @@ const packageRoot = new URL("..", import.meta.url).pathname.replace(
   /^\/([A-Za-z]:)/,
   "$1"
 );
+
+test("Agency executor keeps long prompts out of process arguments", () => {
+  const prompt = `Fix this batch:\n${"x".repeat(40000)}`;
+  const invocation = buildAgencyInvocation({
+    packageRoot: "C:\\FixLab",
+    prompt
+  });
+
+  assert.equal(invocation.input, prompt);
+  assert.equal(invocation.args.includes(prompt), false);
+  assert.equal(invocation.args.includes("--interactive"), false);
+  assert.deepEqual(invocation.args.slice(-4), [
+    "--allow-all-tools",
+    "--no-ask-user",
+    "--stream",
+    "on"
+  ]);
+});
 
 async function availablePort() {
   const probe = createServer();
