@@ -20,20 +20,8 @@ function usesReferences(workflow) {
   );
 }
 
-export function checkPolicy(root) {
+export function checkBranchPolicy(policy) {
   const failures = [];
-  const policyPath = resolve(root, ".github", "branch-protection.yml");
-  if (!existsSync(policyPath)) {
-    return [".github/branch-protection.yml is missing"];
-  }
-
-  let policy;
-  try {
-    policy = JSON.parse(readFileSync(policyPath, "utf8"));
-  } catch (error) {
-    return [`.github/branch-protection.yml is not valid JSON-compatible YAML: ${error.message}`];
-  }
-
   if (policy.targetBranch !== "main") {
     failures.push("branch policy must target main");
   }
@@ -64,6 +52,24 @@ export function checkPolicy(root) {
   ) {
     failures.push("branch policy must block deletion and force pushes");
   }
+  return failures;
+}
+
+export function checkPolicy(root) {
+  const failures = [];
+  const policyPath = resolve(root, ".github", "branch-protection.yml");
+  if (!existsSync(policyPath)) {
+    return [".github/branch-protection.yml is missing"];
+  }
+
+  let policy;
+  try {
+    policy = JSON.parse(readFileSync(policyPath, "utf8"));
+  } catch (error) {
+    return [`.github/branch-protection.yml is not valid JSON-compatible YAML: ${error.message}`];
+  }
+
+  failures.push(...checkBranchPolicy(policy));
 
   const workflowRoot = resolve(root, ".github", "workflows");
   for (const entry of readdirSync(workflowRoot, { withFileTypes: true })) {

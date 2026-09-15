@@ -5,7 +5,10 @@ import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import test from "node:test";
 import { checkAgentRules } from "../scripts/ci/check-agent-rules.mjs";
-import { checkPolicy } from "../scripts/ci/check-policy.mjs";
+import {
+  checkBranchPolicy,
+  checkPolicy
+} from "../scripts/ci/check-policy.mjs";
 
 test("agent rule governance accepts a bounded lifecycle corpus", () => {
   const root = mkdtempSync(join(tmpdir(), "fixlab-agent-rules-"));
@@ -39,4 +42,28 @@ test("repository policy matches enforced CI and rollback controls", () => {
   const root = join(import.meta.dirname, "..");
 
   assert.deepEqual(checkPolicy(root), []);
+});
+
+test("branch policy rejects missing or disabled code-owner review", () => {
+  const policy = {
+    targetBranch: "main",
+    requiredStatusChecks: ["test", "analyze"],
+    pullRequest: {
+      requiredApprovingReviews: 1,
+      dismissStaleApprovals: true,
+      requireReviewThreadResolution: true
+    },
+    history: {
+      requireLinearHistory: true,
+      blockDeletion: true,
+      blockForcePush: true
+    }
+  };
+  const failure = "branch policy must require code-owner review";
+
+  assert.ok(checkBranchPolicy(policy).includes(failure));
+  policy.pullRequest.requireCodeOwnerReview = false;
+  assert.ok(checkBranchPolicy(policy).includes(failure));
+  policy.pullRequest.requireCodeOwnerReview = true;
+  assert.ok(!checkBranchPolicy(policy).includes(failure));
 });
