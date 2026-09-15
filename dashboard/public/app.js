@@ -22,20 +22,10 @@ const azureDevOpsIntake = document.querySelector("#azure-devops-intake");
 const workItemInput = document.querySelector("#work-item");
 const loadWorkItemButton = document.querySelector("#load-work-item");
 const workItemSummary = document.querySelector("#work-item-summary");
-const workItemCount = document.querySelector("#work-item-count");
-const workItemList = document.querySelector("#work-item-list");
 const requestInput = document.querySelector("#request");
 const screenshotInput = document.querySelector("#screenshots");
 const screenshotList = document.querySelector("#screenshot-list");
-const jobInputPanel = document.querySelector("#job-input-panel");
-const jobInputTitle = document.querySelector("#job-input-title");
-const jobInputCount = document.querySelector("#job-input-count");
-const jobInputGuidance = document.querySelector("#job-input-guidance");
-const jobInputAction = document.querySelector("#job-input-action");
-const jobInputDetails = document.querySelector("#job-input-details");
-const jobInputSubmit = document.querySelector("#job-input-submit");
-const jobInputMessage = document.querySelector("#job-input-message");
-let loadedWorkItems = [];
+let loadedWorkItem = null;
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -126,26 +116,6 @@ function renderJob(job) {
     logLines?.length > 0 ? logLines.join("\n") : "No job output yet.";
   logsElement.scrollTop = logsElement.scrollHeight;
   formError.textContent = job?.error ?? "";
-
-  const canResume = Boolean(job?.canResume);
-  jobInputPanel.hidden = !canResume;
-  jobInputSubmit.disabled = !canResume;
-  jobInputCount.textContent = job ? `${job.inputCount} update(s)` : "";
-  if (canResume) {
-    if (job.status === "blocked") {
-      jobInputTitle.textContent = "Action needed";
-      jobInputGuidance.textContent =
-        "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
-    } else if (job.status === "failed") {
-      jobInputTitle.textContent = "Retry or correct this job";
-      jobInputGuidance.textContent =
-        "Add the information needed to correct the failure without repeating completed work.";
-    } else {
-      jobInputTitle.textContent = "Add details or update the existing PR";
-      jobInputGuidance.textContent =
-        "Continue this completed session with one focused addition. FixLab reuses its evidence, branch, and pull request.";
-    }
-  }
 }
 
 async function fetchJson(url, options) {
@@ -161,66 +131,35 @@ function selectedIntakeSource() {
   return form.elements.intakeSource.value;
 }
 
-function renderWorkItems(workItems) {
-  workItemList.replaceChildren();
-  workItemCount.textContent = `${workItems.length} bug${workItems.length === 1 ? "" : "s"} loaded`;
-  for (const workItem of workItems) {
-    const item = document.createElement("li");
-    const link = document.createElement("a");
-    link.href = workItem.webUrl;
-    link.target = "_blank";
-    link.rel = "noreferrer";
-    link.textContent = `#${workItem.id}`;
-    item.append(
-      link,
-      ` · ${workItem.state || "Unknown"} · ${workItem.title}`
-    );
-    workItemList.append(item);
-  }
+function renderWorkItem(workItem) {
+  workItemSummary.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = `#${workItem.id} · ${workItem.workItemType || "Work item"} · ${workItem.title}`;
+  const details = document.createElement("p");
+  details.textContent = `State: ${workItem.state || "Unknown"}`;
+  const link = document.createElement("a");
+  link.href = workItem.webUrl;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  link.textContent = "Open in Azure DevOps";
+  workItemSummary.append(title, details, link);
   workItemSummary.hidden = false;
 }
 
-function workItemsRequest(workItems) {
-  const separator = "\n\n==============================\n\n";
-  const blockBudget = Math.floor(
-    (9800 - separator.length * (workItems.length - 1)) / workItems.length
-  );
-  return workItems
-    .map((workItem) => {
-      const header = [
-        `Azure DevOps Bug ${workItem.id}: ${workItem.title}`,
-        `URL: ${workItem.webUrl}`,
-        workItem.state ? `State: ${workItem.state}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n");
-      const evidence = [
-        workItem.description,
-        workItem.reproduction,
-        workItem.acceptanceCriteria
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      const evidenceBudget = Math.max(
-        0,
-        blockBudget - header.length - "\nEvidence:\n".length
-      );
-      return evidenceBudget > 0 && evidence
-        ? `${header}\nEvidence:\n${evidence.slice(0, evidenceBudget)}`
-        : header.slice(0, blockBudget);
-    })
-    .join(separator);
-}
-
-function workItemInputs(value) {
+function workItemRequest(workItem) {
   return [
-    ...new Set(
-      String(value)
-        .split(/[\s,]+/)
-        .map((item) => item.trim())
-        .filter(Boolean)
-    )
-  ];
+    `Azure DevOps work item ${workItem.id}: ${workItem.title}`,
+    workItem.workItemType ? `Type: ${workItem.workItemType}` : "",
+    workItem.state ? `State: ${workItem.state}` : "",
+    workItem.description ? `Description:\n${workItem.description}` : "",
+    workItem.reproduction ? `Reproduction:\n${workItem.reproduction}` : "",
+    workItem.acceptanceCriteria
+      ? `Acceptance criteria:\n${workItem.acceptanceCriteria}`
+      : "",
+    workItem.webUrl ? `Work item: ${workItem.webUrl}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function validateSelectedScreenshots() {
@@ -277,20 +216,16 @@ loadWorkItemButton.addEventListener("click", async () => {
   formError.textContent = "";
   loadWorkItemButton.disabled = true;
   try {
-    const inputs = workItemInputs(workItemInput.value);
-    if (inputs.length < 1 || inputs.length > 20) {
-      throw new Error("Enter between 1 and 20 unique Azure DevOps IDs or URLs.");
-    }
     const body = await fetchJson("/api/azure-devops/load", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ workItems: inputs })
+      body: JSON.stringify({ workItem: workItemInput.value })
     });
-    loadedWorkItems = body.workItems;
-    renderWorkItems(loadedWorkItems);
-    requestInput.value = workItemsRequest(loadedWorkItems);
+    loadedWorkItem = body.workItem;
+    renderWorkItem(loadedWorkItem);
+    requestInput.value = workItemRequest(loadedWorkItem).slice(0, 10000);
   } catch (error) {
-    loadedWorkItems = [];
+    loadedWorkItem = null;
     workItemSummary.hidden = true;
     formError.textContent = error.message;
   } finally {
@@ -331,8 +266,8 @@ form.addEventListener("submit", async (event) => {
   try {
     const data = new FormData(form);
     const intakeSource = data.get("intakeSource");
-    if (intakeSource === "azure-devops" && loadedWorkItems.length === 0) {
-      throw new Error("Load one or more Azure DevOps bugs before starting.");
+    if (intakeSource === "azure-devops" && !loadedWorkItem) {
+      throw new Error("Load an Azure DevOps work item before starting.");
     }
     const screenshots = await Promise.all(
       validateSelectedScreenshots().map(fileBase64)
@@ -345,7 +280,7 @@ form.addEventListener("submit", async (event) => {
         requestType: data.get("requestType"),
         mode: data.get("mode"),
         intakeSource,
-        workItems: intakeSource === "azure-devops" ? loadedWorkItems : [],
+        workItem: intakeSource === "azure-devops" ? loadedWorkItem : null,
         screenshots
       })
     });
@@ -353,33 +288,6 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     formError.textContent = error.message;
     startButton.disabled = false;
-  }
-});
-
-jobInputSubmit.addEventListener("click", async () => {
-  jobInputMessage.textContent = "";
-  formError.textContent = "";
-  jobInputSubmit.disabled = true;
-  try {
-    const details = jobInputDetails.value.trim();
-    if (!details) {
-      throw new Error("Enter the additional details or manual result.");
-    }
-    const body = await fetchJson("/api/job/input", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: jobInputAction.value,
-        details
-      })
-    });
-    jobInputDetails.value = "";
-    jobInputMessage.textContent =
-      "Input accepted. FixLab resumed the same session.";
-    renderJob(body.job);
-  } catch (error) {
-    formError.textContent = error.message;
-    jobInputSubmit.disabled = false;
   }
 });
 

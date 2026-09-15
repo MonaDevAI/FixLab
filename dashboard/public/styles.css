@@ -84,8 +84,7 @@ textarea {
 }
 
 input[type="text"],
-input[type="file"],
-select {
+input[type="file"] {
   width: 100%;
   padding: .7rem;
   border: 1px solid #405275;
@@ -110,28 +109,11 @@ select {
   margin-top: .5rem;
 }
 
-.inline-input textarea {
-  margin: 0;
-}
-
 .loaded-summary {
   margin-top: .8rem;
   padding: .8rem;
   border-left: 4px solid #37c978;
   background: #101c30;
-}
-
-.work-item-list {
-  margin: .75rem 0 0;
-  padding-left: 1.25rem;
-}
-
-.work-item-list li + li {
-  margin-top: .45rem;
-}
-
-.work-item-list a {
-  color: #8ec5ff;
 }
 
 .loaded-summary p {
@@ -224,11 +206,6 @@ button:disabled {
   border-color: #f26363;
 }
 
-.stage.blocked {
-  border-color: #f26363;
-  background: rgba(242, 99, 99, .08);
-}
-
 .stage.running {
   border-color: #63a1ff;
 }
@@ -293,16 +270,6 @@ th {
 .bug-outcome.failed,
 .bug-outcome.blocked {
   border-left: 4px solid #f26363;
-}
-
-.intervention {
-  border-color: #8c6631;
-  background: rgba(84, 57, 18, .28);
-}
-
-.intervention select {
-  width: 100%;
-  margin: .5rem 0 1rem;
 }
 
 pre {

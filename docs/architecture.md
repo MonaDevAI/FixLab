@@ -63,11 +63,10 @@ unsafe-data approval, deployment or pull-request approval, or genuine blockers.
 Manual text is the default and permanently available intake path. Azure DevOps
 intake accepts a full `dev.azure.com` work-item URL, or an ID when
 `azureDevOps.organization` and `azureDevOps.project` are configured in the
-repository profile. Up to 20 unique IDs or URLs can be loaded as one batch.
-The local server asks Azure CLI for one Azure DevOps resource token using the
-developer's authenticated identity, loads the items concurrently, uses the
-token only in outbound HTTPS authorization headers, and does not expose it to
-the browser, job state, logs, prompts, or cache.
+repository profile. The local server asks Azure CLI for an Azure DevOps
+resource token using the developer's authenticated identity, uses it only in
+the outbound HTTPS authorization header, and does not expose it to the browser,
+job state, logs, prompts, or cache.
 
 The loader keeps ID, title, description, reproduction or acceptance text,
 state, type, and web URL after converting HTML to text. It does not download
@@ -82,12 +81,6 @@ job's files, clean shutdown removes current files, and startup prunes directorie
 older than seven days. Abrupt process termination can retain artifacts until
 the next pruning pass.
 
-Each job receives a UUID-backed Agency session. When the agent reports a
-blocked stage, the local dashboard accepts the required user input and resumes
-that same session. Failed jobs can retry, and completed jobs can accept a
-focused addition while reusing prior evidence, the branch, and an existing
-pull request. Running jobs are not interrupted by dashboard input.
-
 ## Context and token efficiency
 
 Each job reads the repository profile and existing instructions first, then
@@ -100,8 +93,6 @@ and risk-scaled.
 Stage summaries remain structured independently of raw output. The dashboard
 retains a bounded local log window and reports how many older entries were
 omitted; it does not feed unbounded logs back into prompts.
-Polled job responses expose only Azure DevOps identity and state summaries,
-not the full loaded descriptions and reproduction text.
 
 The dashboard streams the generated agent prompt through standard input rather
 than placing it on the process command line. This keeps multi-bug requests and
