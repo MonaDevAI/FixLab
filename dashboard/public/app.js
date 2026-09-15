@@ -42,10 +42,7 @@ const metricsPeriod = document.querySelector("#metrics-period");
 const metricBugs = document.querySelector("#metric-bugs");
 const metricCompleted = document.querySelector("#metric-completed");
 const metricDuration = document.querySelector("#metric-duration");
-const metricInputTokens = document.querySelector("#metric-input-tokens");
-const metricOutputTokens = document.querySelector("#metric-output-tokens");
 const metricCacheReuse = document.querySelector("#metric-cache-reuse");
-const metricFreshInput = document.querySelector("#metric-fresh-input");
 const metricStatuses = document.querySelector("#metric-statuses");
 let loadedWorkItems = [];
 let selectedScreenshots = [];
@@ -79,10 +76,6 @@ function formatDuration(milliseconds) {
   }
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
-}
-
-function formatTokenCount(value, available) {
-  return available ? Number(value).toLocaleString() : "—";
 }
 
 function renderReadiness(readiness) {
@@ -203,27 +196,14 @@ function renderQueue(queue = []) {
 }
 
 function renderMetrics(metrics, warning) {
-  const usageAvailable = metrics.usageJobs > 0;
   metricBugs.textContent = metrics.bugs.toLocaleString();
   metricCompleted.textContent =
     `${metrics.completed.toLocaleString()} / ${metrics.queued.toLocaleString()} jobs`;
   metricDuration.textContent = formatDuration(metrics.averageDurationMs);
-  metricInputTokens.textContent = formatTokenCount(
-    metrics.totalInputTokens,
-    usageAvailable
-  );
-  metricOutputTokens.textContent = formatTokenCount(
-    metrics.totalOutputTokens,
-    usageAvailable
-  );
   metricCacheReuse.textContent =
     metrics.cacheReusePercent === null
       ? "—"
-      : `${metrics.totalCachedInputTokens.toLocaleString()} (${metrics.cacheReusePercent.toFixed(1)}%)`;
-  metricFreshInput.textContent = formatTokenCount(
-    metrics.totalInputTokens - metrics.totalCachedInputTokens,
-    usageAvailable
-  );
+      : `${metrics.cacheReusePercent.toFixed(1)}%`;
   metricStatuses.textContent =
     warning ||
     `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · exact usage available for ${metrics.usageJobs} completed job(s)`;
