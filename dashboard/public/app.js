@@ -15,6 +15,9 @@ const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
+const queuePanel = document.querySelector("#queue-panel");
+const queueCount = document.querySelector("#queue-count");
+const queueList = document.querySelector("#queue-list");
 const bugResultsPanel = document.querySelector("#bug-results-panel");
 const bugResultsElement = document.querySelector("#bug-results");
 const logsElement = document.querySelector("#logs");
@@ -35,7 +38,17 @@ const jobInputAction = document.querySelector("#job-input-action");
 const jobInputDetails = document.querySelector("#job-input-details");
 const jobInputSubmit = document.querySelector("#job-input-submit");
 const jobInputMessage = document.querySelector("#job-input-message");
+const metricsPeriod = document.querySelector("#metrics-period");
+const metricBugs = document.querySelector("#metric-bugs");
+const metricCompleted = document.querySelector("#metric-completed");
+const metricDuration = document.querySelector("#metric-duration");
+const metricInputTokens = document.querySelector("#metric-input-tokens");
+const metricOutputTokens = document.querySelector("#metric-output-tokens");
+const metricCacheReuse = document.querySelector("#metric-cache-reuse");
+const metricStatuses = document.querySelector("#metric-statuses");
 let loadedWorkItems = [];
+let selectedScreenshots = [];
+let screenshotPreviewUrls = [];
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -50,6 +63,27 @@ function escapeText(value) {
   return String(value ?? "");
 }
 
+function formatDuration(milliseconds) {
+  if (!Number.isFinite(milliseconds)) {
+    return "—";
+  }
+  const seconds = Math.round(milliseconds / 1000);
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  if (minutes < 60) {
+    return `${minutes}m ${remainingSeconds}s`;
+  }
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ${minutes % 60}m`;
+}
+
+function formatTokenCount(value, available) {
+  return available ? Number(value).toLocaleString() : "—";
+}
+
 function renderReadiness(readiness) {
   const ready = readiness.repositoryReady && readiness.profileReady;
   readinessElement.className = `readiness ${ready ? "ready" : "blocked"}`;
@@ -61,10 +95,13 @@ function renderReadiness(readiness) {
 
 function renderJob(job) {
   const running = job?.status === "running";
-  startButton.disabled =
-    running || readinessElement.classList.contains("blocked");
+  startButton.disabled = readinessElement.classList.contains("blocked");
+  startButton.textContent =
+    running || ["blocked", "failed"].includes(job?.status)
+      ? "Add to queue"
+      : "Start job";
   jobStatusElement.textContent = job
-    ? `${job.status} · ${job.requestType}`
+    ? `${job.status} · ${job.requestType} · ${formatDuration(job.durationMs)}`
     : "Not started";
   jobStatusElement.className = `badge ${job?.status ?? ""}`;
 
@@ -148,6 +185,45 @@ function renderJob(job) {
   }
 }
 
+function renderQueue(queue = []) {
+  queuePanel.hidden = queue.length === 0;
+  queueCount.textContent = `${queue.length} waiting`;
+  queueList.replaceChildren();
+  for (const job of queue) {
+    const item = document.createElement("li");
+    const summary = document.createElement("strong");
+    summary.textContent = `#${job.position} · ${job.requestType}`;
+    const details = document.createElement("span");
+    details.textContent =
+      ` · ${job.bugCount} bug(s) · ${job.screenshotCount} screenshot(s) · ${job.request}`;
+    item.append(summary, details);
+    queueList.append(item);
+  }
+}
+
+function renderMetrics(metrics, warning) {
+  const usageAvailable = metrics.usageJobs > 0;
+  metricBugs.textContent = metrics.bugs.toLocaleString();
+  metricCompleted.textContent =
+    `${metrics.completed.toLocaleString()} / ${metrics.queued.toLocaleString()} jobs`;
+  metricDuration.textContent = formatDuration(metrics.averageDurationMs);
+  metricInputTokens.textContent = formatTokenCount(
+    metrics.totalInputTokens,
+    usageAvailable
+  );
+  metricOutputTokens.textContent = formatTokenCount(
+    metrics.totalOutputTokens,
+    usageAvailable
+  );
+  metricCacheReuse.textContent =
+    metrics.cacheReusePercent === null
+      ? "—"
+      : `${metrics.cacheReusePercent.toFixed(1)}%`;
+  metricStatuses.textContent =
+    warning ||
+    `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · exact usage available for ${metrics.usageJobs} completed job(s)`;
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   const body = await response.json();
@@ -173,7 +249,7 @@ function renderWorkItems(workItems) {
     link.textContent = `#${workItem.id}`;
     item.append(
       link,
-      ` · ${workItem.state || "Unknown"} · ${workItem.title}`
+      ` · ${workItem.state || "Unknown"} · ${workItem.title} · ${workItem.commentCount || 0} comment(s)${workItem.commentsWarning ? " · comments unavailable" : ""}`
     );
     workItemList.append(item);
   }
@@ -197,7 +273,12 @@ function workItemsRequest(workItems) {
       const evidence = [
         workItem.description,
         workItem.reproduction,
-        workItem.acceptanceCriteria
+        workItem.acceptanceCriteria,
+        workItem.commentsWarning,
+        ...(workItem.comments ?? []).map(
+          (comment) =>
+            `Comment by ${comment.author || "Unknown"}${comment.createdAt ? ` at ${comment.createdAt}` : ""}:\n${comment.text}`
+        )
       ]
         .filter(Boolean)
         .join("\n\n");
@@ -224,7 +305,7 @@ function workItemInputs(value) {
 }
 
 function validateSelectedScreenshots() {
-  const files = [...screenshotInput.files];
+  const files = selectedScreenshots;
   if (files.length > maxScreenshots) {
     throw new Error(`Select at most ${maxScreenshots} screenshots.`);
   }
@@ -242,6 +323,57 @@ function validateSelectedScreenshots() {
     throw new Error("Selected screenshots exceed the 8 MiB total limit.");
   }
   return files;
+}
+
+function renderScreenshots() {
+  for (const url of screenshotPreviewUrls) {
+    URL.revokeObjectURL(url);
+  }
+  screenshotPreviewUrls = [];
+  screenshotList.replaceChildren();
+  for (const file of selectedScreenshots) {
+    const item = document.createElement("li");
+    const preview = document.createElement("img");
+    const previewUrl = URL.createObjectURL(file);
+    screenshotPreviewUrls.push(previewUrl);
+    preview.src = previewUrl;
+    preview.alt = `Preview of ${file.name}`;
+    const label = document.createElement("span");
+    label.textContent = `${file.name} (${Math.ceil(file.size / 1024)} KiB)`;
+    item.append(preview, label);
+    screenshotList.append(item);
+  }
+}
+
+function addScreenshots(files) {
+  const next = [...selectedScreenshots, ...files];
+  selectedScreenshots = next;
+  try {
+    validateSelectedScreenshots();
+  } catch (error) {
+    selectedScreenshots = next.slice(0, -files.length);
+    throw error;
+  }
+  renderScreenshots();
+}
+
+function normalizeClipboardScreenshot(file, index) {
+  if (file.name) {
+    return file;
+  }
+  const extension = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp"
+  }[file.type];
+  return new File(
+    [file],
+    `pasted-${Date.now()}-${index + 1}${extension}`,
+    {
+      type: file.type,
+      lastModified: file.lastModified
+    }
+  );
 }
 
 function fileBase64(file) {
@@ -300,16 +432,31 @@ loadWorkItemButton.addEventListener("click", async () => {
 
 screenshotInput.addEventListener("change", () => {
   formError.textContent = "";
-  screenshotList.replaceChildren();
   try {
-    const files = validateSelectedScreenshots();
-    for (const file of files) {
-      const item = document.createElement("li");
-      item.textContent = `${file.name} (${Math.ceil(file.size / 1024)} KiB)`;
-      screenshotList.append(item);
-    }
+    addScreenshots([...screenshotInput.files]);
   } catch (error) {
+    formError.textContent = error.message;
+  } finally {
     screenshotInput.value = "";
+  }
+});
+
+requestInput.addEventListener("paste", (event) => {
+  const files = [...(event.clipboardData?.items ?? [])]
+    .filter(
+      (item) => item.kind === "file" && allowedScreenshotTypes.has(item.type)
+    )
+    .map((item) => item.getAsFile())
+    .filter(Boolean)
+    .map(normalizeClipboardScreenshot);
+  if (files.length === 0) {
+    return;
+  }
+  event.preventDefault();
+  formError.textContent = "";
+  try {
+    addScreenshots(files);
+  } catch (error) {
     formError.textContent = error.message;
   }
 });
@@ -319,10 +466,24 @@ async function refresh() {
     const body = await fetchJson("/api/status");
     renderReadiness(body.readiness);
     renderJob(body.job);
+    renderQueue(body.queue);
   } catch (error) {
     formError.textContent = error.message;
   }
 }
+
+async function refreshMetrics() {
+  try {
+    const body = await fetchJson(
+      `/api/metrics?period=${encodeURIComponent(metricsPeriod.value)}`
+    );
+    renderMetrics(body.metrics, body.warning);
+  } catch (error) {
+    formError.textContent = error.message;
+  }
+}
+
+metricsPeriod.addEventListener("change", refreshMetrics);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -349,7 +510,11 @@ form.addEventListener("submit", async (event) => {
         screenshots
       })
     });
+    selectedScreenshots = [];
+    renderScreenshots();
     renderJob(body.job);
+    renderQueue(body.queue);
+    await refreshMetrics();
   } catch (error) {
     formError.textContent = error.message;
     startButton.disabled = false;
@@ -384,4 +549,6 @@ jobInputSubmit.addEventListener("click", async () => {
 });
 
 refresh();
+refreshMetrics();
 setInterval(refresh, 1000);
+setInterval(refreshMetrics, 5000);

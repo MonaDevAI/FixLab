@@ -405,7 +405,22 @@ export function createAzureDevOpsLoader({
       `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
       `${encodeURIComponent(target.project)}/_apis/wit/workitems/` +
       `${target.id}?$expand=all&api-version=7.1`;
-    const item = await requestJson(apiUrl, token);
+    const commentsUrl =
+      `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
+      `${encodeURIComponent(target.project)}/_apis/wit/workItems/` +
+      `${target.id}/comments?$top=20&order=desc&api-version=7.1-preview.4`;
+    const [item, commentResult] = await Promise.all([
+      requestJson(apiUrl, token),
+      requestJson(commentsUrl, token).then(
+        (response) => ({ response, warning: "" }),
+        () => ({
+          response: { comments: [] },
+          warning:
+            "Azure DevOps comments could not be loaded. Verify comment access and retry if comments are required."
+        })
+      )
+    ]);
+    const commentResponse = commentResult.response;
     const fields = item?.fields ?? {};
     const fallbackWebUrl =
       `https://dev.azure.com/${encodeURIComponent(target.organization)}/` +
@@ -430,6 +445,19 @@ export function createAzureDevOpsLoader({
       ),
       state: workItemText(fields["System.State"], 200),
       workItemType: workItemText(fields["System.WorkItemType"], 200),
+      comments: (commentResponse?.comments ?? [])
+        .filter((comment) => !comment?.isDeleted)
+        .slice(0, 20)
+        .map((comment) => ({
+          author: workItemText(comment?.createdBy?.displayName, 200),
+          createdAt:
+            typeof comment?.createdDate === "string"
+              ? comment.createdDate.slice(0, 100)
+              : "",
+          text: workItemText(comment?.text, 2000)
+        }))
+        .filter((comment) => comment.text),
+      commentsWarning: commentResult.warning,
       webUrl
     };
   }

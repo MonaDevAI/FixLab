@@ -43,7 +43,7 @@
           <label for="screenshots">Screenshots (optional)</label>
           <input id="screenshots" name="screenshots" type="file"
             accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple>
-          <p class="guidance">Up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Files remain local and are removed when replaced or when the dashboard stops.</p>
+          <p class="guidance">Paste images into the bug description with Ctrl+V, or select up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Files remain local and are removed when replaced or when the dashboard stops.</p>
           <ul id="screenshot-list" class="file-list"></ul>
           <fieldset>
             <legend>Request type</legend>
@@ -67,6 +67,38 @@
           <span id="job-status" class="badge">Not started</span>
         </div>
         <div id="stages" class="stages"></div>
+        <div id="queue-panel" class="queue-panel" hidden>
+          <div class="section-heading">
+            <h3>Running queue</h3>
+            <span id="queue-count"></span>
+          </div>
+          <ol id="queue-list"></ol>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="section-heading">
+          <h2>Workflow statistics</h2>
+          <label class="period-label" for="metrics-period">
+            Period
+            <select id="metrics-period">
+              <option value="24h">Last 24 hours</option>
+              <option value="7d" selected>Last 7 days</option>
+              <option value="30d">Last 30 days</option>
+              <option value="all">All retained</option>
+            </select>
+          </label>
+        </div>
+        <div class="metrics">
+          <article><span>Bugs queued</span><strong id="metric-bugs">0</strong></article>
+          <article><span>Jobs completed</span><strong id="metric-completed">0</strong></article>
+          <article><span>Average time</span><strong id="metric-duration">—</strong></article>
+          <article><span>Input tokens</span><strong id="metric-input-tokens">—</strong></article>
+          <article><span>Output tokens</span><strong id="metric-output-tokens">—</strong></article>
+          <article><span>Input cache reuse</span><strong id="metric-cache-reuse">—</strong></article>
+        </div>
+        <p id="metric-statuses" class="guidance"></p>
+        <p class="guidance">Token totals are recorded only when Copilot emits its terminal usage summary. Input cache reuse is cached input divided by total input; it is not presented as exact token or cost savings without a comparable baseline.</p>
       </section>
 
       <section id="bug-results-panel" class="panel" hidden>

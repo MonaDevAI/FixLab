@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   statSync,
   writeFileSync
 } from "node:fs";
@@ -24,6 +25,8 @@ export const DEFAULT_DASHBOARD_PORT = 4317;
 export const MAX_JOB_LOG_ENTRIES = 1000;
 export const MAX_CACHE_ENTRIES = 20;
 export const MAX_CACHE_BYTES = 64 * 1024;
+export const MAX_METRICS_ENTRIES = 500;
+export const MAX_QUEUED_JOBS = 20;
 export const FIXLAB_STAGES = [
   "intake",
   "diagnosis",
@@ -74,6 +77,19 @@ export function validatePort(value) {
     throw new Error("dashboard port must be an integer between 1 and 65535");
   }
   return port;
+}
+
+function publicQueue(jobs) {
+  return jobs.map((job, index) => ({
+    id: job.id,
+    position: index + 1,
+    request: safeSummary(job.request),
+    requestType: job.requestType,
+    intakeSource: job.intakeSource,
+    bugCount: job.bugs.length,
+    screenshotCount: job.screenshots.length,
+    createdAt: job.createdAt
+  }));
 }
 
 export function inspectRepository(repository) {
@@ -148,12 +164,22 @@ export function buildJobPrompt({
   const intakeWorkItems =
     workItems.length > 0 ? workItems : workItem ? [workItem] : [];
   const intakeSummary = intakeWorkItems.map(
-    ({ id, title, state, workItemType, webUrl }) => ({
+    ({
       id,
       title,
       state,
       workItemType,
-      webUrl
+      webUrl,
+      comments,
+      commentsWarning
+    }) => ({
+      id,
+      title,
+      state,
+      workItemType,
+      webUrl,
+      commentCount: comments.length,
+      commentsWarning
     })
   );
   const bugResults = extractBugResults(request, intakeWorkItems);
@@ -279,6 +305,165 @@ function safeSummary(value) {
     return "[omitted potentially sensitive summary]";
   }
   return text;
+}
+
+function parseTokenCount(value) {
+  const match = String(value).trim().match(/^([\d.]+)\s*([kmb]?)$/i);
+  if (!match) {
+    return null;
+  }
+  const multiplier = {
+    "": 1,
+    k: 1_000,
+    m: 1_000_000,
+    b: 1_000_000_000
+  }[match[2].toLowerCase()];
+  const count = Number(match[1]) * multiplier;
+  return Number.isFinite(count) ? Math.round(count) : null;
+}
+
+function parseUsageLine(line) {
+  const match = line.match(
+    /Tokens\s+↑\s*([\d.]+\s*[kmb]?)\s+\(([\d.]+\s*[kmb]?)\s+cached,\s*([\d.]+\s*[kmb]?)\s+written\)\s+•\s+↓\s*([\d.]+\s*[kmb]?)/i
+  );
+  if (!match) {
+    return null;
+  }
+  const values = match.slice(1).map(parseTokenCount);
+  if (values.some((value) => value === null)) {
+    return null;
+  }
+  const [inputTokens, cachedInputTokens, cacheWriteTokens, outputTokens] =
+    values;
+  return {
+    inputTokens,
+    cachedInputTokens,
+    cacheWriteTokens,
+    outputTokens,
+    cacheReusePercent:
+      inputTokens > 0
+        ? Math.round((cachedInputTokens / inputTokens) * 1000) / 10
+        : 0
+  };
+}
+
+function readMetrics(path) {
+  if (!path || !existsSync(path)) {
+    return { records: [], warning: null };
+  }
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    if (!Array.isArray(value?.jobs)) {
+      throw new Error("metrics history has an invalid shape");
+    }
+    return {
+      records: value.jobs.slice(-MAX_METRICS_ENTRIES),
+      warning: null
+    };
+  } catch {
+    return {
+      records: [],
+      warning:
+        "The existing dashboard metrics history could not be read and was ignored."
+    };
+  }
+}
+
+function updateJobMetrics(records, job) {
+  const record = {
+    id: job.id,
+    createdAt: job.createdAt,
+    finishedAt: job.finishedAt,
+    status: job.status,
+    bugCount: job.bugs.length,
+    durationMs: job.finishedAt
+      ? Math.max(
+          0,
+          Date.parse(job.finishedAt) -
+            Date.parse(job.startedAt ?? job.createdAt)
+        )
+      : null,
+    queueWaitMs: job.startedAt
+      ? Math.max(0, Date.parse(job.startedAt) - Date.parse(job.createdAt))
+      : null,
+    ...job.usage
+  };
+  const next = [
+    ...records.filter((candidate) => candidate.id !== job.id),
+    record
+  ].slice(-MAX_METRICS_ENTRIES);
+  return next;
+}
+
+function writeMetrics(path, records) {
+  if (!path) {
+    return;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  writeFileSync(
+    temporaryPath,
+    JSON.stringify({ version: 1, jobs: records }),
+    { mode: 0o600 }
+  );
+  renameSync(temporaryPath, path);
+}
+
+function summarizeMetrics(records, period) {
+  const durations = {
+    "24h": 24 * 60 * 60 * 1000,
+    "7d": 7 * 24 * 60 * 60 * 1000,
+    "30d": 30 * 24 * 60 * 60 * 1000
+  };
+  const cutoff = durations[period] ? Date.now() - durations[period] : 0;
+  const selected = records.filter(
+    (record) => Date.parse(record.createdAt) >= cutoff
+  );
+  const completed = selected.filter((record) => record.finishedAt);
+  const usageJobs = completed.filter(
+    (record) => Number.isFinite(record.inputTokens) && record.inputTokens > 0
+  );
+  const totalInputTokens = usageJobs.reduce(
+    (total, record) => total + record.inputTokens,
+    0
+  );
+  const totalCachedInputTokens = usageJobs.reduce(
+    (total, record) => total + record.cachedInputTokens,
+    0
+  );
+  return {
+    period,
+    queued: selected.length,
+    completed: completed.length,
+    passed: completed.filter((record) => record.status === "passed").length,
+    failed: completed.filter((record) => record.status === "failed").length,
+    blocked: completed.filter((record) => record.status === "blocked").length,
+    bugs: selected.reduce((total, record) => total + record.bugCount, 0),
+    averageDurationMs:
+      completed.length > 0
+        ? Math.round(
+            completed.reduce(
+              (total, record) => total + (record.durationMs ?? 0),
+              0
+            ) / completed.length
+          )
+        : null,
+    usageJobs: usageJobs.length,
+    totalInputTokens,
+    totalCachedInputTokens,
+    totalCacheWriteTokens: usageJobs.reduce(
+      (total, record) => total + record.cacheWriteTokens,
+      0
+    ),
+    totalOutputTokens: usageJobs.reduce(
+      (total, record) => total + record.outputTokens,
+      0
+    ),
+    cacheReusePercent:
+      totalInputTokens > 0
+        ? Math.round((totalCachedInputTokens / totalInputTokens) * 1000) / 10
+        : null
+  };
 }
 
 export function createCacheContext(repository) {
@@ -526,6 +711,14 @@ function publicJob(job) {
     error: job.error,
     canResume: ["blocked", "failed", "passed"].includes(job.status),
     inputCount: job.inputs.length,
+    durationMs: Math.max(
+      0,
+      job.startedAt
+        ? Date.parse(job.finishedAt ?? new Date().toISOString()) -
+            Date.parse(job.startedAt)
+        : 0
+    ),
+    usage: job.usage,
     stages: job.stages,
     bugs: job.bugs,
     logs: job.logs,
@@ -537,8 +730,24 @@ function publicWorkItem(workItem) {
   if (!workItem) {
     return null;
   }
-  const { id, title, state, workItemType, webUrl } = workItem;
-  return { id, title, state, workItemType, webUrl };
+  const {
+    id,
+    title,
+    state,
+    workItemType,
+    webUrl,
+    comments,
+    commentsWarning
+  } = workItem;
+  return {
+    id,
+    title,
+    state,
+    workItemType,
+    webUrl,
+    commentCount: comments.length,
+    commentsWarning
+  };
 }
 
 async function readJsonBody(request, maxBytes = 64 * 1024) {
@@ -597,6 +806,33 @@ function validateWorkItemSummary(value) {
       : 1000;
     result[field] = (value[field] ?? "").trim().slice(0, maximum);
   }
+  if (value.comments !== undefined && !Array.isArray(value.comments)) {
+    throw new Error("loaded work item comments must be an array");
+  }
+  result.comments = (value.comments ?? []).slice(0, 20).map((comment) => {
+    if (!comment || typeof comment !== "object" || Array.isArray(comment)) {
+      throw new Error("loaded work item comments must be objects");
+    }
+    for (const field of ["author", "createdAt", "text"]) {
+      if (comment[field] !== undefined && typeof comment[field] !== "string") {
+        throw new Error(`loaded work item comment ${field} must be a string`);
+      }
+    }
+    return {
+      author: (comment.author ?? "").trim().slice(0, 200),
+      createdAt: (comment.createdAt ?? "").trim().slice(0, 100),
+      text: (comment.text ?? "").trim().slice(0, 2000)
+    };
+  });
+  if (
+    value.commentsWarning !== undefined &&
+    typeof value.commentsWarning !== "string"
+  ) {
+    throw new Error("loaded work item comments warning must be a string");
+  }
+  result.commentsWarning = (value.commentsWarning ?? "")
+    .trim()
+    .slice(0, 500);
   if (
     result.webUrl &&
     !/^https:\/\/dev\.azure\.com\//i.test(result.webUrl)
@@ -623,6 +859,10 @@ function appendLine(job, stream, line) {
     stream,
     message: line
   });
+  const usage = parseUsageLine(line);
+  if (usage) {
+    job.usage = usage;
+  }
   const bugMarker = line.match(
     /^FIXLAB_BUG\|(\d+)\|([^|]+)\|([^|]+)\|(.*)$/
   );
@@ -782,7 +1022,26 @@ export function createDashboardServer({
   const resolvedRepository = resolve(repository);
   let currentJob = null;
   let activeHandle = null;
+  const queuedJobs = [];
   const artifactDirectories = new Set();
+  const cacheContext = createCacheContext(resolvedRepository);
+  const metricsPath = cacheContext
+    ? join(dirname(cacheContext.cachePath), "dashboard-metrics.json")
+    : null;
+  const loadedMetrics = readMetrics(metricsPath);
+  let metricsRecords = loadedMetrics.records;
+  let metricsWarning = loadedMetrics.warning;
+
+  function recordJobMetric(job) {
+    metricsRecords = updateJobMetrics(metricsRecords, job);
+    try {
+      writeMetrics(metricsPath, metricsRecords);
+      metricsWarning = null;
+    } catch {
+      metricsWarning =
+        "Dashboard metrics were updated in memory but could not be persisted.";
+    }
+  }
 
   function startJob(job, prompt, resume = false) {
     const handle = executor({
@@ -796,13 +1055,46 @@ export function createDashboardServer({
     });
     activeHandle = handle;
     Promise.resolve(handle.completion)
-      .then((result) => finishJob(job, result))
-      .catch((error) => finishJob(job, { code: null, error }))
+      .then((result) => {
+        finishJob(job, result);
+        recordJobMetric(job);
+      })
+      .catch((error) => {
+        finishJob(job, { code: null, error });
+        recordJobMetric(job);
+      })
       .finally(() => {
         if (activeHandle === handle) {
           activeHandle = null;
         }
+        startNextJob();
       });
+  }
+
+  function startNextJob() {
+    if (
+      activeHandle ||
+      queuedJobs.length === 0 ||
+      (currentJob && currentJob.status !== "passed")
+    ) {
+      return;
+    }
+    if (currentJob?.artifactDirectory) {
+      removeArtifactDirectory(currentJob.artifactDirectory);
+      artifactDirectories.delete(currentJob.artifactDirectory);
+    }
+    currentJob = queuedJobs.shift();
+    currentJob.status = "running";
+    currentJob.startedAt = new Date().toISOString();
+    recordJobMetric(currentJob);
+    try {
+      startJob(currentJob, currentJob.pendingPrompt);
+      delete currentJob.pendingPrompt;
+    } catch (error) {
+      finishJob(currentJob, { code: null, error });
+      recordJobMetric(currentJob);
+      activeHandle = null;
+    }
   }
 
   const server = createServer(async (request, response) => {
@@ -814,13 +1106,32 @@ export function createDashboardServer({
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
       sendJson(response, 200, {
         readiness: inspectRepository(resolvedRepository),
-        job: publicJob(currentJob)
+        job: publicJob(currentJob),
+        queue: publicQueue(queuedJobs)
       });
       return;
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/job") {
-      sendJson(response, 200, { job: publicJob(currentJob) });
+      sendJson(response, 200, {
+        job: publicJob(currentJob),
+        queue: publicQueue(queuedJobs)
+      });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/metrics") {
+      const period = requestUrl.searchParams.get("period") ?? "7d";
+      if (!["24h", "7d", "30d", "all"].includes(period)) {
+        sendJson(response, 400, {
+          error: "period must be 24h, 7d, 30d, or all"
+        });
+        return;
+      }
+      sendJson(response, 200, {
+        metrics: summarizeMetrics(metricsRecords, period),
+        warning: metricsWarning
+      });
       return;
     }
 
@@ -947,20 +1258,29 @@ export function createDashboardServer({
       });
       const prompt = buildResumePrompt(currentJob, { action, details });
       resetJobForResume(currentJob);
+      recordJobMetric(currentJob);
       try {
         startJob(currentJob, prompt, true);
       } catch (error) {
         finishJob(currentJob, { code: null, error });
+        recordJobMetric(currentJob);
         activeHandle = null;
       }
-      sendJson(response, 202, { job: publicJob(currentJob) });
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        queue: publicQueue(queuedJobs)
+      });
       return;
     }
 
     if (request.method === "POST" && requestUrl.pathname === "/api/jobs") {
-      if (currentJob?.status === "running") {
+      let shouldQueue =
+        Boolean(activeHandle) ||
+        ["running", "blocked", "failed"].includes(currentJob?.status) ||
+        queuedJobs.length > 0;
+      if (shouldQueue && queuedJobs.length >= MAX_QUEUED_JOBS) {
         sendJson(response, 409, {
-          error: "a FixLab job is already running"
+          error: `the FixLab queue already contains ${MAX_QUEUED_JOBS} jobs`
         });
         return;
       }
@@ -1040,7 +1360,17 @@ export function createDashboardServer({
         return;
       }
 
-      if (currentJob?.artifactDirectory) {
+      shouldQueue =
+        Boolean(activeHandle) ||
+        ["running", "blocked", "failed"].includes(currentJob?.status) ||
+        queuedJobs.length > 0;
+      if (shouldQueue && queuedJobs.length >= MAX_QUEUED_JOBS) {
+        sendJson(response, 409, {
+          error: `the FixLab queue already contains ${MAX_QUEUED_JOBS} jobs`
+        });
+        return;
+      }
+      if (!shouldQueue && currentJob?.artifactDirectory) {
         removeArtifactDirectory(currentJob.artifactDirectory);
         artifactDirectories.delete(currentJob.artifactDirectory);
       }
@@ -1060,8 +1390,9 @@ export function createDashboardServer({
         artifactDirectories.add(storedScreenshots.directory);
       }
 
-      currentJob = {
+      const job = {
         id: jobId,
+        createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
         intakeSource,
@@ -1070,11 +1401,18 @@ export function createDashboardServer({
         screenshots: storedScreenshots.files,
         artifactDirectory: storedScreenshots.directory,
         mode: body.mode,
-        status: "running",
-        startedAt: new Date().toISOString(),
+        status: shouldQueue ? "queued" : "running",
+        startedAt: shouldQueue ? null : new Date().toISOString(),
         finishedAt: null,
         error: null,
         inputs: [],
+        usage: {
+          inputTokens: 0,
+          cachedInputTokens: 0,
+          cacheWriteTokens: 0,
+          outputTokens: 0,
+          cacheReusePercent: 0
+        },
         stages: Object.fromEntries(
           FIXLAB_STAGES.map((stage) => [
             stage,
@@ -1088,27 +1426,38 @@ export function createDashboardServer({
         cacheContext: createCacheContext(resolvedRepository),
         partial: { stdout: "", stderr: "" }
       };
+      job.pendingPrompt = buildJobPrompt({
+        request: requestText,
+        mode: body.mode,
+        requestType,
+        intakeSource,
+        workItem,
+        workItems,
+        screenshotPaths: storedScreenshots.files.map((file) => file.path),
+        cacheSummary: loadCacheSummary(job.cacheContext)
+      });
+      recordJobMetric(job);
 
-      try {
-        startJob(
-          currentJob,
-          buildJobPrompt({
-            request: requestText,
-            mode: body.mode,
-            requestType,
-            intakeSource,
-            workItem,
-            workItems,
-            screenshotPaths: storedScreenshots.files.map((file) => file.path),
-            cacheSummary: loadCacheSummary(currentJob.cacheContext)
-          })
-        );
-      } catch (error) {
-        finishJob(currentJob, { code: null, error });
-        activeHandle = null;
+      if (shouldQueue) {
+        queuedJobs.push(job);
+      } else {
+        currentJob = job;
+        try {
+          startJob(currentJob, currentJob.pendingPrompt);
+          delete currentJob.pendingPrompt;
+        } catch (error) {
+          finishJob(currentJob, { code: null, error });
+          recordJobMetric(currentJob);
+          activeHandle = null;
+        }
       }
 
-      sendJson(response, 202, { job: publicJob(currentJob) });
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        queued: shouldQueue,
+        queuedJob: shouldQueue ? publicQueue([job])[0] : null,
+        queue: publicQueue(queuedJobs)
+      });
       return;
     }
 

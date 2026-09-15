@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import {
   buildAgencyInvocation,
@@ -567,13 +567,22 @@ test("zero exit with missing terminal markers fails as incomplete", async () => 
   }
 });
 
-test("dashboard rejects concurrent and invalid job starts", async () => {
+test("dashboard queues concurrent jobs and starts the next passed job", async () => {
   const repository = createRepository();
   let resolveJob;
+  let firstOutput;
+  let executorCalls = 0;
   const completion = new Promise((resolve) => {
     resolveJob = resolve;
   });
-  const executor = () => ({ completion, terminate() {} });
+  const executor = ({ onOutput }) => {
+    executorCalls += 1;
+    if (executorCalls === 1) {
+      firstOutput = onOutput;
+      return { completion, terminate() {} };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
   const { dashboard, url } = await startDashboard(repository, executor);
 
   try {
@@ -615,16 +624,101 @@ test("dashboard rejects concurrent and invalid job starts", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        request: "This job must be rejected.",
+        request: "Run this job second.",
         requestType: "bug-fix",
         mode: "validate-only"
       })
     });
-    assert.equal(second.response.status, 409);
-    assert.match(second.body.error, /already running/);
+    assert.equal(second.response.status, 202);
+    assert.equal(second.body.queued, true);
+    assert.equal(second.body.queue.length, 1);
+    assert.equal(second.body.queue[0].position, 1);
+
+    for (const stage of FIXLAB_STAGES) {
+      firstOutput(
+        "stdout",
+        `FIXLAB_STAGE|${stage}|passed|completed\n`
+      );
+    }
+    resolveJob({ code: 0 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const status = await jsonRequest(url, "/api/status");
+    assert.equal(executorCalls, 2);
+    assert.equal(status.body.job.request, "Run this job second.");
+    assert.equal(status.body.job.status, "running");
+    assert.deepEqual(status.body.queue, []);
   } finally {
-    resolveJob({ code: 1 });
     await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard persists privacy-safe token and duration metrics", async () => {
+  const repository = createGitRepository();
+  const executor = ({ onOutput }) => {
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|completed\n`);
+    }
+    onOutput(
+      "stdout",
+      "Tokens ↑ 2.4m (1.9m cached, 367.4k written) • ↓ 14.8k\n"
+    );
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const first = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Private request text must not persist.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    assert.equal(started.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const metrics = await jsonRequest(
+      first.url,
+      "/api/metrics?period=24h"
+    );
+    assert.equal(metrics.body.metrics.queued, 1);
+    assert.equal(metrics.body.metrics.completed, 1);
+    assert.equal(metrics.body.metrics.totalInputTokens, 2_400_000);
+    assert.equal(metrics.body.metrics.totalCachedInputTokens, 1_900_000);
+    assert.equal(metrics.body.metrics.totalCacheWriteTokens, 367_400);
+    assert.equal(metrics.body.metrics.totalOutputTokens, 14_800);
+    assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
+
+    const context = createCacheContext(repository);
+    const metricsPath = join(
+      dirname(context.cachePath),
+      "dashboard-metrics.json"
+    );
+    const persisted = readFileSync(metricsPath, "utf8");
+    assert.doesNotMatch(persisted, /Private request text/);
+    assert.doesNotMatch(persisted, /comments|screenshots|logs/);
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("executor should not run while reading metrics");
+  });
+  try {
+    const metrics = await jsonRequest(
+      second.url,
+      "/api/metrics?period=all"
+    );
+    assert.equal(metrics.body.metrics.queued, 1);
+    assert.equal(metrics.body.metrics.completed, 1);
+    assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
+  } finally {
+    await second.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });

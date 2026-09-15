@@ -4,6 +4,11 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Load bounded Azure DevOps comments, support clipboard-pasted screenshot
+  evidence, and expose comment-access warnings without discarding bugs.
+- Add a visible 20-job running queue with same-session blocker handling.
+- Add privacy-safe period statistics for bugs, execution time, exact Copilot
+  token usage, and input cache reuse.
 - Add a repository-installed `fixlab-autofix` Visual Studio Code agent and
   `/fixlab.bugfix` prompt for one-bug reproduce, repair, and verification
   workflows.

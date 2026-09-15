@@ -81,6 +81,22 @@ test("Azure DevOps loader returns safe fields without exposing tokens", async ()
     requestJson: async (url, suppliedToken) => {
       authorizationToken = suppliedToken;
       assert.match(url, /profile-org\/Profile%20Project/);
+      if (url.includes("/comments?")) {
+        return {
+          comments: [
+            {
+              createdBy: { displayName: "<b>Reviewer</b>" },
+              createdDate: "2026-03-09T10:00:00Z",
+              text: "<p>Newest &amp; useful</p>"
+            },
+            {
+              isDeleted: true,
+              createdBy: { displayName: "Deleted" },
+              text: "Do not include"
+            }
+          ]
+        };
+      }
       return {
         id: 42,
         fields: {
@@ -116,6 +132,14 @@ test("Azure DevOps loader returns safe fields without exposing tokens", async ()
   assert.equal(item.description, "Save & continue fails.");
   assert.equal(item.reproduction, "- Open");
   assert.equal(item.acceptanceCriteria, "Save succeeds.");
+  assert.deepEqual(item.comments, [
+    {
+      author: "Reviewer",
+      createdAt: "2026-03-09T10:00:00Z",
+      text: "Newest & useful"
+    }
+  ]);
+  assert.equal(item.commentsWarning, "");
 
   const failingLoader = createAzureDevOpsLoader({
     tokenProvider: () => token,
@@ -143,7 +167,7 @@ test("Azure DevOps loader returns safe fields without exposing tokens", async ()
 
 test("Azure DevOps batch loader authenticates once and loads unique bugs concurrently", async () => {
   let tokenCalls = 0;
-  const requestedIds = [];
+  const requestedUrls = [];
   const loader = createAzureDevOpsLoader({
     tokenProvider: () => {
       tokenCalls += 1;
@@ -151,7 +175,10 @@ test("Azure DevOps batch loader authenticates once and loads unique bugs concurr
     },
     requestJson: async (url) => {
       const id = Number(url.match(/workitems\/(\d+)/i)?.[1]);
-      requestedIds.push(id);
+      requestedUrls.push(url);
+      if (url.includes("/comments?")) {
+        return { comments: [] };
+      }
       return {
         id,
         fields: {
@@ -175,14 +202,80 @@ test("Azure DevOps batch loader authenticates once and loads unique bugs concurr
   });
 
   assert.equal(tokenCalls, 1);
-  assert.deepEqual(requestedIds.sort((left, right) => left - right), [
+  assert.equal(requestedUrls.length, 6);
+  assert.deepEqual(
+    requestedUrls
+      .map((url) => Number(url.match(/workitems\/(\d+)/i)?.[1]))
+      .filter((id, index, values) => values.indexOf(id) === index)
+      .sort((left, right) => left - right),
+    [
     101,
     202,
     303
-  ]);
+    ]
+  );
   assert.deepEqual(
     workItems.map((item) => item.title),
     ["Bug 101", "Bug 202", "Bug 303"]
+  );
+});
+
+test("Azure DevOps loader bounds comments and reports comment-only failures", async () => {
+  const comments = Array.from({ length: 25 }, (_, index) => ({
+    createdBy: { displayName: `Author ${index}` },
+    createdDate: `2026-03-09T10:${String(index).padStart(2, "0")}:00Z`,
+    text: `<p>${"x".repeat(2100)} ${index}</p>`
+  }));
+  const loader = createAzureDevOpsLoader({
+    tokenProvider: () => "comment-token",
+    requestJson: async (url, token) => {
+      assert.equal(token, "comment-token");
+      if (url.includes("/comments?")) {
+        return { comments };
+      }
+      return {
+        id: 91,
+        fields: {
+          "System.Id": 91,
+          "System.Title": "Commented bug"
+        }
+      };
+    }
+  });
+  const profile = {
+    azureDevOps: {
+      organization: "profile-org",
+      project: "Profile Project"
+    }
+  };
+  const item = await loader({ workItem: "91", profile });
+  assert.equal(item.comments.length, 20);
+  assert.equal(item.comments[0].text.length, 2000);
+
+  const warningLoader = createAzureDevOpsLoader({
+    tokenProvider: () => "secret-comment-token",
+    requestJson: async (url) => {
+      if (url.includes("/comments?")) {
+        throw new Error("failed with secret-comment-token");
+      }
+      return {
+        id: 92,
+        fields: {
+          "System.Id": 92,
+          "System.Title": "Accessible bug"
+        }
+      };
+    }
+  });
+  const warningItem = await warningLoader({
+    workItem: "92",
+    profile
+  });
+  assert.deepEqual(warningItem.comments, []);
+  assert.match(warningItem.commentsWarning, /could not be loaded/);
+  assert.doesNotMatch(
+    warningItem.commentsWarning,
+    /secret-comment-token/
   );
 });
 

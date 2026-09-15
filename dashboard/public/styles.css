@@ -147,6 +147,21 @@ select {
   color: #b5c0d4;
 }
 
+.file-list li {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  margin-top: .5rem;
+}
+
+.file-list img {
+  width: 88px;
+  height: 56px;
+  object-fit: cover;
+  border: 1px solid #405275;
+  border-radius: 6px;
+}
+
 fieldset {
   display: flex;
   gap: 1.5rem;
@@ -208,6 +223,46 @@ button:disabled {
   gap: .75rem;
 }
 
+.period-label {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+}
+
+.period-label select {
+  width: auto;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
+  gap: .75rem;
+  margin-top: 1rem;
+}
+
+.metrics article {
+  padding: .85rem;
+  border: 1px solid #2a3855;
+  border-radius: 8px;
+  background: #0b1324;
+}
+
+.metrics span,
+.metrics strong {
+  display: block;
+}
+
+.metrics span {
+  color: #b5c0d4;
+  font-size: .82rem;
+}
+
+.metrics strong {
+  margin-top: .35rem;
+  color: #e6edf7;
+  font-size: 1.35rem;
+}
+
 .stage {
   min-height: 105px;
   padding: .8rem;
@@ -241,6 +296,29 @@ button:disabled {
   margin: .65rem 0 0;
   color: #b5c0d4;
   font-size: .9rem;
+}
+
+.queue-panel {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #2a3855;
+}
+
+.queue-panel h3 {
+  margin: 0;
+}
+
+.queue-panel ol {
+  margin: .75rem 0 0;
+  padding-left: 1.5rem;
+}
+
+.queue-panel li + li {
+  margin-top: .5rem;
+}
+
+.queue-panel span {
+  color: #b5c0d4;
 }
 
 .table-scroll {
@@ -318,6 +396,7 @@ pre {
 
 @media (max-width: 650px) {
   header,
+  .section-heading,
   fieldset {
     align-items: flex-start;
     flex-direction: column;

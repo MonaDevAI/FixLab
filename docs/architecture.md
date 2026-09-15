@@ -37,8 +37,9 @@ required human actions.
 
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the
-packaged Agency plugin, and retains one in-memory job while the process runs.
-It is not the durable, authenticated team broker described below.
+packaged Agency plugin, and retains one active in-memory job plus a bounded
+20-job pending queue while the process runs. It is not the durable,
+authenticated team broker described below.
 
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
 require evidence-backed diagnosis and reproduction. Small enhancements use a
@@ -70,23 +71,28 @@ token only in outbound HTTPS authorization headers, and does not expose it to
 the browser, job state, logs, prompts, or cache.
 
 The loader keeps ID, title, description, reproduction or acceptance text,
-state, type, and web URL after converting HTML to text. It does not download
-work-item attachments. User-selected PNG, JPEG, or WebP screenshots are
-validated by count, declared type, extension, base64 encoding, signature,
-per-file size, and total size. Generated local files live under the Git
-directory or a repository-specific OS temporary directory. Only their local
-paths are placed in the job prompt.
+state, type, web URL, and the newest 20 non-deleted comments after converting
+HTML to text. A comment-request failure becomes a bounded explicit warning
+without hiding the accessible work item. It does not download comment
+attachments or other work-item attachments. User-selected or clipboard-pasted
+PNG, JPEG, or WebP screenshots are validated by count, declared type,
+extension, base64 encoding, signature, per-file size, and total size. Generated
+local files live under the Git directory or a repository-specific OS temporary
+directory. Only their local paths are placed in the job prompt.
 
-Artifacts belong to one retained dashboard job. A new job removes the prior
-job's files, clean shutdown removes current files, and startup prunes directories
-older than seven days. Abrupt process termination can retain artifacts until
-the next pruning pass.
+Artifacts belong to active or queued dashboard jobs. Replacing a completed
+active job removes its files, clean shutdown removes active and queued files,
+and startup prunes directories older than seven days. Abrupt process
+termination can retain artifacts until the next pruning pass.
 
 Each job receives a UUID-backed Agency session. When the agent reports a
 blocked stage, the local dashboard accepts the required user input and resumes
 that same session. Failed jobs can retry, and completed jobs can accept a
 focused addition while reusing prior evidence, the branch, and an existing
 pull request. Running jobs are not interrupted by dashboard input.
+New requests submitted while a job is running, blocked, or failed enter the
+bounded queue. A passed active job starts the next queued job. Blocked and
+failed jobs pause queue advancement so the same session remains resumable.
 
 ## Context and token efficiency
 
@@ -116,6 +122,16 @@ profile shape, prior result, and sanitized concise stage summaries. It never
 stores request text, raw logs, credentials, screenshots, screenshot paths,
 or source contents.
 The file is capped at 20 entries and 64 KiB.
+
+The shared Git directory also holds
+`.git/fixlab/dashboard-metrics.json`, bounded to 500 job records. Records
+contain identifiers, queue/start/finish timestamps, terminal status, bug count,
+execution and queue-wait durations, and parsed Copilot token totals. They never
+contain request text, comments, screenshots, credentials, raw logs, or source
+content. The local API aggregates 24-hour, 7-day, 30-day, or all-retained
+periods. Cache reuse is `cached input / total input`; without a defined
+comparable baseline it is not represented as exact token reduction or cost
+savings.
 
 Changing `HEAD` or profile content causes an automatic cache miss. Instruction
 changes remain an explicit prompt-level invalidation boundary and are reread.
