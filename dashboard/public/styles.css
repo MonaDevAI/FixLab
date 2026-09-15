@@ -346,6 +346,13 @@ button:disabled {
   color: #b5c0d4;
 }
 
+.job-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: stretch;
+  gap: .5rem;
+}
+
 .job-selector {
   width: 100%;
   padding: .7rem .8rem;
@@ -363,6 +370,34 @@ button:disabled {
 
 .job-selector span {
   font-weight: 400;
+}
+
+.job-request {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.job-row.expanded .job-request {
+  display: inline;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.job-expand {
+  width: 2.75rem;
+  padding: .55rem;
+  border: 1px solid #405275;
+  background: #0b1324;
+  color: #8ec5ff;
+  font-size: 1.2rem;
+}
+
+.job-expand:hover,
+.job-expand:focus-visible {
+  border-color: #63a1ff;
+  background: rgba(99, 161, 255, .12);
 }
 
 .table-scroll {

@@ -54,6 +54,7 @@ let screenshotPreviewUrls = [];
 let activeJob = null;
 let selectedJobId = null;
 const observedJobs = new Map();
+const expandedJobIds = new Set();
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -356,6 +357,10 @@ function renderQueue(currentJob, queue = [], history = []) {
   queueList.replaceChildren();
   for (const { job, label } of entries) {
     const item = document.createElement("li");
+    item.className = "job-row";
+    if (expandedJobIds.has(job.id)) {
+      item.classList.add("expanded");
+    }
     const button = document.createElement("button");
     button.type = "button";
     button.className = "job-selector";
@@ -365,6 +370,7 @@ function renderQueue(currentJob, queue = [], history = []) {
     const summary = document.createElement("strong");
     summary.textContent = `${label} · ${job.status} · ${job.requestType}`;
     const details = document.createElement("span");
+    details.className = "job-request";
     details.textContent =
       ` · ${job.bugCount ?? job.bugs?.length ?? 0} bug(s) · ${job.request}`;
     button.append(summary, details);
@@ -373,6 +379,34 @@ function renderQueue(currentJob, queue = [], history = []) {
       renderQueue(currentJob, queue, history);
     });
     item.append(button);
+    if (job.request.length > 160) {
+      const expandButton = document.createElement("button");
+      const expanded = expandedJobIds.has(job.id);
+      expandButton.type = "button";
+      expandButton.className = "job-expand";
+      expandButton.textContent = expanded ? "⌃" : "⌄";
+      expandButton.setAttribute(
+        "aria-label",
+        `${expanded ? "Collapse" : "Expand"} bug text for ${label}`
+      );
+      expandButton.setAttribute("aria-expanded", String(expanded));
+      expandButton.addEventListener("click", () => {
+        const nextExpanded = !expandedJobIds.has(job.id);
+        if (nextExpanded) {
+          expandedJobIds.add(job.id);
+        } else {
+          expandedJobIds.delete(job.id);
+        }
+        item.classList.toggle("expanded", nextExpanded);
+        expandButton.textContent = nextExpanded ? "⌃" : "⌄";
+        expandButton.setAttribute("aria-expanded", String(nextExpanded));
+        expandButton.setAttribute(
+          "aria-label",
+          `${nextExpanded ? "Collapse" : "Expand"} bug text for ${label}`
+        );
+      });
+      item.append(expandButton);
+    }
     queueList.append(item);
   }
 }

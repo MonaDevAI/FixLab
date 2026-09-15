@@ -261,7 +261,8 @@ test("dashboard lets users select active and queued job roadmaps", async ({
           {
             id: "queued-job",
             position: 1,
-            request: "Queued bug",
+            request:
+              "Queued bug with enough reproduction details to require a compact preview in the job list while preserving the full text behind an explicit expand control for users who need to inspect all of the supplied evidence.",
             requestType: "bug-fix",
             mode: "playwright-only",
             status: "queued",
@@ -320,10 +321,19 @@ test("dashboard lets users select active and queued job roadmaps", async ({
   });
 
   await page.goto(baseUrl);
-  await page.getByRole("button", { name: /Waiting #1/ }).click();
+  const queuedText = page.locator(".job-row").filter({
+    has: page.getByRole("button", { name: /Waiting #1/ })
+  });
+  await expect(queuedText).not.toHaveClass(/expanded/);
+  await page.getByRole("button", { name: "Expand bug text for Waiting #1" }).click();
+  await expect(queuedText).toHaveClass(/expanded/);
+  await expect(
+    page.getByRole("button", { name: "Collapse bug text for Waiting #1" })
+  ).toHaveAttribute("aria-expanded", "true");
+  await page.getByRole("button", { name: /^Waiting #1 ·/ }).click();
   await expect(page.locator("#job-status")).toContainText("queued · bug-fix");
   await expect(page.locator(".stage.pending")).toHaveCount(8);
-  await page.getByRole("button", { name: /Current/ }).click();
+  await page.getByRole("button", { name: /^Current ·/ }).click();
   await expect(page.locator(".stage.inferred strong")).toHaveText("diagnosis");
   await page.getByRole("button", { name: /Recent · passed/ }).click();
   await expect(page.locator("#job-status")).toContainText("passed · bug-fix");
