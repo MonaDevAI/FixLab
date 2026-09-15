@@ -170,8 +170,16 @@ test("doctor blocks when the repository-pinned .NET SDK cannot resolve", () => {
       chmodSync(executable, 0o755);
     }
 
+    const isolatedPath =
+      process.platform === "win32"
+        ? [
+            executableDirectory,
+            join(process.env.SystemRoot, "System32"),
+            process.env.SystemRoot
+          ].join(";")
+        : `${executableDirectory}:/usr/bin:/bin`;
     const result = run(["doctor", repository], repository, {
-      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      PATH: isolatedPath
     });
 
     assert.equal(result.status, 1);
