@@ -664,6 +664,14 @@ test("dashboard parses complete stage markers and passes a job", async () => {
       receivedPrompt,
       /Do not skip Playwright merely because an unrelated non-browser/
     );
+    assert.match(
+      receivedPrompt,
+      /Use local-stack only for profile-defined application startup and health/
+    );
+    assert.match(
+      receivedPrompt,
+      /Do not mark local-stack failed because a separate test, type-check, lint, or production build/
+    );
     assert.match(receivedPrompt, /applications defined by the repository profile/i);
     assert.match(receivedPrompt, /repository-defined live test/i);
     assert.match(receivedPrompt, /Test synthesis: enabled/);
