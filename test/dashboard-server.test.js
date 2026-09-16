@@ -585,6 +585,63 @@ test("blocked job accepts user input and resumes the same Agency session", async
   }
 });
 
+test("zero-progress failure retries as a fresh Copilot session", async () => {
+  const repository = createRepository();
+  const calls = [];
+  const executor = ({ prompt, sessionId, resume, onOutput }) => {
+    calls.push({ prompt, sessionId, resume });
+    if (calls.length === 1) {
+      return { completion: Promise.resolve({ code: 1 }), terminate() {} };
+    }
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} retried\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Repair a launch-blocked defect.",
+        mode: "fix-and-validate"
+      })
+    });
+    assert.equal(started.response.status, 202);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const failed = await jsonRequest(url, "/api/job");
+    assert.equal(failed.body.job.status, "failed");
+    assert.equal(failed.body.job.stages.intake.status, "pending");
+
+    const retried = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "retry",
+        details: "The plugin compatibility issue is fixed."
+      })
+    });
+    assert.equal(retried.response.status, 202, JSON.stringify(retried.body));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const completed = await jsonRequest(url, "/api/job");
+    assert.equal(completed.body.job.status, "passed");
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].resume, false);
+    assert.equal(calls[1].resume, false);
+    assert.equal(calls[1].sessionId, calls[0].sessionId);
+    assert.match(calls[1].prompt, /Repair a launch-blocked defect/);
+    assert.match(calls[1].prompt, /failed before FixLab completed any stage/);
+    assert.match(calls[1].prompt, /plugin compatibility issue is fixed/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("running job queues a comment and resumes the same session", async () => {
   const repository = createRepository();
   const calls = [];

@@ -7,6 +7,11 @@ Copilot as the default compatibility runtime and GitHub Copilot CLI as an
 optional direct runtime. Both provide agent execution, authentication, plugin
 loading, and tools; FixLab does not bundle or fork either runtime.
 
+The package keeps equivalent runtime entry points in `agents/fixlab.md` for
+Agency and `com.github.copilot/agents/fixlab.agent.md` for the Agent Plugins
+1.0 layout used by direct GitHub Copilot CLI. Repository policy validation
+requires those definitions to remain identical.
+
 ```text
 Defect or pull request
         |

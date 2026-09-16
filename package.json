@@ -22,6 +22,7 @@
     "assets",
     "bin",
     "CHANGELOG.md",
+    "com.github.copilot",
     "dashboard",
     "docs",
     "examples",

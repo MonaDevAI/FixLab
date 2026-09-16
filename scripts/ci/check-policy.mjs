@@ -123,6 +123,28 @@ export function checkPolicy(root) {
     failures.push("the versioned VS Code autofix agent is missing");
   }
 
+  const agencyAgent = resolve(root, "agents", "fixlab.md");
+  const copilotAgent = resolve(
+    root,
+    "com.github.copilot",
+    "agents",
+    "fixlab.agent.md"
+  );
+  if (!existsSync(agencyAgent)) {
+    failures.push("the packaged Agency FixLab agent is missing");
+  }
+  if (!existsSync(copilotAgent)) {
+    failures.push("the packaged Copilot CLI FixLab agent is missing");
+  }
+  if (
+    existsSync(agencyAgent) &&
+    existsSync(copilotAgent) &&
+    readFileSync(agencyAgent, "utf8").replace(/\r\n/gu, "\n") !==
+      readFileSync(copilotAgent, "utf8").replace(/\r\n/gu, "\n")
+  ) {
+    failures.push("the packaged Agency and Copilot CLI agents must stay in sync");
+  }
+
   return failures;
 }
 

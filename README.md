@@ -189,6 +189,7 @@ See the full [security model](docs/security.md).
 | [`templates/repository-profile.json`](templates/repository-profile.json) | Generic React and .NET repository profile |
 | [`examples/react-dotnet`](examples/react-dotnet) | Example onboarding files for a React/.NET repository |
 | [`agents/fixlab.md`](agents/fixlab.md) | Agency custom agent |
+| [`com.github.copilot/agents/fixlab.agent.md`](com.github.copilot/agents/fixlab.agent.md) | Direct GitHub Copilot CLI custom agent |
 | [`prompts`](prompts) | Copilot prompt commands installed by `fixlab init` |
 | [`bin/fixlab.js`](bin/fixlab.js) | Dependency-free FixLab CLI |
 

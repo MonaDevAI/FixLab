@@ -1130,6 +1130,26 @@ Resume requirements:
 - Do not call task_complete or return the final response until all required machine-readable lines are emitted.`;
 }
 
+function buildFreshRetryPrompt(job, details) {
+  return `${job.initialPrompt}
+
+Retry context:
+The previous runtime launch failed before FixLab completed any stage or created
+a resumable session. Start this job again from intake.
+
+User input:
+${details}`;
+}
+
+function requiresFreshRetry(job, action) {
+  return (
+    action === "retry" &&
+    FIXLAB_STAGES.every((stage) => job.stages[stage].status === "pending") &&
+    job.usage.inputTokens === 0 &&
+    job.usage.outputTokens === 0
+  );
+}
+
 function playwrightAuthenticationConfig(repository) {
   const profile = loadRepositoryProfile(repository);
   const browserAutomation = profile.browserAutomation ?? {};
@@ -1622,11 +1642,14 @@ export function createDashboardServer({
         stream: "dashboard",
         message: `User input ${currentJob.inputs.length} accepted; resuming the same FixLab session.`
       });
-      const prompt = buildResumePrompt(currentJob, { action, details });
+      const freshRetry = requiresFreshRetry(currentJob, action);
+      const prompt = freshRetry
+        ? buildFreshRetryPrompt(currentJob, details)
+        : buildResumePrompt(currentJob, { action, details });
       resetJobForResume(currentJob);
       recordJobMetric(currentJob);
       try {
-        startJob(currentJob, prompt, true);
+        startJob(currentJob, prompt, !freshRetry);
       } catch (error) {
         finishJob(currentJob, { code: null, error });
         recordJobMetric(currentJob);
@@ -1801,7 +1824,7 @@ export function createDashboardServer({
         cacheContext: createCacheContext(resolvedRepository),
         partial: { stdout: "", stderr: "" }
       };
-      job.pendingPrompt = buildJobPrompt({
+      job.initialPrompt = buildJobPrompt({
         request: requestText,
         mode: body.mode,
         requestType,
@@ -1811,6 +1834,7 @@ export function createDashboardServer({
         screenshotPaths: storedScreenshots.files.map((file) => file.path),
         cacheSummary: loadCacheSummary(job.cacheContext)
       });
+      job.pendingPrompt = job.initialPrompt;
       recordJobMetric(job);
 
       if (shouldQueue) {
