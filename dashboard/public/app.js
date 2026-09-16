@@ -50,11 +50,27 @@ skipLiveTestButton.type = "button";
 skipLiveTestButton.className = "secondary";
 skipLiveTestButton.textContent = "Skip Playwright live test";
 skipLiveTestButton.hidden = true;
-jobInputSubmit.before(retryLiveTestButton, skipLiveTestButton);
+const approvePullRequestButton = document.createElement("button");
+approvePullRequestButton.id = "approve-pull-request";
+approvePullRequestButton.type = "button";
+approvePullRequestButton.textContent = "Approve and create PR";
+approvePullRequestButton.hidden = true;
+jobInputSubmit.before(
+  retryLiveTestButton,
+  skipLiveTestButton,
+  approvePullRequestButton
+);
 const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
 const playwrightCheck = document.querySelector("#playwright-check");
 const playwrightConnect = document.querySelector("#playwright-connect");
+const onboardingStatus = document.querySelector("#onboarding-status");
+const onboardingOrganization = document.querySelector(
+  "#onboarding-organization"
+);
+const onboardingProject = document.querySelector("#onboarding-project");
+const onboardingSave = document.querySelector("#onboarding-save");
+const onboardingMessage = document.querySelector("#onboarding-message");
 const playwrightEvidence = document.createElement("div");
 playwrightEvidence.className = "playwright-evidence";
 playwrightEvidence.innerHTML = `
@@ -130,6 +146,26 @@ function renderReadiness(readiness) {
     ? `Ready: ${readiness.profileName || readiness.repository}`
     : `Not ready: ${readiness.error}`;
   startButton.disabled = !ready;
+}
+
+async function refreshOnboarding() {
+  try {
+    const body = await fetchJson("/api/onboarding");
+    onboardingOrganization.value = body.azureDevOps.organization;
+    onboardingProject.value = body.azureDevOps.project;
+    const configured =
+      Boolean(body.azureDevOps.organization) &&
+      Boolean(body.azureDevOps.project);
+    onboardingStatus.className = `badge ${configured ? "passed" : "blocked"}`;
+    onboardingStatus.textContent = configured ? "Configured" : "Required";
+    onboardingMessage.textContent = configured
+      ? "Numeric Azure DevOps bug IDs can be loaded."
+      : "Enter the organization and project to enable numeric bug loading.";
+  } catch (error) {
+    onboardingStatus.className = "badge blocked";
+    onboardingStatus.textContent = "Unavailable";
+    onboardingMessage.textContent = error.message;
+  }
 }
 
 function inferActiveStageFromLogs(logs = []) {
@@ -251,7 +287,14 @@ function renderJob(job, currentActiveJob = job) {
     owner.textContent = bug.owner || "Pending";
     const summary = document.createElement("td");
     summary.textContent = bug.summary || "Waiting for diagnosis";
-    row.append(identity, outcome, owner, summary);
+    const pullRequest = document.createElement("td");
+    const readiness = job.pullRequestReadiness ?? {
+      status: "blocked",
+      message: "Waiting for workflow evidence."
+    };
+    pullRequest.textContent = readiness.status;
+    pullRequest.title = readiness.message;
+    row.append(identity, outcome, owner, summary, pullRequest);
     bugResultsElement.append(row);
   }
 
@@ -274,12 +317,17 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.status === "blocked" &&
     job?.stages?.["live-test"]?.status === "blocked";
+  const canApprovePullRequest =
+    canResume &&
+    job?.pullRequestReadiness?.status === "approval-required";
   jobInputPanel.hidden = !(canResume || canComment);
   jobInputSubmit.disabled = !(canResume || canComment);
   retryLiveTestButton.hidden = !canRetryLiveTest;
   retryLiveTestButton.disabled = !canRetryLiveTest;
   skipLiveTestButton.hidden = !canRetryLiveTest;
   skipLiveTestButton.disabled = !canRetryLiveTest;
+  approvePullRequestButton.hidden = !canApprovePullRequest;
+  approvePullRequestButton.disabled = !canApprovePullRequest;
   jobInputCount.textContent = job
     ? `${job.inputCount} update(s) · ${job.pendingInputCount} pending`
     : "";
@@ -299,7 +347,9 @@ function renderJob(job, currentActiveJob = job) {
     if (job.status === "blocked") {
       jobInputTitle.textContent = "Action needed";
       jobInputGuidance.textContent =
-        job?.stages?.["live-test"]?.status === "blocked"
+        canApprovePullRequest
+          ? "All required validation gates passed. Explicit approval is required before FixLab creates or updates the pull request."
+          : job?.stages?.["live-test"]?.status === "blocked"
           ? "The browser gate could not finish. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
           : "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
     } else if (job.status === "failed") {
@@ -440,8 +490,7 @@ function renderQueue(currentJob, queue = [], history = []) {
     .filter(
       (job) =>
         job.id !== currentJob?.id &&
-        !queuedIds.has(job.id) &&
-        job.status !== "queued"
+        !queuedIds.has(job.id)
     )
     .reverse();
   const entries = [
@@ -990,6 +1039,7 @@ skipLiveTestButton.addEventListener("click", async () => {
           "The user explicitly chose to skip only the blocked authenticated Playwright live-test gate. Mark live-test skipped, preserve the exact unverified browser risk and missing screenshot evidence, do not report it as passed, and continue the safe pull-request outcome according to repository policy without repeating completed work."
       })
     });
+
     jobInputMessage.textContent =
       "Playwright live test skipped with risk preserved.";
     activeJob = body.job;
@@ -999,6 +1049,32 @@ skipLiveTestButton.addEventListener("click", async () => {
   } catch (error) {
     formError.textContent = error.message;
     skipLiveTestButton.disabled = false;
+  }
+});
+
+approvePullRequestButton.addEventListener("click", async () => {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  approvePullRequestButton.disabled = true;
+  try {
+    const body = await fetchJson("/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "continue",
+        details:
+          "I explicitly approve creating or updating the pull request for the validated fixes in this FixLab job. Reuse the existing configured user-owned branch and all completed evidence. Do not repeat diagnosis, builds, or Playwright unless a new change requires validation. Create no deployment."
+      })
+    });
+    jobInputMessage.textContent =
+      "Pull-request approval accepted. FixLab is creating or updating the PR.";
+    activeJob = body.job;
+    selectedJobId = body.job?.id ?? selectedJobId;
+    rememberJob(body.job);
+    renderJob(body.job, activeJob);
+  } catch (error) {
+    formError.textContent = error.message;
+    approvePullRequestButton.disabled = false;
   }
 });
 
@@ -1021,10 +1097,38 @@ playwrightConnect.addEventListener("click", async () => {
   }
 });
 
+onboardingSave.addEventListener("click", async () => {
+  onboardingSave.disabled = true;
+  onboardingMessage.textContent = "";
+  try {
+    const body = await fetchJson("/api/onboarding/azure-devops", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        organization: onboardingOrganization.value,
+        project: onboardingProject.value
+      })
+    });
+    onboardingOrganization.value = body.azureDevOps.organization;
+    onboardingProject.value = body.azureDevOps.project;
+    onboardingStatus.className = "badge passed";
+    onboardingStatus.textContent = "Configured";
+    onboardingMessage.textContent =
+      "Onboarding settings saved. Numeric bug loading is ready.";
+  } catch (error) {
+    onboardingStatus.className = "badge blocked";
+    onboardingStatus.textContent = "Save failed";
+    onboardingMessage.textContent = error.message;
+  } finally {
+    onboardingSave.disabled = false;
+  }
+});
+
 refresh();
 refreshMetrics();
 refreshPlaywrightStatus();
 refreshPlaywrightEvidence();
+refreshOnboarding();
 setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);

@@ -43,9 +43,11 @@ required human actions.
 
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the
-packaged Agency plugin, and retains one active in-memory job plus a bounded
-20-job pending queue while the process runs. It is not the durable,
-authenticated team broker described below.
+packaged Agency plugin, and retains one active job plus a bounded 20-job
+pending queue. It also writes the latest 20 private job summaries to the shared
+Git directory so bug outcomes and pull-request readiness remain visible after
+a dashboard update or restart. It is not the durable, authenticated team broker
+described below.
 
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
 require evidence-backed diagnosis and reproduction. Small enhancements use a
@@ -72,6 +74,11 @@ implementation, effective-diff self-review, focused local validation,
 profile-defined startup and live testing, evidence collection, and the gated
 pull-request outcome. It asks for human interaction only for authentication,
 unsafe-data approval, deployment or pull-request approval, or genuine blockers.
+
+The repository-onboarding panel detects Azure DevOps organization and project
+values from an Azure DevOps Git origin and can persist them to the
+repository-owned profile. This keeps numeric work-item intake functional after
+profile upgrades without exposing credentials or Azure CLI tokens.
 
 ### Intake sources
 
@@ -113,7 +120,10 @@ failed jobs pause queue advancement so the same session remains resumable.
 The dashboard job list is read-only selectable. Selecting an active, queued,
 or recently completed job changes only the displayed roadmap and evidence; it
 does not reorder, start, stop, or resume execution. The local server retains
-up to 20 completed job summaries in memory for this view.
+up to 20 job summaries in `.git/fixlab/dashboard-jobs.json` for this view. The
+private file contains request summaries, bug identities and outcomes, stage
+summaries, and pull-request readiness, but no raw logs, screenshots,
+credentials, authentication state, or source content.
 
 ## Context and token efficiency
 

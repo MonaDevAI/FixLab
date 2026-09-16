@@ -204,6 +204,18 @@ button.secondary {
   margin-top: 1rem;
 }
 
+.onboarding-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.onboarding-grid input {
+  display: block;
+  margin-top: .5rem;
+}
+
 .playwright-evidence {
   margin-top: 1.25rem;
   padding-top: 1rem;

@@ -139,6 +139,19 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     page.getByRole("heading", { name: "Playwright authentication" })
   ).toBeVisible();
   await expect(
+    page.getByRole("heading", { name: "Repository onboarding" })
+  ).toBeVisible();
+  await page
+    .getByLabel("Azure DevOps organization")
+    .fill("example");
+  await page.getByLabel("Azure DevOps project").fill("Example");
+  await page
+    .getByRole("button", { name: "Save onboarding settings" })
+    .click();
+  await expect(page.locator("#onboarding-message")).toContainText(
+    "Numeric bug loading is ready"
+  );
+  await expect(
     page.getByRole("button", { name: "Check status" })
   ).toBeVisible();
   await expect(
@@ -216,7 +229,7 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
   });
   expect(imagePastePrevented).toBe(true);
   await expect(page.getByAltText("Preview of clipboard.png")).toBeVisible();
-  await expect(page.getByRole("status")).toHaveText(
+  await expect(page.locator("#screenshot-message")).toHaveText(
     "1 pasted screenshot(s) attached. 1 of 5 selected."
   );
 
@@ -436,6 +449,7 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
         history: []
       })
     });
+
   });
   await page.route("**/api/job/input", async (route) => {
     submittedInput = route.request().postDataJSON();
@@ -462,4 +476,98 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
   expect(submittedInput.details).toContain("one worker");
   expect(submittedInput.details).toContain("save at least one");
   expect(submittedInput.details).toContain("Do not skip");
+});
+
+test("dashboard exposes explicit pull-request approval when validation is complete", async ({
+  page
+}) => {
+  let submittedInput;
+  const blockedJob = {
+    id: "pr-ready-job",
+    request: "Create the validated pull request",
+    requestType: "bug-fix",
+    status: "blocked",
+    durationMs: 1000,
+    pullRequestReadiness: {
+      status: "approval-required",
+      ready: true,
+      message: "Approval is required before creating the pull request."
+    },
+    stages: Object.fromEntries(
+      [
+        "intake",
+        "diagnosis",
+        "reproduce",
+        "fix",
+        "review",
+        "local-stack",
+        "live-test",
+        "pr"
+      ].map((stage) => [
+        stage,
+        {
+          status: stage === "pr" ? "blocked" : "passed",
+          message: ""
+        }
+      ])
+    ),
+    bugs: [
+      {
+        id: "17032997",
+        title: "Validated bug",
+        outcome: "fixed",
+        owner: "FMDM",
+        summary: "Focused fix passed."
+      }
+    ],
+    logs: [],
+    canComment: false,
+    canResume: true,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "PR-ready job",
+          error: null
+        },
+        job: blockedJob,
+        queue: [],
+        history: []
+      })
+    });
+  });
+  await page.route("**/api/job/input", async (route) => {
+    submittedInput = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          ...blockedJob,
+          status: "running",
+          canResume: false
+        },
+        queued: false
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+  await expect(
+    page.getByRole("button", { name: "Approve and create PR" })
+  ).toBeVisible();
+  await expect(page.locator("#job-input-guidance")).toContainText(
+    "All required validation gates passed"
+  );
+  await page.getByRole("button", { name: "Approve and create PR" }).click();
+  await expect.poll(() => submittedInput).toBeTruthy();
+  expect(submittedInput.action).toBe("continue");
+  expect(submittedInput.details).toContain("explicitly approve");
 });

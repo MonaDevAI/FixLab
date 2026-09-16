@@ -402,12 +402,20 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
 });
 
 test("loads and starts one Azure DevOps multi-bug batch", async () => {
-  const repository = createRepository();
+  const repository = createGitRepository();
+  git(repository, [
+    "remote",
+    "add",
+    "origin",
+    "https://dev.azure.com/example/project/_git/dashboard-test"
+  ]);
+  let loadedProfile;
   const workItemLoader = async () => {
     throw new Error("single-item loader should not run");
   };
-  workItemLoader.loadMany = async ({ workItems }) =>
-    workItems.map((value) => ({
+  workItemLoader.loadMany = async ({ workItems, profile }) => {
+    loadedProfile = profile;
+    return workItems.map((value) => ({
       id: Number(value),
       title: `Loaded bug ${value}`,
       description: "",
@@ -417,6 +425,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
       workItemType: "Bug",
       webUrl: `https://dev.azure.com/example/project/_workitems/edit/${value}`
     }));
+  };
   let receivedPrompt = "";
   const executor = ({ onOutput, prompt }) => {
     receivedPrompt = prompt;
@@ -449,6 +458,43 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
       loaded.body.workItems.map((item) => item.id),
       [101, 202]
     );
+    assert.deepEqual(loadedProfile.azureDevOps, {
+      organization: "example",
+      project: "project"
+    });
+    const onboarding = await jsonRequest(url, "/api/onboarding");
+    assert.deepEqual(onboarding.body.azureDevOps, {
+      organization: "example",
+      project: "project"
+    });
+    const savedOnboarding = await jsonRequest(
+      url,
+      "/api/onboarding/azure-devops",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          organization: "saved-org",
+          project: "saved-project"
+        })
+      }
+    );
+    assert.equal(savedOnboarding.response.status, 200);
+    const savedProfile = JSON.parse(
+      readFileSync(
+        join(
+          repository,
+          ".github",
+          "fixlab",
+          "repository-profile.json"
+        ),
+        "utf8"
+      )
+    );
+    assert.deepEqual(savedProfile.azureDevOps, {
+      organization: "saved-org",
+      project: "saved-project"
+    });
 
     const started = await jsonRequest(url, "/api/jobs", {
       method: "POST",
@@ -479,6 +525,10 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     assert.deepEqual(
       completed.body.job.bugs.map((bug) => bug.id),
       ["101", "202"]
+    );
+    assert.equal(
+      completed.body.job.pullRequestReadiness.status,
+      "created"
     );
   } finally {
     await dashboard.close();
@@ -1105,6 +1155,7 @@ test("dashboard persists privacy-safe token and duration metrics", async () => {
         mode: "validate-only"
       })
     });
+
     assert.equal(started.response.status, 202);
     await new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -1143,6 +1194,78 @@ test("dashboard persists privacy-safe token and duration metrics", async () => {
     assert.equal(metrics.body.metrics.queued, 1);
     assert.equal(metrics.body.metrics.completed, 1);
     assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
+  } finally {
+    await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard restores private job summaries and PR readiness after restart", async () => {
+  const repository = createGitRepository();
+  const executor = ({ onOutput }) => {
+    onOutput(
+      "stdout",
+      "FIXLAB_BUG|17032997|fixed|FMDM|The focused source correction is complete.\n"
+    );
+    for (const stage of FIXLAB_STAGES.slice(0, -1)) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|completed\n`);
+    }
+    onOutput(
+      "stdout",
+      "FIXLAB_STAGE|pr|blocked|Approval is required before creating the pull request.\n"
+    );
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const first = await startDashboard(repository, executor);
+  let jobId;
+
+  try {
+    const started = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Azure DevOps Bug 17032997: Persist this bug",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    assert.equal(started.response.status, 202);
+    jobId = started.body.job.id;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const status = await jsonRequest(first.url, "/api/status");
+    assert.equal(status.body.job.status, "blocked");
+    assert.equal(
+      status.body.job.pullRequestReadiness.status,
+      "approval-required"
+    );
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("executor should not run while restoring dashboard history");
+  });
+  try {
+    const status = await jsonRequest(second.url, "/api/status");
+    assert.equal(status.body.job.id, jobId);
+    assert.equal(status.body.job.canResume, true);
+    assert.equal(status.body.job.bugs[0].id, "17032997");
+    assert.equal(
+      status.body.job.pullRequestReadiness.status,
+      "approval-required"
+    );
+
+    const context = createCacheContext(repository);
+    const historyPath = join(
+      dirname(context.cachePath),
+      "dashboard-jobs.json"
+    );
+    const persisted = readFileSync(historyPath, "utf8");
+    assert.match(persisted, /Persist this bug/);
+    assert.doesNotMatch(
+      persisted,
+      /logs|screenshots|authentication|source content/
+    );
   } finally {
     await second.dashboard.close();
     rmSync(repository, { recursive: true, force: true });

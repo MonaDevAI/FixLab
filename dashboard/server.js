@@ -38,6 +38,7 @@ export const MAX_JOB_LOG_ENTRIES = 1000;
 export const MAX_CACHE_ENTRIES = 20;
 export const MAX_CACHE_BYTES = 64 * 1024;
 export const MAX_METRICS_ENTRIES = 500;
+export const MAX_DASHBOARD_HISTORY_ENTRIES = 20;
 export const MAX_QUEUED_JOBS = 20;
 export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
@@ -204,6 +205,7 @@ function publicQueue(jobs) {
     bugs: job.bugs,
     screenshotCount: job.screenshots.length,
     stages: job.stages,
+    pullRequestReadiness: getPullRequestReadiness(job),
     createdAt: job.createdAt
   }));
 }
@@ -213,6 +215,92 @@ function publicHistory(jobs) {
     ...publicJob(job),
     logs: []
   }));
+}
+
+function privateDashboardSnapshot(value) {
+  const snapshot = { ...value };
+  delete snapshot.screenshots;
+  delete snapshot.logs;
+  delete snapshot.usage;
+  return snapshot;
+}
+
+function dashboardSnapshot(job) {
+  return {
+    ...privateDashboardSnapshot(publicJob(job)),
+    canResume: false,
+    canComment: false
+  };
+}
+
+function restoreDashboardJob(snapshot, repository) {
+  return {
+    ...snapshot,
+    workItem: snapshot.workItem ?? null,
+    workItems: snapshot.workItems ?? [],
+    screenshots: [],
+    artifactDirectory: null,
+    inputs: [],
+    pendingInputs: [],
+    usage: {
+      inputTokens: 0,
+      cachedInputTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 0,
+      cacheReusePercent: 0
+    },
+    logs: [],
+    droppedLogs: 0,
+    nextLogIndex: 0,
+    cacheContext: createCacheContext(repository),
+    partial: { stdout: "", stderr: "" }
+  };
+}
+
+function getPullRequestReadiness(job) {
+  const prStage = job.stages?.pr ?? { status: "pending", message: "" };
+  if (prStage.status === "passed") {
+    return {
+      status: "created",
+      ready: false,
+      message: prStage.message || "Pull request created or updated."
+    };
+  }
+  const fixedBugs = (job.bugs ?? []).filter((bug) => bug.outcome === "fixed");
+  const hasCodeChange =
+    fixedBugs.length > 0 ||
+    ((job.bugs ?? []).length === 0 && job.stages?.fix?.status === "passed");
+  if (!hasCodeChange && job.status !== "running") {
+    return {
+      status: "not-applicable",
+      ready: false,
+      message: "No confirmed FixLab code change requires a pull request."
+    };
+  }
+  const blockers = FIXLAB_STAGES.slice(0, -1).filter((stage) =>
+    ["pending", "running", "blocked", "failed"].includes(
+      job.stages?.[stage]?.status ?? "pending"
+    )
+  );
+  if (blockers.length > 0) {
+    return {
+      status: "blocked",
+      ready: false,
+      message: `Waiting for: ${blockers.join(", ")}.`
+    };
+  }
+  if (prStage.status === "blocked") {
+    return {
+      status: "approval-required",
+      ready: true,
+      message: prStage.message || "Pull-request approval is required."
+    };
+  }
+  return {
+    status: "ready",
+    ready: true,
+    message: "Required validation gates are complete; the pull request can be created."
+  };
 }
 
 export function inspectRepository(repository) {
@@ -577,6 +665,93 @@ function writeMetrics(path, records) {
     { mode: 0o600 }
   );
   renameSync(temporaryPath, path);
+}
+
+function readDashboardHistory(path) {
+  if (!path || !existsSync(path)) {
+    return { jobs: [], warning: null };
+  }
+  try {
+    const value = JSON.parse(readFileSync(path, "utf8"));
+    if (!Array.isArray(value?.jobs)) {
+      throw new Error("dashboard history has an invalid shape");
+    }
+    return {
+      jobs: value.jobs
+        .filter(
+          (job) =>
+            job &&
+            typeof job.id === "string" &&
+            typeof job.request === "string" &&
+            typeof job.status === "string"
+        )
+        .slice(0, MAX_DASHBOARD_HISTORY_ENTRIES)
+        .map((job) => ({
+          ...job,
+          canResume: false,
+          canComment: false,
+          logs: []
+        })),
+      warning: null
+    };
+  } catch {
+    return {
+      jobs: [],
+      warning: "Saved dashboard job history could not be read."
+    };
+  }
+}
+
+function writeDashboardHistory(path, jobs) {
+  if (!path) {
+    return;
+  }
+  mkdirSync(dirname(path), { recursive: true });
+  const temporaryPath = `${path}.${process.pid}.tmp`;
+  writeFileSync(
+    temporaryPath,
+    JSON.stringify({
+      version: 1,
+      jobs: jobs.slice(0, MAX_DASHBOARD_HISTORY_ENTRIES)
+    }),
+    { mode: 0o600 }
+  );
+  renameSync(temporaryPath, path);
+}
+
+function inferAzureDevOpsSettings(repository) {
+  const remote = spawnSync(
+    "git",
+    ["-C", repository, "remote", "get-url", "origin"],
+    { encoding: "utf8", windowsHide: true }
+  );
+  const match = remote.stdout
+    ?.trim()
+    .match(
+      /^https:\/\/dev\.azure\.com\/([^/]+)\/([^/]+)\/_git\/[^/]+\/?$/i
+    );
+  return match
+    ? {
+        organization: decodeURIComponent(match[1]),
+        project: decodeURIComponent(match[2])
+      }
+    : null;
+}
+
+function azureDevOpsProfile(repository, profile) {
+  if (profile.azureDevOps?.organization && profile.azureDevOps?.project) {
+    return profile;
+  }
+  const inferred = inferAzureDevOpsSettings(repository);
+  return inferred
+    ? {
+        ...profile,
+        azureDevOps: {
+          ...profile.azureDevOps,
+          ...inferred
+        }
+      }
+    : profile;
 }
 
 function summarizeMetrics(records, period) {
@@ -950,6 +1125,7 @@ function publicJob(job) {
     ),
     usage: job.usage,
     stages: job.stages,
+    pullRequestReadiness: getPullRequestReadiness(job),
     bugs: job.bugs,
     logs: job.logs,
     droppedLogs: job.droppedLogs
@@ -1479,9 +1655,69 @@ export function createDashboardServer({
   const metricsPath = cacheContext
     ? join(dirname(cacheContext.cachePath), "dashboard-metrics.json")
     : null;
+  const dashboardHistoryPath = cacheContext
+    ? join(dirname(cacheContext.cachePath), "dashboard-jobs.json")
+    : null;
   const loadedMetrics = readMetrics(metricsPath);
   let metricsRecords = loadedMetrics.records;
   let metricsWarning = loadedMetrics.warning;
+  const loadedDashboardHistory = readDashboardHistory(dashboardHistoryPath);
+  let persistedJobs = loadedDashboardHistory.jobs;
+  let dashboardHistoryWarning = loadedDashboardHistory.warning;
+  const resumableSnapshot = persistedJobs.find((job) =>
+    ["blocked", "failed", "passed"].includes(job.status)
+  );
+  if (resumableSnapshot) {
+    currentJob = restoreDashboardJob(
+      resumableSnapshot,
+      resolvedRepository
+    );
+    persistedJobs = persistedJobs.filter(
+      (job) => job.id !== resumableSnapshot.id
+    );
+  }
+
+  function dashboardHistory() {
+    const liveIds = new Set([
+      currentJob?.id,
+      ...queuedJobs.map((job) => job.id),
+      ...completedJobs.map((job) => job.id)
+    ]);
+    return [
+      ...publicHistory(completedJobs),
+      ...persistedJobs.filter((job) => !liveIds.has(job.id))
+    ].slice(0, MAX_DASHBOARD_HISTORY_ENTRIES);
+  }
+
+  function persistDashboardState() {
+    const snapshots = [
+      ...(currentJob ? [dashboardSnapshot(currentJob)] : []),
+      ...publicQueue(queuedJobs).map((job) => ({
+        ...privateDashboardSnapshot(job),
+        canResume: false,
+        canComment: false
+      })),
+      ...completedJobs.map(dashboardSnapshot),
+      ...persistedJobs.map(privateDashboardSnapshot)
+    ];
+    const unique = [];
+    const ids = new Set();
+    for (const job of snapshots) {
+      if (!job?.id || ids.has(job.id)) {
+        continue;
+      }
+      ids.add(job.id);
+      unique.push(job);
+    }
+    persistedJobs = unique.slice(0, MAX_DASHBOARD_HISTORY_ENTRIES);
+    try {
+      writeDashboardHistory(dashboardHistoryPath, persistedJobs);
+      dashboardHistoryWarning = null;
+    } catch {
+      dashboardHistoryWarning =
+        "Dashboard jobs remain visible in memory but could not be persisted.";
+    }
+  }
 
   function recordJobMetric(job) {
     metricsRecords = updateJobMetrics(metricsRecords, job);
@@ -1492,6 +1728,7 @@ export function createDashboardServer({
       metricsWarning =
         "Dashboard metrics were updated in memory but could not be persisted.";
     }
+    persistDashboardState();
   }
 
   function archiveJob(job) {
@@ -1587,20 +1824,24 @@ export function createDashboardServer({
     );
 
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
+      persistDashboardState();
       sendJson(response, 200, {
         readiness: inspectRepository(resolvedRepository),
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
-        history: publicHistory(completedJobs)
+        history: dashboardHistory(),
+        historyWarning: dashboardHistoryWarning
       });
       return;
     }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/job") {
+      persistDashboardState();
       sendJson(response, 200, {
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
-        history: publicHistory(completedJobs)
+        history: dashboardHistory(),
+        historyWarning: dashboardHistoryWarning
       });
       return;
     }
@@ -1617,6 +1858,77 @@ export function createDashboardServer({
         metrics: summarizeMetrics(metricsRecords, period),
         warning: metricsWarning
       });
+      return;
+    }
+
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/onboarding"
+    ) {
+      try {
+        const profile = azureDevOpsProfile(
+          resolvedRepository,
+          loadRepositoryProfile(resolvedRepository)
+        );
+        sendJson(response, 200, {
+          profileName: profile.name ?? "",
+          azureDevOps: {
+            organization: profile.azureDevOps?.organization ?? "",
+            project: profile.azureDevOps?.project ?? ""
+          }
+        });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/onboarding/azure-devops"
+    ) {
+      try {
+        if (
+          !request.headers["content-type"]
+            ?.toLowerCase()
+            .startsWith("application/json")
+        ) {
+          throw new Error("Content-Type must be application/json");
+        }
+        const body = await readJsonBody(request);
+        const organization =
+          typeof body.organization === "string"
+            ? body.organization.trim()
+            : "";
+        const project =
+          typeof body.project === "string" ? body.project.trim() : "";
+        if (
+          !organization ||
+          !project ||
+          organization.length > 100 ||
+          project.length > 100
+        ) {
+          throw new Error(
+            "Azure DevOps organization and project are required and must be at most 100 characters"
+          );
+        }
+        const profilePath = join(resolvedRepository, profileRelativePath);
+        const profile = loadRepositoryProfile(resolvedRepository);
+        profile.azureDevOps = { organization, project };
+        const temporaryPath = `${profilePath}.${process.pid}.tmp`;
+        writeFileSync(
+          temporaryPath,
+          `${JSON.stringify(profile, null, 2)}\n`,
+          { mode: 0o600 }
+        );
+        renameSync(temporaryPath, profilePath);
+        sendJson(response, 200, {
+          saved: true,
+          azureDevOps: profile.azureDevOps
+        });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
       return;
     }
 
@@ -1638,7 +1950,10 @@ export function createDashboardServer({
         if (!readiness.profileReady) {
           throw new Error(readiness.error);
         }
-        const profile = loadRepositoryProfile(resolvedRepository);
+        const profile = azureDevOpsProfile(
+          resolvedRepository,
+          loadRepositoryProfile(resolvedRepository)
+        );
         const inputs = Array.isArray(body.workItems)
           ? body.workItems
           : [body.workItem];
