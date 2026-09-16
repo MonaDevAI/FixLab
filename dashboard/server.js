@@ -270,6 +270,7 @@ ${requestGuidance}
 - The expected bug IDs for this request are: ${bugResults.length > 0 ? bugResults.map((bug) => bug.id).join(", ") : "none detected; no FIXLAB_BUG marker is required"}.
 - Emit exactly one or more progress lines in this format:
   FIXLAB_STAGE|stage|status|message
+- Write every FIXLAB_STAGE and FIXLAB_BUG marker as a literal plain-text assistant response line. Never generate markers through shell, Write-Output, echo, files, tools, code blocks, or tables because runtime rendering may hide them from the dashboard.
 - stage must be one of: ${FIXLAB_STAGES.join(", ")}.
 - status must be pending, running, passed, skipped, blocked, or failed.
 - Before finishing, emit a terminal passed, skipped, blocked, or failed marker for every stage. Never imply an unmarked stage passed.

@@ -84,4 +84,7 @@ Runtime-defined structured output is part of the completion contract. When the
 job prompt requires `FIXLAB_BUG` or `FIXLAB_STAGE` lines, emit every required
 bug outcome and terminal stage line to standard output before calling
 `task_complete` or returning a final response. Never replace required
-machine-readable lines with an equivalent narrative summary.
+machine-readable lines with an equivalent narrative summary. Write each marker
+as a literal plain-text assistant response line. Never emit markers through a
+shell command, `Write-Output`, `echo`, a file, a tool result, a code block, or a
+table because the runtime may collapse or transform that output.

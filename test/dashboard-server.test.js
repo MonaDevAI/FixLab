@@ -494,6 +494,7 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.match(receivedPrompt, /do not feed unbounded raw output back into prompts/i);
     assert.match(receivedPrompt, /FIXLAB_STAGE\|stage\|status\|message/);
     assert.match(receivedPrompt, /FIXLAB_BUG\|id\|outcome\|owner\|summary/);
+    assert.match(receivedPrompt, /Never generate markers through shell/);
     assert.match(receivedPrompt, /required machine-readable output/);
     assert.match(receivedPrompt, /before the terminal pr stage/);
     assert.match(
