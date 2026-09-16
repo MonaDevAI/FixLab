@@ -667,7 +667,7 @@ export function buildCopilotInvocation({
       "--plugin-dir",
       packageRoot,
       "--agent",
-      "fixlab",
+      "fixlab:fixlab",
       "--allow-all-tools",
       "--no-ask-user",
       "--autopilot",

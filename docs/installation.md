@@ -256,7 +256,7 @@ agency copilot --plugin-dir <installed-fixlab-package> --agent fixlab:fixlab
 Direct mode launches:
 
 ```powershell
-copilot --plugin-dir <installed-fixlab-package> --agent fixlab
+copilot --plugin-dir <installed-fixlab-package> --agent fixlab:fixlab
 ```
 
 The dashboard uses the same plugin resolution and streams long prompts through
@@ -270,7 +270,7 @@ From a FixLab checkout:
 
 ```powershell
 agency copilot --plugin-dir . --agent fixlab:fixlab
-copilot --plugin-dir . --agent fixlab
+copilot --plugin-dir . --agent fixlab:fixlab
 ```
 
 ## Update or uninstall

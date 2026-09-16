@@ -411,7 +411,7 @@ test("run launches the FixLab plugin directly through Copilot", () => {
     );
 
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab/);
+    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
     assert.match(result.stdout, /--autopilot/);
     assert.match(result.stdout, /PROMPT:repair the defect/);
     assert.doesNotMatch(result.stdout, /--interactive repair the defect/);

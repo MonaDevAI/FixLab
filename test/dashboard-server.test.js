@@ -51,7 +51,7 @@ test("Agency executor keeps long prompts out of process arguments", () => {
       "--plugin-dir",
       "C:\\FixLab",
       "--agent",
-      "fixlab"
+      "fixlab:fixlab"
     ]);
     assert.equal(invocation.args.includes("--autopilot"), true);
     assert.deepEqual(invocation.args.slice(-2), [

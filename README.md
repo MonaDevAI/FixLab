@@ -109,7 +109,7 @@ To run the plugin through either runtime from this checkout:
 
 ```shell
 agency copilot --plugin-dir . --agent fixlab:fixlab
-copilot --plugin-dir . --agent fixlab
+copilot --plugin-dir . --agent fixlab:fixlab
 ```
 
 ---
