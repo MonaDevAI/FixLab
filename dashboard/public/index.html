@@ -57,6 +57,7 @@
             accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple>
           <p class="guidance">Copy an image and press Ctrl+V anywhere on this page, or select up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Other clipboard image formats are converted to PNG. Files remain local and are removed when replaced or when the dashboard stops.</p>
           <ul id="screenshot-list" class="file-list"></ul>
+          <p id="screenshot-message" class="guidance" role="status" aria-live="polite"></p>
           <fieldset>
             <legend>Request type</legend>
             <label><input type="radio" name="requestType" value="bug-fix" checked> Bug fix</label>
@@ -68,6 +69,12 @@
             <label><input type="radio" name="mode" value="validate-only"> Validate only</label>
             <label><input type="radio" name="mode" value="playwright-only"> Playwright validation only</label>
           </fieldset>
+          <fieldset>
+            <legend>Batch completion</legend>
+            <label><input type="checkbox" name="separatePullRequests"> Create a separate PR per bug</label>
+            <label><input type="checkbox" name="runAllUiScenarios"> Run UI tests for all scenarios at the end</label>
+          </fieldset>
+          <p class="guidance">By default, FixLab implements all selected bug fixes first, runs shared validation once, and prepares one common PR. Select separate PRs to isolate each bug's fix and evidence.</p>
           <p class="guidance">Playwright validation only skips source diagnosis, implementation, review, and pull-request work. It performs required profile setup, reuses browser authentication, starts required applications, and runs the focused browser journey.</p>
           <button id="start-button" type="submit">Start job</button>
           <p class="guidance">FixLab proceeds autonomously. It asks for human input only for authentication, unsafe-data approval, deployment or PR approval, or a genuine blocker.</p>

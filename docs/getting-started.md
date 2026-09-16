@@ -59,7 +59,11 @@ ready:
 {
   "browserAutomation": {
     "workingDirectory": "frontend",
+    "package": "@playwright/test",
+    "browser": "chromium",
+    "testCommand": "npm run test:e2e",
     "authentication": {
+      "required": true,
       "command": "npm run test:e2e:auth",
       "environment": {
         "E2E_START": "npm start"
@@ -67,6 +71,10 @@ ready:
       "statusPaths": [
         "e2e/.auth/user.json"
       ]
+    },
+    "dataSafety": {
+      "policy": "Use local mock data or intercept every mutating request; require approval before using non-production records.",
+      "productionAllowed": false
     }
   }
 }
@@ -76,6 +84,10 @@ Do not place credentials, tokens, cookies, or browser-state contents in the
 profile. **Connect Playwright** runs only the configured local command.
 **Check status** reports whether every configured path exists without reading
 or returning its contents.
+
+The dashboard remains **Not ready** until the profile also includes a frontend
+startup command, loopback health URL, Playwright test command, explicit
+authentication requirement, and a production-excluding data-safety policy.
 
 Start the local dashboard explicitly:
 
@@ -97,6 +109,17 @@ pull-request work. It retains the required repository-profile setup,
 authentication check, application startup, focused Playwright journey, and
 exact browser evidence. Dependencies and authentication that are already
 available are reused.
+
+For multi-bug batches, FixLab defaults to **one common PR**: it implements all
+required fixes first and then runs shared validation against the combined diff.
+Select **Create a separate PR per bug** to isolate each bug's changes,
+validation evidence, and PR. Select **Run UI tests for all scenarios at the
+end** when the final gate must execute the repository's complete Playwright
+scenario set instead of only focused journeys.
+
+Set `pullRequests.branchNaming.userId` during onboarding. With
+`"prefixTemplate": "users/{userId}"`, a configured user ID of `mobiswal`
+produces branches beneath `users/mobiswal/`.
 
 The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
 IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,

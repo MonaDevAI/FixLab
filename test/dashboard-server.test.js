@@ -19,6 +19,7 @@ import {
   createCacheContext,
   createDashboardServer,
   FIXLAB_STAGES,
+  inspectRepository,
   MAX_CACHE_BYTES,
   MAX_CACHE_ENTRIES,
   MAX_JOB_LOG_ENTRIES
@@ -119,10 +120,73 @@ function createRepository() {
   mkdirSync(profileDirectory, { recursive: true });
   writeFileSync(
     join(profileDirectory, "repository-profile.json"),
-    JSON.stringify({ name: "Dashboard test repository" })
+    JSON.stringify(validProfile())
   );
   return repository;
 }
+
+function validProfile(overrides = {}) {
+  return {
+    name: "Dashboard test repository",
+    applications: {
+      frontend: {
+        workingDirectory: ".",
+        command: "npm start",
+        port: 3000,
+        healthUrl: "http://127.0.0.1:3000"
+      }
+    },
+    browserAutomation: {
+      workingDirectory: ".",
+      package: "@playwright/test",
+      browser: "chromium",
+      testCommand: "npm run test:e2e",
+      authentication: {
+        required: false,
+        command: "",
+        statusPaths: []
+      },
+      dataSafety: {
+        policy: "Use mocked data and intercept mutations.",
+        productionAllowed: false
+      }
+    },
+    pullRequests: {
+      defaultTargetBranch: "develop",
+      requireConfirmation: true,
+      branchNaming: {
+        userId: "fixlab-test",
+        prefixTemplate: "users/{userId}"
+      }
+    },
+    ...overrides
+  };
+}
+
+test("dashboard readiness blocks an incomplete live-test profile", () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+
+  try {
+    const profile = validProfile();
+    delete profile.browserAutomation.testCommand;
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const readiness = inspectRepository(repository);
+
+    assert.equal(readiness.repositoryReady, true);
+    assert.equal(readiness.profileReady, false);
+    assert.match(readiness.error, /live-test profile is incomplete/);
+    assert.match(readiness.error, /browserAutomation\.testCommand/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 function git(repository, args) {
   const result = spawnSync("git", args, {
@@ -207,13 +271,13 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
   );
   writeFileSync(
     profilePath,
-    JSON.stringify({
+    JSON.stringify(validProfile({
       name: "ADO intake repository",
       azureDevOps: {
         organization: "profile-org",
         project: "Profile Project"
       }
-    })
+    }))
   );
   git(repository, [
     "add",
@@ -353,7 +417,9 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
       workItemType: "Bug",
       webUrl: `https://dev.azure.com/example/project/_workitems/edit/${value}`
     }));
-  const executor = ({ onOutput }) => {
+  let receivedPrompt = "";
+  const executor = ({ onOutput, prompt }) => {
+    receivedPrompt = prompt;
     for (const id of ["101", "202"]) {
       onOutput(
         "stdout",
@@ -391,13 +457,21 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
         request:
           "Azure DevOps Bug 101: First bug\n\nAzure DevOps Bug 202: Second bug",
         mode: "fix-and-validate",
+        pullRequestStrategy: "per-bug",
+        runAllUiScenarios: true,
         intakeSource: "azure-devops",
         workItems: loaded.body.workItems
       })
     });
     assert.equal(started.response.status, 202, JSON.stringify(started.body));
     assert.equal(started.body.job.workItems.length, 2);
+    assert.equal(started.body.job.pullRequestStrategy, "per-bug");
+    assert.equal(started.body.job.runAllUiScenarios, true);
     assert.equal("description" in started.body.job.workItems[0], false);
+    assert.match(receivedPrompt, /Pull request strategy: per-bug/);
+    assert.match(receivedPrompt, /isolated delivery unit/);
+    assert.match(receivedPrompt, /every repository-defined Playwright\/UI scenario/);
+    assert.match(receivedPrompt, /users\/fixlab-test/);
 
     await new Promise((resolve) => setTimeout(resolve, 0));
     const completed = await jsonRequest(url, "/api/job");
@@ -764,16 +838,24 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
   );
   writeFileSync(
     profilePath,
-    JSON.stringify({
+    JSON.stringify(validProfile({
       name: "Playwright authentication repository",
       browserAutomation: {
         workingDirectory: ".",
+        package: "@playwright/test",
+        browser: "chromium",
+        testCommand: "npm run test:e2e",
         authentication: {
+          required: true,
           command: "node playwright-auth.js",
           statusPaths: ["e2e/.auth/user.json"]
+        },
+        dataSafety: {
+          policy: "Use mocked data and intercept mutations.",
+          productionAllowed: false
         }
       }
-    })
+    }))
   );
   writeFileSync(
     join(repository, "playwright-auth.js"),
@@ -1170,7 +1252,10 @@ test("dashboard cache hits and invalidates on profile or HEAD changes", async ()
       "fixlab",
       "repository-profile.json"
     );
-    writeFileSync(profilePath, JSON.stringify({ name: "Changed profile" }));
+    writeFileSync(
+      profilePath,
+      JSON.stringify(validProfile({ name: "Changed profile" }))
+    );
     await runJob("profile hash invalidation");
     assert.doesNotMatch(prompts[2], /Verified same-repository cache summary/);
 

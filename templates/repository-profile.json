@@ -54,10 +54,16 @@
     "workingDirectory": "frontend",
     "package": "@playwright/test",
     "browser": "chromium",
+    "testCommand": "npm run test:e2e",
     "authentication": {
+      "required": false,
       "command": "",
       "environment": {},
       "statusPaths": []
+    },
+    "dataSafety": {
+      "policy": "Use local mock data or intercept every mutating request; require explicit approval before using non-production records.",
+      "productionAllowed": false
     }
   },
   "environments": [
@@ -67,6 +73,10 @@
   ],
   "pullRequests": {
     "defaultTargetBranch": "develop",
-    "requireConfirmation": true
+    "requireConfirmation": true,
+    "branchNaming": {
+      "userId": "your-user-id",
+      "prefixTemplate": "users/{userId}"
+    }
   }
 }

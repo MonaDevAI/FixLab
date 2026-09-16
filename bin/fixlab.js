@@ -16,6 +16,7 @@ import {
   DEFAULT_DASHBOARD_PORT,
   FIXLAB_RUNTIMES,
   inspectRepository,
+  validateLiveTestProfile,
   validatePort
 } from "../dashboard/server.js";
 
@@ -383,6 +384,14 @@ function doctor(repository, runtime) {
     name: "Repository profile",
     ok: Boolean(profile),
     detail: error ?? profilePath
+  });
+  const liveTestProfile = profile
+    ? validateLiveTestProfile(profile, repository)
+    : { ok: false, detail: "not checked because the repository profile is unavailable" };
+  checks.push({
+    name: "Live-test profile",
+    ok: liveTestProfile.ok,
+    detail: liveTestProfile.detail
   });
   checks.push({
     name: "Git repository",

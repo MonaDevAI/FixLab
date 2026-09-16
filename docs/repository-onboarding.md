@@ -9,6 +9,7 @@ The target repository owns a versioned profile.
 
 - Default branch
 - Allowed pull request target branches
+- Developer user ID and branch prefix template
 - Working directories
 - Dependency restore commands
 - Build and test commands
@@ -44,8 +45,33 @@ Each journey should specify:
 - Exact observable assertion
 - Cleanup behavior
 
+The profile must also declare:
+
+- `browserAutomation.testCommand`, which runs the repository-owned Playwright suite.
+- `browserAutomation.authentication.required`, explicitly stating whether login is needed.
+- An authentication command and status paths when authentication is required.
+- `browserAutomation.dataSafety.policy`, describing mock, read-only, or intercepted-mutation behavior.
+- `browserAutomation.dataSafety.productionAllowed: false`.
+
 Do not place real credentials, tokens, user identities, customer records, or
 internal service URLs in the profile.
+
+Configure repository branch ownership explicitly:
+
+```json
+{
+  "pullRequests": {
+    "branchNaming": {
+      "userId": "developer-alias",
+      "prefixTemplate": "users/{userId}"
+    }
+  }
+}
+```
+
+FixLab replaces `{userId}` with the configured value and instructs the agent to
+create branches beneath the resolved prefix. It never substitutes `copilot`,
+`fixlab`, or another runtime name for the repository user's ID.
 
 ## Profile review checklist
 
@@ -59,3 +85,11 @@ internal service URLs in the profile.
 - Screenshots are sanitized before sharing.
 - Pull request creation requires authorization.
 - Deployment is a separate, explicitly approved capability.
+
+`fixlab doctor` and the dashboard both block startup when the frontend startup
+command, loopback health URL, Playwright command, authentication intent, or
+data-safety policy is missing. This prevents a job from reaching the live-test
+stage before the repository has a runnable, non-mutating browser-validation
+contract. When authentication is required, every configured status path must
+also exist; the authentication command should create its final status marker
+only after sign-in succeeds.

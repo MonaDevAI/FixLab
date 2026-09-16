@@ -30,6 +30,7 @@ const workItemList = document.querySelector("#work-item-list");
 const requestInput = document.querySelector("#request");
 const screenshotInput = document.querySelector("#screenshots");
 const screenshotList = document.querySelector("#screenshot-list");
+const screenshotMessage = document.querySelector("#screenshot-message");
 const jobInputPanel = document.querySelector("#job-input-panel");
 const jobInputTitle = document.querySelector("#job-input-title");
 const jobInputCount = document.querySelector("#job-input-count");
@@ -661,6 +662,11 @@ function addScreenshots(files) {
   renderScreenshots();
 }
 
+function showScreenshotResult(message, error = false) {
+  screenshotMessage.textContent = message;
+  screenshotMessage.className = error ? "error" : "guidance";
+}
+
 function normalizeClipboardScreenshot(file, index) {
   if (file.name) {
     return file;
@@ -783,19 +789,33 @@ loadWorkItemButton.addEventListener("click", async () => {
 screenshotInput.addEventListener("change", () => {
   formError.textContent = "";
   try {
-    addScreenshots([...screenshotInput.files]);
+    const files = [...screenshotInput.files];
+    addScreenshots(files);
+    showScreenshotResult(
+      `${files.length} screenshot(s) attached. ${selectedScreenshots.length} of ${maxScreenshots} selected.`
+    );
   } catch (error) {
     formError.textContent = error.message;
+    showScreenshotResult(error.message, true);
   } finally {
     screenshotInput.value = "";
   }
 });
 
 document.addEventListener("paste", async (event) => {
-  const items = [...(event.clipboardData?.items ?? [])].filter(
+  const fileItems = [...(event.clipboardData?.items ?? [])].filter(
+    (item) => item.kind === "file"
+  );
+  const items = fileItems.filter(
     (item) => item.kind === "file" && item.type.startsWith("image/")
   );
   if (items.length === 0) {
+    if (fileItems.length > 0) {
+      showScreenshotResult(
+        "The pasted file is not recognized as an image. Paste a PNG, JPEG, or WebP screenshot.",
+        true
+      );
+    }
     return;
   }
   event.preventDefault();
@@ -807,9 +827,14 @@ document.addEventListener("paste", async (event) => {
     addScreenshots(
       await Promise.all(files.map(convertClipboardScreenshot))
     );
+    showScreenshotResult(
+      `${files.length} pasted screenshot(s) attached. ${selectedScreenshots.length} of ${maxScreenshots} selected.`
+    );
   } catch (error) {
-    formError.textContent =
+    const message =
       error.message || "The clipboard image could not be added.";
+    formError.textContent = message;
+    showScreenshotResult(message, true);
   }
 });
 
@@ -872,6 +897,10 @@ form.addEventListener("submit", async (event) => {
         request: data.get("request"),
         requestType: data.get("requestType"),
         mode: data.get("mode"),
+        pullRequestStrategy: data.get("separatePullRequests") === "on"
+          ? "per-bug"
+          : "common",
+        runAllUiScenarios: data.get("runAllUiScenarios") === "on",
         intakeSource,
         workItems: intakeSource === "azure-devops" ? loadedWorkItems : [],
         screenshots
@@ -879,6 +908,7 @@ form.addEventListener("submit", async (event) => {
     });
     selectedScreenshots = [];
     renderScreenshots();
+    showScreenshotResult("");
     activeJob = body.job;
     selectedJobId = body.job?.id ?? null;
     rememberJob(body.job);

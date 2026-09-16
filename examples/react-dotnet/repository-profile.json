@@ -45,7 +45,9 @@
     "workingDirectory": "frontend",
     "package": "@playwright/test",
     "browser": "chromium",
+    "testCommand": "npm run test:e2e",
     "authentication": {
+      "required": true,
       "command": "npm run test:e2e:auth",
       "environment": {
         "E2E_START": "npm start"
@@ -54,11 +56,19 @@
         "e2e/.auth/user.json"
       ]
     },
+    "dataSafety": {
+      "policy": "Use local mock data or intercept every mutating request; require explicit approval before using non-production records.",
+      "productionAllowed": false
+    },
     "channel": "msedge"
   },
   "environments": ["local", "development", "integration"],
   "pullRequests": {
     "defaultTargetBranch": "develop",
-    "requireConfirmation": true
+    "requireConfirmation": true,
+    "branchNaming": {
+      "userId": "developer-alias",
+      "prefixTemplate": "users/{userId}"
+    }
   }
 }

@@ -71,7 +71,32 @@ test.beforeAll(async () => {
   mkdirSync(profileDirectory, { recursive: true });
   writeFileSync(
     join(profileDirectory, "repository-profile.json"),
-    JSON.stringify({ name: "E2E repository" })
+    JSON.stringify({
+      name: "E2E repository",
+      applications: {
+        frontend: {
+          workingDirectory: ".",
+          command: "npm start",
+          port: 3000,
+          healthUrl: "http://127.0.0.1:3000"
+        }
+      },
+      browserAutomation: {
+        workingDirectory: ".",
+        package: "@playwright/test",
+        browser: "chromium",
+        testCommand: "npm run test:e2e",
+        authentication: {
+          required: false,
+          command: "",
+          statusPaths: []
+        },
+        dataSafety: {
+          policy: "Use mocked data and intercept mutations.",
+          productionAllowed: false
+        }
+      }
+    })
   );
 
   dashboard = createDashboardServer({
@@ -130,6 +155,10 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
   await expect(
     page.getByLabel("Playwright validation only")
   ).toBeVisible();
+  await expect(page.getByLabel("Create a separate PR per bug")).not.toBeChecked();
+  await expect(
+    page.getByLabel("Run UI tests for all scenarios at the end")
+  ).not.toBeChecked();
   await page.getByLabel("Load from Azure DevOps").check();
   await expect(page.getByText("Load bugs")).toBeVisible();
   await expect(
@@ -187,6 +216,9 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
   });
   expect(imagePastePrevented).toBe(true);
   await expect(page.getByAltText("Preview of clipboard.png")).toBeVisible();
+  await expect(page.getByRole("status")).toHaveText(
+    "1 pasted screenshot(s) attached. 1 of 5 selected."
+  );
 
   await requestField.fill("Validate pasted screenshot");
   await page.getByRole("button", { name: "Start job" }).click();

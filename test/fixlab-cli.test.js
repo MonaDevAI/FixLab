@@ -54,6 +54,14 @@ test("init creates a parseable repository profile", () => {
     const profile = JSON.parse(readFileSync(profilePath, "utf8"));
     assert.equal(profile.browserAutomation.package, "@playwright/test");
     assert.equal(profile.browserAutomation.browser, "chromium");
+    assert.equal(profile.browserAutomation.testCommand, "npm run test:e2e");
+    assert.equal(profile.browserAutomation.authentication.required, false);
+    assert.equal(profile.browserAutomation.dataSafety.productionAllowed, false);
+    assert.equal(profile.pullRequests.branchNaming.userId, "your-user-id");
+    assert.equal(
+      profile.pullRequests.branchNaming.prefixTemplate,
+      "users/{userId}"
+    );
     const promptDirectory = join(repository, ".github", "prompts");
     const expectedPrompts = [
       "fixlab.bugfix.prompt.md",
@@ -142,6 +150,65 @@ test("doctor blocks when Playwright is unavailable", () => {
     assert.equal(result.status, 1);
     assert.match(result.stdout, /FAIL  Playwright package/);
     assert.match(result.stdout, /FAIL  Playwright browser/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("doctor and dashboard block an incomplete live-test profile", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    delete profile.browserAutomation.testCommand;
+    profile.browserAutomation.authentication = {};
+    profile.browserAutomation.dataSafety.productionAllowed = true;
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const result = run(["doctor", repository], repository);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /FAIL  Live-test profile/);
+    assert.match(result.stdout, /browserAutomation\.testCommand/);
+    assert.match(result.stdout, /browserAutomation\.authentication\.required/);
+    assert.match(result.stdout, /browserAutomation\.dataSafety\.productionAllowed=false/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("doctor blocks until required browser authentication is complete", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.browserAutomation.authentication = {
+      required: true,
+      command: "npm run test:e2e:auth",
+      statusPaths: ["e2e/.auth/user.json"]
+    };
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const result = run(["doctor", repository], repository);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /FAIL  Live-test profile/);
+    assert.match(result.stdout, /browserAutomation authentication is not ready/);
+    assert.match(result.stdout, /e2e\/\.auth\/user\.json/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

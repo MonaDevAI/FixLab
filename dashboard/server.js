@@ -93,12 +93,110 @@ export function validatePort(value) {
   return port;
 }
 
+export function validateLiveTestProfile(profile, repository) {
+  const missing = [];
+  const frontend = profile?.applications?.frontend;
+  const browserAutomation = profile?.browserAutomation;
+  const authentication = browserAutomation?.authentication;
+  const dataSafety = browserAutomation?.dataSafety;
+  const requiredString = (value) =>
+    typeof value === "string" && Boolean(value.trim());
+
+  if (!frontend || typeof frontend !== "object") {
+    missing.push("applications.frontend");
+  } else {
+    if (!requiredString(frontend.workingDirectory)) {
+      missing.push("applications.frontend.workingDirectory");
+    }
+    if (!requiredString(frontend.command)) {
+      missing.push("applications.frontend.command");
+    }
+    if (
+      !Number.isInteger(frontend.port) ||
+      frontend.port < 1 ||
+      frontend.port > 65535
+    ) {
+      missing.push("applications.frontend.port");
+    }
+    if (!requiredString(frontend.healthUrl)) {
+      missing.push("applications.frontend.healthUrl");
+    } else {
+      try {
+        const healthUrl = new URL(frontend.healthUrl);
+        if (
+          !["http:", "https:"].includes(healthUrl.protocol) ||
+          !["localhost", "127.0.0.1"].includes(healthUrl.hostname)
+        ) {
+          missing.push("applications.frontend.healthUrl (loopback URL required)");
+        }
+      } catch {
+        missing.push("applications.frontend.healthUrl (valid URL required)");
+      }
+    }
+  }
+
+  if (!browserAutomation || typeof browserAutomation !== "object") {
+    missing.push("browserAutomation");
+  } else {
+    for (const field of ["workingDirectory", "package", "browser", "testCommand"]) {
+      if (!requiredString(browserAutomation[field])) {
+        missing.push(`browserAutomation.${field}`);
+      }
+    }
+
+    if (typeof authentication?.required !== "boolean") {
+      missing.push("browserAutomation.authentication.required");
+    } else if (authentication.required) {
+      if (!requiredString(authentication.command)) {
+        missing.push("browserAutomation.authentication.command");
+      }
+      if (
+        !Array.isArray(authentication.statusPaths) ||
+        authentication.statusPaths.length === 0 ||
+        authentication.statusPaths.some((value) => !requiredString(value))
+      ) {
+        missing.push("browserAutomation.authentication.statusPaths");
+      } else if (repository) {
+        const authenticationRoot = resolve(
+          repository,
+          browserAutomation.workingDirectory
+        );
+        const missingStatusPaths = authentication.statusPaths.filter(
+          (statusPath) => !existsSync(resolve(authenticationRoot, statusPath))
+        );
+        if (missingStatusPaths.length > 0) {
+          missing.push(
+            `browserAutomation authentication is not ready (${missingStatusPaths.join(", ")})`
+          );
+        }
+      }
+    }
+
+    if (!requiredString(dataSafety?.policy)) {
+      missing.push("browserAutomation.dataSafety.policy");
+    }
+    if (dataSafety?.productionAllowed !== false) {
+      missing.push("browserAutomation.dataSafety.productionAllowed=false");
+    }
+  }
+
+  return {
+    ok: missing.length === 0,
+    detail:
+      missing.length === 0
+        ? "startup, health, Playwright, authentication, and data-safety settings configured"
+        : `missing or invalid: ${missing.join(", ")}`
+  };
+}
+
 function publicQueue(jobs) {
   return jobs.map((job, index) => ({
     id: job.id,
     position: index + 1,
     request: safeSummary(job.request),
     requestType: job.requestType,
+    pullRequestStrategy: job.pullRequestStrategy,
+    runAllUiScenarios: job.runAllUiScenarios,
     intakeSource: job.intakeSource,
     mode: job.mode,
     status: job.status,
@@ -151,6 +249,20 @@ export function inspectRepository(repository) {
     if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
       throw new Error("profile root must be a JSON object");
     }
+    const liveTestProfile = validateLiveTestProfile(profile, resolvedRepository);
+    if (!liveTestProfile.ok) {
+      return {
+        repository: resolvedRepository,
+        repositoryReady: true,
+        profileReady: false,
+        profilePath,
+        profileName:
+          typeof profile.name === "string" && profile.name.trim()
+            ? profile.name.trim()
+            : null,
+        error: `live-test profile is incomplete: ${liveTestProfile.detail}`
+      };
+    }
     return {
       repository: resolvedRepository,
       repositoryReady: true,
@@ -178,6 +290,9 @@ export function buildJobPrompt({
   request,
   mode,
   requestType = "bug-fix",
+  pullRequestStrategy = "common",
+  runAllUiScenarios = false,
+  branchNaming = null,
   cacheSummary = null,
   intakeSource = "manual",
   workItem = null,
@@ -210,6 +325,20 @@ export function buildJobPrompt({
     })
   );
   const bugResults = extractBugResults(request, intakeWorkItems);
+  const pullRequestGuidance = readOnly
+    ? "- Pull-request strategy is informational in read-only mode; do not create or update pull requests."
+    : pullRequestStrategy === "per-bug"
+      ? `- Process each selected bug as an isolated delivery unit. Keep its code changes, focused validation, browser evidence, commit, and pull-request outcome separate from every other bug.
+- Complete and validate one bug before preparing its PR, then continue to the next bug. Never combine unrelated bug changes in one PR.`
+      : `- Treat all selected bugs as one common-PR batch. Diagnose and implement every required fix before starting the final validation phase.
+- After all fixes are complete, run shared tests, builds, application startup, and browser scenarios once against the combined effective diff, then prepare one common PR.`;
+  const uiScenarioGuidance = runAllUiScenarios
+    ? `- After implementation and non-browser validation are complete, run every repository-defined Playwright/UI scenario at the end, not only the focused defect journey.
+- Start the required applications once when safe, preserve each scenario result, and attach non-sensitive screenshot evidence for the complete UI run.`
+    : "- Run the smallest repository-defined Playwright journey that proves the selected behavior.";
+  const branchNamingGuidance = branchNaming
+    ? `- Repository branch naming is configured as ${branchNaming.prefix}. Create or reuse only branches beneath this prefix. Do not substitute a runtime, bot, or agent name for the configured user ID.`
+    : "- Follow the repository's existing branch naming policy; do not invent a bot-specific prefix.";
   const requestGuidance = playwrightOnly
     ? `- Use the request only to select the relevant repository-defined Playwright journey and expected behavior.
 - Perform only the minimum setup required by the repository profile: verify browser authentication, start required applications, and run the focused Playwright journey.
@@ -226,6 +355,8 @@ export function buildJobPrompt({
 - Use the smallest focused reproduction that demonstrates the reported defect.`;
   return `Run a FixLab ${mode} job.
 Request type: ${requestType}
+Pull request strategy: ${pullRequestStrategy}
+Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
 Intake source: ${intakeSource}
 ${intakeSummary.length > 0 ? `Loaded Azure DevOps selection:
 ${JSON.stringify(intakeSummary, null, 2)}
@@ -248,6 +379,9 @@ Repository requirements:
 - Reuse this job/session context. Do not reread unchanged files, repeat completed diagnosis, reinstall available dependencies, or rerun broad checks without new evidence.
 - Treat commit changes and repository-profile or instruction changes as invalidation boundaries: reread affected context when they change.
 ${requestGuidance}
+${pullRequestGuidance}
+${uiScenarioGuidance}
+${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
@@ -787,6 +921,8 @@ function publicJob(job) {
     id: job.id,
     request: job.request,
     requestType: job.requestType,
+    pullRequestStrategy: job.pullRequestStrategy,
+    runAllUiScenarios: job.runAllUiScenarios,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
     workItems: job.workItems.map(publicWorkItem),
@@ -1716,6 +1852,63 @@ export function createDashboardServer({
         });
         return;
       }
+      const pullRequestStrategy = body.pullRequestStrategy ?? "common";
+      if (!["common", "per-bug"].includes(pullRequestStrategy)) {
+        sendJson(response, 400, {
+          error: "pullRequestStrategy must be common or per-bug"
+        });
+        return;
+      }
+      const runAllUiScenarios = body.runAllUiScenarios ?? false;
+      if (typeof runAllUiScenarios !== "boolean") {
+        sendJson(response, 400, {
+          error: "runAllUiScenarios must be a boolean"
+        });
+        return;
+      }
+      const repositoryProfile = loadRepositoryProfile(resolvedRepository);
+      const configuredBranchNaming =
+        repositoryProfile.pullRequests?.branchNaming ??
+        repositoryProfile.pullRequest?.branchNaming;
+      let branchNaming = null;
+      if (configuredBranchNaming) {
+        const userId =
+          typeof configuredBranchNaming.userId === "string"
+            ? configuredBranchNaming.userId.trim()
+            : "";
+        const prefixTemplate =
+          typeof configuredBranchNaming.prefixTemplate === "string"
+            ? configuredBranchNaming.prefixTemplate.trim()
+            : "";
+        if (!/^[A-Za-z0-9._-]+$/.test(userId)) {
+          sendJson(response, 400, {
+            error:
+              "pullRequests.branchNaming.userId must contain only letters, numbers, dot, underscore, or hyphen"
+          });
+          return;
+        }
+        if (!prefixTemplate.includes("{userId}")) {
+          sendJson(response, 400, {
+            error:
+              "pullRequests.branchNaming.prefixTemplate must contain {userId}"
+          });
+          return;
+        }
+        const prefix = prefixTemplate.replaceAll("{userId}", userId);
+        if (
+          prefix.startsWith("/") ||
+          prefix.endsWith("/") ||
+          prefix.includes("..") ||
+          prefix.includes("\\") ||
+          !/^[A-Za-z0-9._/-]+$/.test(prefix)
+        ) {
+          sendJson(response, 400, {
+            error: "pullRequests.branchNaming resolves to an invalid Git prefix"
+          });
+          return;
+        }
+        branchNaming = { userId, prefixTemplate, prefix };
+      }
       const intakeSource = body.intakeSource ?? "manual";
       if (!["manual", "azure-devops"].includes(intakeSource)) {
         sendJson(response, 400, {
@@ -1793,6 +1986,9 @@ export function createDashboardServer({
         createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
+        pullRequestStrategy,
+        runAllUiScenarios,
+        branchNaming,
         intakeSource,
         workItem,
         workItems,
@@ -1829,6 +2025,9 @@ export function createDashboardServer({
         request: requestText,
         mode: body.mode,
         requestType,
+        pullRequestStrategy,
+        runAllUiScenarios,
+        branchNaming,
         intakeSource,
         workItem,
         workItems,
