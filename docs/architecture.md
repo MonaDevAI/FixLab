@@ -126,7 +126,13 @@ agent reports a
 blocked stage, the local dashboard accepts the required user input and resumes
 that same session. Failed jobs can retry, and completed jobs can accept a
 focused addition while reusing prior evidence, the branch, and an existing
-pull request. Running jobs are not interrupted by dashboard input.
+pull request. Running jobs are not interrupted by dashboard input. The
+dashboard records the time of the latest executor output and stops only its
+owned executor when no output arrives for the profile-defined
+`validation.agentIdleTimeoutMinutes` period (20 minutes by default). The job
+then fails explicitly and remains resumable instead of appearing to run
+forever. On startup, a persisted `running` job cannot still own its original
+process, so the dashboard converts it to an interrupted, resumable failure.
 New requests submitted while a job is running, blocked, or failed enter the
 bounded queue. A passed active job starts the next queued job. Blocked and
 failed jobs pause queue advancement so the same session remains resumable.

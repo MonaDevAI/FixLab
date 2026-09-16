@@ -41,6 +41,7 @@ export const MAX_METRICS_ENTRIES = 500;
 export const MAX_DASHBOARD_HISTORY_ENTRIES = 20;
 export const MAX_QUEUED_JOBS = 20;
 export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
+export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
 export const FIXLAB_STAGES = [
   "intake",
@@ -114,8 +115,21 @@ export function validateLiveTestProfile(profile, repository) {
   const authentication = browserAutomation?.authentication;
   const dataSafety = browserAutomation?.dataSafety;
   const testSynthesis = browserAutomation?.testSynthesis;
+  const agentIdleTimeoutMinutes =
+    profile?.validation?.agentIdleTimeoutMinutes;
   const requiredString = (value) =>
     typeof value === "string" && Boolean(value.trim());
+
+  if (
+    agentIdleTimeoutMinutes !== undefined &&
+    (!Number.isInteger(agentIdleTimeoutMinutes) ||
+      agentIdleTimeoutMinutes < 1 ||
+      agentIdleTimeoutMinutes > 120)
+  ) {
+    missing.push(
+      "validation.agentIdleTimeoutMinutes (integer from 1 to 120)"
+    );
+  }
 
   if (!frontend || typeof frontend !== "object") {
     missing.push("applications.frontend");
@@ -306,6 +320,38 @@ function restoreDashboardJob(snapshot, repository) {
     nextLogIndex: 0,
     cacheContext: createCacheContext(repository),
     partial: { stdout: "", stderr: "" }
+  };
+}
+
+export function recoverInterruptedDashboardJob(
+  snapshot,
+  recoveredAt = new Date().toISOString()
+) {
+  if (snapshot?.status !== "running") {
+    return snapshot;
+  }
+
+  const stages = Object.fromEntries(
+    FIXLAB_STAGES.map((stage) => [
+      stage,
+      snapshot.stages?.[stage] ?? { status: "pending", message: "" }
+    ])
+  );
+  const interruptedStage =
+    FIXLAB_STAGES.find((stage) => stages[stage].status === "running") ??
+    FIXLAB_STAGES.find((stage) => !terminalStatuses.has(stages[stage].status));
+  const message =
+    "Dashboard restarted without an owned executor process; resume this interrupted job.";
+  if (interruptedStage) {
+    stages[interruptedStage] = { status: "failed", message };
+  }
+
+  return {
+    ...snapshot,
+    status: "failed",
+    stages,
+    error: snapshot.error ? `${snapshot.error}; ${message}` : message,
+    finishedAt: recoveredAt
   };
 }
 
@@ -1192,6 +1238,7 @@ function publicJob(job) {
     status: job.status,
     startedAt: job.startedAt,
     finishedAt: job.finishedAt,
+    lastActivityAt: job.lastActivityAt,
     error: job.error,
     canResume: ["blocked", "failed", "passed"].includes(job.status),
     canComment: job.status === "running",
@@ -1747,7 +1794,8 @@ export function createDashboardServer({
   runtime = "agency",
   publicDirectory = join(packageRoot, "dashboard", "public"),
   executor = createRuntimeExecutor({ packageRoot, runtime }),
-  workItemLoader = createAzureDevOpsLoader()
+  workItemLoader = createAzureDevOpsLoader(),
+  executionIdleTimeoutMs
 }) {
   const resolvedRepository = resolve(repository);
   let currentJob = null;
@@ -1768,7 +1816,9 @@ export function createDashboardServer({
   let metricsRecords = loadedMetrics.records;
   let metricsWarning = loadedMetrics.warning;
   const loadedDashboardHistory = readDashboardHistory(dashboardHistoryPath);
-  let persistedJobs = loadedDashboardHistory.jobs;
+  let persistedJobs = loadedDashboardHistory.jobs.map((job) =>
+    recoverInterruptedDashboardJob(job)
+  );
   let dashboardHistoryWarning = loadedDashboardHistory.warning;
   const resumableSnapshot = persistedJobs.find((job) =>
     ["blocked", "failed", "passed"].includes(job.status)
@@ -1846,17 +1896,66 @@ export function createDashboardServer({
   }
 
   function startJob(job, prompt, resume = false) {
-    const handle = executor({
+    const profileIdleTimeoutMinutes = Number(
+      loadRepositoryProfile(resolvedRepository).validation
+        ?.agentIdleTimeoutMinutes
+    );
+    const idleTimeoutMs =
+      executionIdleTimeoutMs ??
+      (Number.isFinite(profileIdleTimeoutMinutes) &&
+      profileIdleTimeoutMinutes > 0
+        ? profileIdleTimeoutMinutes * 60 * 1000
+        : DEFAULT_EXECUTION_IDLE_TIMEOUT_MS);
+    let idleTimer = null;
+    let resolveIdleCompletion;
+    let handle;
+    const idleCompletion = new Promise((resolveCompletion) => {
+      resolveIdleCompletion = resolveCompletion;
+    });
+    const armIdleWatchdog = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        const error = new Error(
+          `FixLab agent produced no output for ${Math.round(
+            idleTimeoutMs / 60000
+          )} minute(s); the owned executor was stopped and the job can be resumed.`
+        );
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: error.message
+        });
+        resolveIdleCompletion({ code: null, error });
+        try {
+          handle?.terminate?.();
+        } catch (terminationError) {
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message: `Could not stop the idle executor: ${terminationError.message}`
+          });
+        }
+      }, idleTimeoutMs);
+      idleTimer.unref?.();
+    };
+
+    job.lastActivityAt = new Date().toISOString();
+    handle = executor({
       repository: resolvedRepository,
       prompt,
       sessionId: job.id,
       resume,
       onOutput(stream, text) {
+        job.lastActivityAt = new Date().toISOString();
+        armIdleWatchdog();
         appendOutput(job, stream, text);
       }
     });
     activeHandle = handle;
-    Promise.resolve(handle.completion)
+    armIdleWatchdog();
+    Promise.race([Promise.resolve(handle.completion), idleCompletion])
       .then((result) => {
         finishJob(job, result);
         recordJobMetric(job);
@@ -1866,6 +1965,7 @@ export function createDashboardServer({
         recordJobMetric(job);
       })
       .finally(() => {
+        clearTimeout(idleTimer);
         if (activeHandle === handle) {
           activeHandle = null;
         }
@@ -1912,6 +2012,7 @@ export function createDashboardServer({
     currentJob = queuedJobs.shift();
     currentJob.status = "running";
     currentJob.startedAt = new Date().toISOString();
+    currentJob.lastActivityAt = currentJob.startedAt;
     recordJobMetric(currentJob);
     try {
       startJob(currentJob, currentJob.pendingPrompt);
@@ -2434,6 +2535,7 @@ export function createDashboardServer({
         status: shouldQueue ? "queued" : "running",
         startedAt: shouldQueue ? null : new Date().toISOString(),
         finishedAt: null,
+        lastActivityAt: shouldQueue ? null : new Date().toISOString(),
         error: null,
         inputs: [],
         pendingInputs: [],

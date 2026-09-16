@@ -34,6 +34,7 @@
       "backendBuild": "dotnet build"
     },
     "productionBuildTimeoutMinutes": 15,
+    "agentIdleTimeoutMinutes": 20,
     "blockerPolicy": "continue-on-owned-process-timeout"
   },
   "applications": {

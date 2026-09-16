@@ -220,6 +220,33 @@ test("dashboard readiness validates configured test synthesis", () => {
   }
 });
 
+test("dashboard readiness validates the agent idle timeout", () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+
+  try {
+    const profile = validProfile({
+      validation: { agentIdleTimeoutMinutes: 0 }
+    });
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const readiness = inspectRepository(repository);
+
+    assert.equal(readiness.profileReady, false);
+    assert.match(
+      readiness.error,
+      /validation\.agentIdleTimeoutMinutes/
+    );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 function git(repository, args) {
   const result = spawnSync("git", args, {
     cwd: repository,
@@ -240,11 +267,17 @@ function createGitRepository() {
   return repository;
 }
 
-async function startDashboard(repository, executor, workItemLoader) {
+async function startDashboard(
+  repository,
+  executor,
+  workItemLoader,
+  options = {}
+) {
   const dashboard = createDashboardServer({
     repository,
     packageRoot,
     executor,
+    ...options,
     ...(workItemLoader ? { workItemLoader } : {})
   });
   const address = await dashboard.listen({ port: await availablePort() });
@@ -1343,6 +1376,97 @@ test("dashboard restores private job summaries and PR readiness after restart", 
     );
   } finally {
     await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard recovers an orphaned running job as failed and resumable", async () => {
+  const repository = createGitRepository();
+  const executor = () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  });
+  const first = await startDashboard(repository, executor);
+  let jobId;
+
+  try {
+    const started = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Persist this running job before restart.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    jobId = started.body.job.id;
+    await jsonRequest(first.url, "/api/status");
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("executor should not run while recovering a job");
+  });
+  try {
+    const status = await jsonRequest(second.url, "/api/status");
+    assert.equal(status.body.job.id, jobId);
+    assert.equal(status.body.job.status, "failed");
+    assert.equal(status.body.job.canResume, true);
+    assert.equal(status.body.job.stages.intake.status, "failed");
+    assert.match(status.body.job.error, /without an owned executor process/);
+  } finally {
+    await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard stops an executor that exceeds the output idle timeout", async () => {
+  const repository = createRepository();
+  let resolveCompletion;
+  let terminated = 0;
+  const executor = () => ({
+    completion: new Promise((resolve) => {
+      resolveCompletion = resolve;
+    }),
+    terminate() {
+      terminated += 1;
+      resolveCompletion({ code: null, signal: "SIGTERM" });
+    }
+  });
+  const { dashboard, url } = await startDashboard(
+    repository,
+    executor,
+    null,
+    { executionIdleTimeoutMs: 25 }
+  );
+
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Stop this job when the executor becomes idle.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+
+    let status;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      status = await jsonRequest(url, "/api/status");
+      if (status.body.job.status === "failed") {
+        break;
+      }
+    }
+    assert.equal(terminated, 1);
+    assert.equal(status.body.job.status, "failed");
+    assert.equal(status.body.job.canResume, true);
+    assert.match(status.body.job.error, /produced no output/);
+    assert.ok(status.body.job.lastActivityAt);
+  } finally {
+    await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });

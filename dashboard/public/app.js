@@ -211,8 +211,16 @@ function renderJob(job, currentActiveJob = job) {
     activeNeedsQueue
       ? "Add to queue"
       : "Start job";
+  const lastActivityAge =
+    running && job?.lastActivityAt
+      ? Date.now() - Date.parse(job.lastActivityAt)
+      : null;
   jobStatusElement.textContent = job
-    ? `${job.status} · ${job.requestType} · ${formatDuration(job.durationMs)}`
+    ? `${job.status} · ${job.requestType} · ${formatDuration(job.durationMs)}${
+        lastActivityAge === null
+          ? ""
+          : ` · last output ${formatDuration(lastActivityAge)} ago`
+      }`
     : "Not started";
   jobStatusElement.className = `badge ${job?.status ?? ""}`;
   const testEvidence = job?.testEvidence;

@@ -4,6 +4,10 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Recover persisted running jobs as interrupted and resumable after dashboard
+  restart.
+- Stop an owned executor after a configurable no-output interval and display
+  the latest output age so stalled jobs do not appear active indefinitely.
 - Add first-class Playwright test synthesis with repository-configured
   synthetic/intercepted data, structured scenario evidence, and a highlighted
   dashboard summary of data source and mutation behavior.
