@@ -1026,9 +1026,9 @@ function appendLine(job, stream, line) {
     return;
   }
 
-  const marker = line.match(
-    /^FIXLAB_STAGE\|([^|]+)\|([^|]+)\|(.*)$/
-  );
+  const marker =
+    line.match(/^FIXLAB_STAGE\|([^|]+)\|([^|]+)\|(.*)$/) ??
+    line.match(/^FIXLAB_STAGE\s+(\S+)\s+(\S+)\s+-\s+(.*)$/);
   if (!marker) {
     return;
   }

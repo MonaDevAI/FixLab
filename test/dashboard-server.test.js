@@ -508,6 +508,49 @@ test("dashboard parses complete stage markers and passes a job", async () => {
   }
 });
 
+test("dashboard accepts rendered text stage markers", async () => {
+  const repository = createRepository();
+  const executor = ({ onOutput }) => {
+    for (const stage of FIXLAB_STAGES) {
+      const status =
+        stage === "live-test"
+          ? "skipped"
+          : stage === "pr"
+            ? "blocked"
+            : "passed";
+      onOutput(
+        "stdout",
+        `FIXLAB_STAGE ${stage} ${status} - ${stage} rendered result\n`
+      );
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Validate rendered stage marker compatibility.",
+        mode: "validate-only"
+      })
+    });
+    assert.equal(started.response.status, 202);
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const result = await jsonRequest(url, "/api/job");
+    assert.equal(result.body.job.status, "blocked");
+    assert.equal(result.body.job.error, null);
+    assert.equal(result.body.job.stages.intake.status, "passed");
+    assert.equal(result.body.job.stages["live-test"].status, "skipped");
+    assert.equal(result.body.job.stages.pr.status, "blocked");
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("blocked job accepts user input and resumes the same Agency session", async () => {
   const repository = createRepository();
   const calls = [];
