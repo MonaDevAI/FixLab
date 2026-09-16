@@ -148,10 +148,10 @@
           <article><span>Bugs queued</span><strong id="metric-bugs">0</strong></article>
           <article><span>Jobs completed</span><strong id="metric-completed">0</strong></article>
           <article><span>Average time</span><strong id="metric-duration">—</strong></article>
-          <article><span>Input reused</span><strong id="metric-cache-reuse">—</strong></article>
+          <article><span>Input tokens reused</span><strong id="metric-cache-reuse">—</strong></article>
         </div>
         <p id="metric-statuses" class="guidance"></p>
-        <p class="guidance">Exact token totals remain in the private local metrics record when Copilot emits them. The dashboard shows only input cache reuse, calculated as cached input divided by total input; it is not presented as exact token or cost savings without a comparable baseline.</p>
+        <p class="guidance">When the runtime emits usage, this shows the exact cached input tokens reused and their percentage of total input. Reuse is not presented as cost savings because that requires a trustworthy comparable billing baseline.</p>
       </section>
 
       <section id="bug-results-panel" class="panel" hidden>

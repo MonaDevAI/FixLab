@@ -287,6 +287,7 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
   expect(metrics.totalCacheWriteTokens).toBe(367_400);
   expect(metrics.totalOutputTokens).toBe(14_800);
   expect(metrics.cacheReusePercent).toBe(79.2);
+  await expect(page.getByText("1,900,000 (79.2%)")).toBeVisible();
   await expect(page.getByText("79.2%")).toBeVisible();
   await expect(page.getByText("2,400,000")).toBeHidden();
 });

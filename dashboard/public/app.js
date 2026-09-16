@@ -601,7 +601,11 @@ function renderMetrics(metrics, warning) {
   metricCacheReuse.textContent =
     metrics.cacheReusePercent === null
       ? "—"
-      : `${metrics.cacheReusePercent.toFixed(1)}%`;
+      : `${metrics.totalCachedInputTokens.toLocaleString()} (${metrics.cacheReusePercent.toFixed(1)}%)`;
+  metricCacheReuse.title =
+    metrics.cacheReusePercent === null
+      ? "No exact runtime usage has been recorded for this period."
+      : `${metrics.totalCachedInputTokens.toLocaleString()} of ${metrics.totalInputTokens.toLocaleString()} input tokens were reused from cache.`;
   metricStatuses.textContent =
     warning ||
     `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · exact usage available for ${metrics.usageJobs} completed job(s)`;
