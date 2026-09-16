@@ -79,6 +79,15 @@ after successful Playwright validation and blocks the PR stage until the user
 records a manual local-mode result. The resumed session then stops only its
 owned process and continues the normal PR approval flow.
 
+Repository profiles can enable first-class test synthesis. Before browser
+execution, the agent turns the reported behavior and expected result into the
+smallest focused Playwright scenario and measurable assertions. A
+`synthetic-intercepted` source fulfills business-data reads locally and an
+`intercepted` mutation mode captures request counts and payloads without
+changing external records. The agent emits structured `FIXLAB_TEST` evidence;
+the dashboard highlights the actual data source, mutation behavior, and
+scenario beside the job roadmap.
+
 The repository-onboarding panel detects Azure DevOps organization and project
 values from an Azure DevOps Git origin and can persist them to the
 repository-owned profile. This keeps numeric work-item intake functional after

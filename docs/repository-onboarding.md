@@ -48,10 +48,20 @@ Each journey should specify:
 The profile must also declare:
 
 - `browserAutomation.testCommand`, which runs the repository-owned Playwright suite.
+- `browserAutomation.testSynthesis`, which enables focused scenario generation,
+  declares the default test-data source and mutation mode, and requires
+  scenario evidence.
 - `browserAutomation.authentication.required`, explicitly stating whether login is needed.
 - An authentication command and status paths when authentication is required.
 - `browserAutomation.dataSafety.policy`, describing mock, read-only, or intercepted-mutation behavior.
 - `browserAutomation.dataSafety.productionAllowed: false`.
+
+Use `defaultDataSource: "synthetic-intercepted"` with
+`mutationMode: "intercepted"` when Playwright should fulfill reads locally and
+capture mutation intent without changing an external record. Repositories may
+instead declare `local-fixture`, `non-production-read-only`, or
+`non-production-approved`; any approved write still requires the normal human
+unsafe-data approval.
 
 Do not place real credentials, tokens, user identities, customer records, or
 internal service URLs in the profile.

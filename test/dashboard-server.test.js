@@ -141,6 +141,12 @@ function validProfile(overrides = {}) {
       package: "@playwright/test",
       browser: "chromium",
       testCommand: "npm run test:e2e",
+      testSynthesis: {
+        enabled: true,
+        defaultDataSource: "synthetic-intercepted",
+        mutationMode: "intercepted",
+        requireScenarioEvidence: true
+      },
       authentication: {
         required: false,
         command: "",
@@ -183,6 +189,32 @@ test("dashboard readiness blocks an incomplete live-test profile", () => {
     assert.equal(readiness.profileReady, false);
     assert.match(readiness.error, /live-test profile is incomplete/);
     assert.match(readiness.error, /browserAutomation\.testCommand/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard readiness validates configured test synthesis", () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+
+  try {
+    const profile = validProfile();
+    profile.browserAutomation.testSynthesis.mutationMode = "external-write";
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const readiness = inspectRepository(repository);
+
+    assert.equal(readiness.profileReady, false);
+    assert.match(
+      readiness.error,
+      /browserAutomation\.testSynthesis\.mutationMode/
+    );
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -564,6 +596,10 @@ test("dashboard parses complete stage markers and passes a job", async () => {
       "stdout",
       "FIXLAB_BUG|17032997|fixed|FMDM|Generation status displays the generated object type.\n"
     );
+    onOutput(
+      "stdout",
+      "FIXLAB_TEST|synthetic-intercepted|intercepted|Two rapid approvals produce one approval request and one submission.\n"
+    );
     for (const stage of FIXLAB_STAGES) {
       onOutput(
         "stdout",
@@ -591,6 +627,15 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.equal(result.body.job.status, "passed");
     assert.equal(result.body.job.error, null);
     assert.equal(result.body.job.requestType, "bug-fix");
+    assert.deepEqual(result.body.job.testEvidence, {
+      enabled: true,
+      source: "synthetic-intercepted",
+      mutationMode: "intercepted",
+      requireScenarioEvidence: true,
+      reported: true,
+      scenario:
+        "Two rapid approvals produce one approval request and one submission."
+    });
     assert.deepEqual(result.body.job.bugs, [
       {
         id: "17037209",
@@ -621,6 +666,13 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     );
     assert.match(receivedPrompt, /applications defined by the repository profile/i);
     assert.match(receivedPrompt, /repository-defined live test/i);
+    assert.match(receivedPrompt, /Test synthesis: enabled/);
+    assert.match(
+      receivedPrompt,
+      /Configured test data source: synthetic-intercepted/
+    );
+    assert.match(receivedPrompt, /FIXLAB_TEST\|source\|mutation-mode\|scenario/);
+    assert.match(receivedPrompt, /intercept every mutating request/);
     assert.match(
       receivedPrompt,
       /save at least one non-sensitive screenshot/i

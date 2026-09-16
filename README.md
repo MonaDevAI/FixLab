@@ -237,6 +237,13 @@ required to start the applications, verifies or requests browser
 authentication, executes the focused Playwright journey, and preserves exact
 screenshots, traces, failures, blockers, and skipped-stage evidence.
 
+FixLab can also synthesize that focused journey from the bug and expected
+behavior. Repository profiles declare the default test-data source and mutation
+mode. With `synthetic-intercepted`, Playwright fulfills business-data reads
+locally and intercepts mutations, allowing the UI payload and request count to
+be verified without changing a real record. The dashboard displays the
+reported scenario, data source, and mutation behavior as explicit evidence.
+
 The primary input is only the bug or required enhancement. FixLab obtains
 commands, applications, allowed systems and environments, and live-test
 journeys from the repository profile. The agent owns the complete lifecycle:

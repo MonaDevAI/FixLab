@@ -55,6 +55,12 @@
     "package": "@playwright/test",
     "browser": "chromium",
     "testCommand": "npm run test:e2e",
+    "testSynthesis": {
+      "enabled": true,
+      "defaultDataSource": "synthetic-intercepted",
+      "mutationMode": "intercepted",
+      "requireScenarioEvidence": true
+    },
     "authentication": {
       "required": false,
       "command": "",

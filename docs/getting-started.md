@@ -62,6 +62,12 @@ ready:
     "package": "@playwright/test",
     "browser": "chromium",
     "testCommand": "npm run test:e2e",
+    "testSynthesis": {
+      "enabled": true,
+      "defaultDataSource": "synthetic-intercepted",
+      "mutationMode": "intercepted",
+      "requireScenarioEvidence": true
+    },
     "authentication": {
       "required": true,
       "command": "npm run test:e2e:auth",
@@ -88,6 +94,14 @@ or returning its contents.
 The dashboard remains **Not ready** until the profile also includes a frontend
 startup command, loopback health URL, Playwright test command, explicit
 authentication requirement, and a production-excluding data-safety policy.
+
+With `testSynthesis` enabled, FixLab converts the reported behavior into the
+smallest focused Playwright scenario and measurable assertions before browser
+execution. `synthetic-intercepted` supplies business data through local
+fixtures or route fulfillment, while `intercepted` prevents mutating requests
+from reaching external systems. The dashboard highlights the configured data
+source and mutation mode, then replaces the pending description with the
+scenario reported by the agent.
 
 Start the local dashboard explicitly:
 

@@ -55,6 +55,12 @@ test("init creates a parseable repository profile", () => {
     assert.equal(profile.browserAutomation.package, "@playwright/test");
     assert.equal(profile.browserAutomation.browser, "chromium");
     assert.equal(profile.browserAutomation.testCommand, "npm run test:e2e");
+    assert.deepEqual(profile.browserAutomation.testSynthesis, {
+      enabled: true,
+      defaultDataSource: "synthetic-intercepted",
+      mutationMode: "intercepted",
+      requireScenarioEvidence: true
+    });
     assert.equal(profile.browserAutomation.authentication.required, false);
     assert.equal(profile.browserAutomation.dataSafety.productionAllowed, false);
     assert.equal(profile.pullRequests.branchNaming.userId, "your-user-id");

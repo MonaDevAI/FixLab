@@ -32,6 +32,10 @@ function executor({ onOutput }) {
       }
       onOutput(
         "stdout",
+        "FIXLAB_TEST|synthetic-intercepted|intercepted|Validate the pasted screenshot with local synthetic API data.\n"
+      );
+      onOutput(
+        "stdout",
         "Tokens ↑ 2.4m (1.9m cached, 367.4k written) • ↓ 14.8k\n"
       );
       resolve({ code: 0 });
@@ -86,6 +90,12 @@ test.beforeAll(async () => {
         package: "@playwright/test",
         browser: "chromium",
         testCommand: "npm run test:e2e",
+        testSynthesis: {
+          enabled: true,
+          defaultDataSource: "synthetic-intercepted",
+          mutationMode: "intercepted",
+          requireScenarioEvidence: true
+        },
         authentication: {
           required: false,
           command: "",
@@ -242,6 +252,16 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
   await expect(page.locator(".stage.inferred")).toContainText("active now");
   await expect(page.locator("#job-status")).toContainText(
     "passed · bug-fix"
+  );
+  await expect(page.locator("#test-evidence")).toHaveClass(/reported/);
+  await expect(page.locator("#test-evidence-scenario")).toContainText(
+    "Validate the pasted screenshot"
+  );
+  await expect(page.locator("#test-data-source")).toHaveText(
+    "Data: Synthetic Intercepted"
+  );
+  await expect(page.locator("#test-mutation-mode")).toHaveText(
+    "Mutations: Intercepted"
   );
 
   const jobResponse = await request.get(`${baseUrl}/api/job`);

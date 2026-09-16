@@ -222,6 +222,37 @@ button.secondary {
   border-top: 1px solid #2a3855;
 }
 
+.test-evidence {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+  padding: .9rem 1rem;
+  border: 1px solid rgba(67, 217, 230, .55);
+  border-left: 4px solid #43d9e6;
+  border-radius: 8px;
+  background: rgba(67, 217, 230, .08);
+}
+
+.test-evidence.reported {
+  border-color: rgba(55, 201, 120, .7);
+  border-left-color: #37c978;
+  background: rgba(55, 201, 120, .08);
+}
+
+.test-evidence strong {
+  display: block;
+  margin-top: .25rem;
+}
+
+.test-evidence-facts {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: .5rem;
+}
+
 .playwright-evidence h3 {
   margin: 0;
 }

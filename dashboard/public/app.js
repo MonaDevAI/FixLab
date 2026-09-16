@@ -15,6 +15,12 @@ const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
+const testEvidenceElement = document.querySelector("#test-evidence");
+const testEvidenceScenario = document.querySelector(
+  "#test-evidence-scenario"
+);
+const testDataSource = document.querySelector("#test-data-source");
+const testMutationMode = document.querySelector("#test-mutation-mode");
 const queuePanel = document.querySelector("#queue-panel");
 const queueCount = document.querySelector("#queue-count");
 const queueList = document.querySelector("#queue-list");
@@ -148,6 +154,13 @@ function renderReadiness(readiness) {
   startButton.disabled = !ready;
 }
 
+function labelTestEvidence(value) {
+  return String(value ?? "profile-defined")
+    .split("-")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 async function refreshOnboarding() {
   try {
     const body = await fetchJson("/api/onboarding");
@@ -202,6 +215,19 @@ function renderJob(job, currentActiveJob = job) {
     ? `${job.status} · ${job.requestType} · ${formatDuration(job.durationMs)}`
     : "Not started";
   jobStatusElement.className = `badge ${job?.status ?? ""}`;
+  const testEvidence = job?.testEvidence;
+  testEvidenceElement.hidden = !job;
+  testEvidenceElement.classList.toggle(
+    "reported",
+    Boolean(testEvidence?.reported)
+  );
+  testEvidenceScenario.textContent =
+    testEvidence?.scenario ||
+    "FixLab will synthesize the smallest focused Playwright scenario from the expected behavior.";
+  testDataSource.textContent =
+    `Data: ${labelTestEvidence(testEvidence?.source)}`;
+  testMutationMode.textContent =
+    `Mutations: ${labelTestEvidence(testEvidence?.mutationMode)}`;
   const bugIdentity =
     job?.bugs?.length === 1
       ? `Bug #${job.bugs[0].id}`

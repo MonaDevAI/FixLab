@@ -65,6 +65,19 @@ const bugOutcomeStatuses = new Set([
   "blocked",
   "failed"
 ]);
+const testDataSources = new Set([
+  "synthetic-intercepted",
+  "local-fixture",
+  "non-production-read-only",
+  "non-production-approved",
+  "profile-defined"
+]);
+const mutationModes = new Set([
+  "intercepted",
+  "none",
+  "approved-write",
+  "profile-defined"
+]);
 const profileRelativePath = join(
   ".github",
   "fixlab",
@@ -100,6 +113,7 @@ export function validateLiveTestProfile(profile, repository) {
   const browserAutomation = profile?.browserAutomation;
   const authentication = browserAutomation?.authentication;
   const dataSafety = browserAutomation?.dataSafety;
+  const testSynthesis = browserAutomation?.testSynthesis;
   const requiredString = (value) =>
     typeof value === "string" && Boolean(value.trim());
 
@@ -179,6 +193,24 @@ export function validateLiveTestProfile(profile, repository) {
     if (dataSafety?.productionAllowed !== false) {
       missing.push("browserAutomation.dataSafety.productionAllowed=false");
     }
+    if (testSynthesis !== undefined) {
+      if (testSynthesis?.enabled !== true) {
+        missing.push("browserAutomation.testSynthesis.enabled=true");
+      }
+      if (!testDataSources.has(testSynthesis?.defaultDataSource)) {
+        missing.push(
+          "browserAutomation.testSynthesis.defaultDataSource"
+        );
+      }
+      if (!mutationModes.has(testSynthesis?.mutationMode)) {
+        missing.push("browserAutomation.testSynthesis.mutationMode");
+      }
+      if (testSynthesis?.requireScenarioEvidence !== true) {
+        missing.push(
+          "browserAutomation.testSynthesis.requireScenarioEvidence=true"
+        );
+      }
+    }
   }
 
   return {
@@ -187,6 +219,23 @@ export function validateLiveTestProfile(profile, repository) {
       missing.length === 0
         ? "startup, health, Playwright, authentication, and data-safety settings configured"
         : `missing or invalid: ${missing.join(", ")}`
+  };
+}
+
+function configuredTestSynthesis(profile) {
+  const configuration = profile?.browserAutomation?.testSynthesis;
+  return {
+    enabled: configuration?.enabled !== false,
+    source: testDataSources.has(configuration?.defaultDataSource)
+      ? configuration.defaultDataSource
+      : "profile-defined",
+    mutationMode: mutationModes.has(configuration?.mutationMode)
+      ? configuration.mutationMode
+      : "profile-defined",
+    requireScenarioEvidence:
+      configuration?.requireScenarioEvidence !== false,
+    reported: false,
+    scenario: ""
   };
 }
 
@@ -200,6 +249,7 @@ function publicQueue(jobs) {
     runAllUiScenarios: job.runAllUiScenarios,
     holdForManualLiveTest: job.holdForManualLiveTest,
     manualLiveTestUrl: job.manualLiveTestUrl,
+    testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     mode: job.mode,
     status: job.status,
@@ -384,6 +434,12 @@ export function buildJobPrompt({
   runAllUiScenarios = false,
   holdForManualLiveTest = false,
   manualLiveTestUrl = "",
+  testEvidence = {
+    enabled: true,
+    source: "profile-defined",
+    mutationMode: "profile-defined",
+    requireScenarioEvidence: true
+  },
   branchNaming = null,
   cacheSummary = null,
   intakeSource = "manual",
@@ -456,6 +512,9 @@ Request type: ${requestType}
 Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
 Hold for manual local testing after Playwright: ${holdForManualLiveTest ? "yes" : "no"}
+Test synthesis: ${testEvidence.enabled ? "enabled" : "disabled"}
+Configured test data source: ${testEvidence.source}
+Configured mutation mode: ${testEvidence.mutationMode}
 Intake source: ${intakeSource}
 ${intakeSummary.length > 0 ? `Loaded Azure DevOps selection:
 ${JSON.stringify(intakeSummary, null, 2)}
@@ -487,6 +546,12 @@ ${branchNamingGuidance}
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
 - ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
 - Do not skip Playwright merely because an unrelated non-browser test, build, or backend startup is failed or blocked. If frontend startup, authentication, safe data, and the selected browser journey are independently ready, run the live-test gate and preserve the other blocker separately.
+- Before browser execution, synthesize the smallest focused Playwright scenario and measurable assertions from the reported behavior and expected outcome when an equivalent repository-owned scenario does not already exist.
+- Use the configured test data source and mutation mode. For synthetic-intercepted tests, fulfill business-data reads locally, intercept every mutating request, and assert the intended request count and payload without changing an external record.
+- Emit one browser evidence line after the scenario is selected and again if the actual source or mutation behavior changes:
+  FIXLAB_TEST|source|mutation-mode|scenario
+- source must be one of: ${[...testDataSources].join(", ")}.
+- mutation-mode must be one of: ${[...mutationModes].join(", ")}.
 - Start only the applications defined by the repository profile, then execute the repository-defined live test against the allowed required system or environment from that profile. Do not invent or hardcode environment choices.
 - For every Playwright live test, save at least one non-sensitive screenshot under the test's repository-owned test-results directory so the dashboard can display the browser evidence.
 - ${playwrightOnly ? "Collect evidence for required setup, authentication readiness, application startup, the focused Playwright result, skipped gates, blockers, and remaining risks." : "Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks."}
@@ -505,7 +570,7 @@ ${branchNamingGuidance}
 - The expected bug IDs for this request are: ${bugResults.length > 0 ? bugResults.map((bug) => bug.id).join(", ") : "none detected; no FIXLAB_BUG marker is required"}.
 - Emit exactly one or more progress lines in this format:
   FIXLAB_STAGE|stage|status|message
-- Write every FIXLAB_STAGE and FIXLAB_BUG marker as a literal plain-text assistant response line. Never generate markers through shell, Write-Output, echo, files, tools, code blocks, or tables because runtime rendering may hide them from the dashboard.
+- Write every FIXLAB_STAGE, FIXLAB_BUG, and FIXLAB_TEST marker as a literal plain-text assistant response line. Never generate markers through shell, Write-Output, echo, files, tools, code blocks, or tables because runtime rendering may hide them from the dashboard.
 - stage must be one of: ${FIXLAB_STAGES.join(", ")}.
 - status must be pending, running, passed, skipped, blocked, or failed.
 - Before finishing, emit a terminal passed, skipped, blocked, or failed marker for every stage. Never imply an unmarked stage passed.
@@ -1113,6 +1178,7 @@ function publicJob(job) {
     runAllUiScenarios: job.runAllUiScenarios,
     holdForManualLiveTest: job.holdForManualLiveTest,
     manualLiveTestUrl: job.manualLiveTestUrl,
+    testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
     workItems: job.workItems.map(publicWorkItem),
@@ -1348,9 +1414,34 @@ function appendLine(job, stream, line) {
       });
       return;
     }
+
     bug.outcome = outcome;
     bug.owner = safeSummary(owner);
     bug.summary = safeSummary(summary);
+    return;
+  }
+
+  const testMarker = line.match(
+    /^FIXLAB_TEST\|([^|]+)\|([^|]+)\|(.*)$/
+  );
+  if (testMarker) {
+    const [, source, mutationMode, scenario] = testMarker;
+    if (!testDataSources.has(source) || !mutationModes.has(mutationMode)) {
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: `Ignored invalid test evidence marker: ${line}`
+      });
+      return;
+    }
+    job.testEvidence = {
+      ...job.testEvidence,
+      source,
+      mutationMode,
+      reported: true,
+      scenario: safeSummary(scenario)
+    };
     return;
   }
 
@@ -2207,6 +2298,7 @@ export function createDashboardServer({
       const repositoryProfile = loadRepositoryProfile(resolvedRepository);
       const manualLiveTestUrl =
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
+      const testEvidence = configuredTestSynthesis(repositoryProfile);
       const configuredBranchNaming =
         repositoryProfile.pullRequests?.branchNaming ??
         repositoryProfile.pullRequest?.branchNaming;
@@ -2330,6 +2422,7 @@ export function createDashboardServer({
         runAllUiScenarios,
         holdForManualLiveTest,
         manualLiveTestUrl,
+        testEvidence,
         branchNaming,
         intakeSource,
         workItem,
@@ -2371,6 +2464,7 @@ export function createDashboardServer({
         runAllUiScenarios,
         holdForManualLiveTest,
         manualLiveTestUrl,
+        testEvidence,
         branchNaming,
         intakeSource,
         workItem,
