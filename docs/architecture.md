@@ -74,6 +74,10 @@ implementation, effective-diff self-review, focused local validation,
 profile-defined startup and live testing, evidence collection, and the gated
 pull-request outcome. It asks for human interaction only for authentication,
 unsafe-data approval, deployment or pull-request approval, or genuine blockers.
+An optional manual-live-test hold keeps the FixLab-owned frontend available
+after successful Playwright validation and blocks the PR stage until the user
+records a manual local-mode result. The resumed session then stops only its
+owned process and continues the normal PR approval flow.
 
 The repository-onboarding panel detects Azure DevOps organization and project
 values from an Azure DevOps Git origin and can persist them to the

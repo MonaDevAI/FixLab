@@ -116,6 +116,10 @@ Select **Create a separate PR per bug** to isolate each bug's changes,
 validation evidence, and PR. Select **Run UI tests for all scenarios at the
 end** when the final gate must execute the repository's complete Playwright
 scenario set instead of only focused journeys.
+Select **Hold after Playwright for manual local testing** when the automated
+journey should leave the FixLab-owned local frontend running and pause before
+PR creation. Provide the manual result through the same dashboard job to stop
+the owned process and continue.
 
 Set `pullRequests.branchNaming.userId` during onboarding. With
 `"prefixTemplate": "users/{userId}"`, a configured user ID of `mobiswal`

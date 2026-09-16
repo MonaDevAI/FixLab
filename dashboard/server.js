@@ -198,6 +198,8 @@ function publicQueue(jobs) {
     requestType: job.requestType,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
+    holdForManualLiveTest: job.holdForManualLiveTest,
+    manualLiveTestUrl: job.manualLiveTestUrl,
     intakeSource: job.intakeSource,
     mode: job.mode,
     status: job.status,
@@ -380,6 +382,8 @@ export function buildJobPrompt({
   requestType = "bug-fix",
   pullRequestStrategy = "common",
   runAllUiScenarios = false,
+  holdForManualLiveTest = false,
+  manualLiveTestUrl = "",
   branchNaming = null,
   cacheSummary = null,
   intakeSource = "manual",
@@ -424,6 +428,12 @@ export function buildJobPrompt({
     ? `- After implementation and non-browser validation are complete, run every repository-defined Playwright/UI scenario at the end, not only the focused defect journey.
 - Start the required applications once when safe, preserve each scenario result, and attach non-sensitive screenshot evidence for the complete UI run.`
     : "- Run the smallest repository-defined Playwright journey that proves the selected behavior.";
+  const manualLiveTestGuidance = holdForManualLiveTest
+    ? `- After automated Playwright finishes successfully, keep the FixLab-owned frontend running at ${manualLiveTestUrl || "the profile-defined local health URL"} for manual local-mode testing.
+- The user explicitly requested this hold, so the owned frontend process may remain running after the agent turn. Record its process identity and never stop an unrelated process.
+- Emit live-test blocked with the successful Playwright result and local URL, emit pr skipped because manual confirmation is pending, then exit without creating or updating a PR.
+- When the dashboard resumes this session with the user's manual result, mark live-test passed or failed accordingly, stop only the retained FixLab-owned frontend process, and continue to the gated PR outcome.`
+    : "- Stop FixLab-owned applications after automated browser validation unless another explicit workflow requirement needs them.";
   const branchNamingGuidance = branchNaming
     ? `- Repository branch naming is configured as ${branchNaming.prefix}. Create or reuse only branches beneath this prefix. Do not substitute a runtime, bot, or agent name for the configured user ID.`
     : "- Follow the repository's existing branch naming policy; do not invent a bot-specific prefix.";
@@ -445,6 +455,7 @@ export function buildJobPrompt({
 Request type: ${requestType}
 Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
+Hold for manual local testing after Playwright: ${holdForManualLiveTest ? "yes" : "no"}
 Intake source: ${intakeSource}
 ${intakeSummary.length > 0 ? `Loaded Azure DevOps selection:
 ${JSON.stringify(intakeSummary, null, 2)}
@@ -469,6 +480,7 @@ Repository requirements:
 ${requestGuidance}
 ${pullRequestGuidance}
 ${uiScenarioGuidance}
+${manualLiveTestGuidance}
 ${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
@@ -1099,6 +1111,8 @@ function publicJob(job) {
     requestType: job.requestType,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
+    holdForManualLiveTest: job.holdForManualLiveTest,
+    manualLiveTestUrl: job.manualLiveTestUrl,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
     workItems: job.workItems.map(publicWorkItem),
@@ -2182,7 +2196,17 @@ export function createDashboardServer({
         });
         return;
       }
+      const holdForManualLiveTest =
+        body.holdForManualLiveTest ?? false;
+      if (typeof holdForManualLiveTest !== "boolean") {
+        sendJson(response, 400, {
+          error: "holdForManualLiveTest must be a boolean"
+        });
+        return;
+      }
       const repositoryProfile = loadRepositoryProfile(resolvedRepository);
+      const manualLiveTestUrl =
+        repositoryProfile.applications?.frontend?.healthUrl ?? "";
       const configuredBranchNaming =
         repositoryProfile.pullRequests?.branchNaming ??
         repositoryProfile.pullRequest?.branchNaming;
@@ -2304,6 +2328,8 @@ export function createDashboardServer({
         requestType,
         pullRequestStrategy,
         runAllUiScenarios,
+        holdForManualLiveTest,
+        manualLiveTestUrl,
         branchNaming,
         intakeSource,
         workItem,
@@ -2343,6 +2369,8 @@ export function createDashboardServer({
         requestType,
         pullRequestStrategy,
         runAllUiScenarios,
+        holdForManualLiveTest,
+        manualLiveTestUrl,
         branchNaming,
         intakeSource,
         workItem,

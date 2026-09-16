@@ -172,6 +172,9 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
   await expect(
     page.getByLabel("Run UI tests for all scenarios at the end")
   ).not.toBeChecked();
+  await expect(
+    page.getByLabel("Hold after Playwright for manual local testing")
+  ).not.toBeChecked();
   await page.getByLabel("Load from Azure DevOps").check();
   await expect(page.getByText("Load bugs")).toBeVisible();
   await expect(

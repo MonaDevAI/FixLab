@@ -95,8 +95,10 @@
             <legend>Batch completion</legend>
             <label><input type="checkbox" name="separatePullRequests"> Create a separate PR per bug</label>
             <label><input type="checkbox" name="runAllUiScenarios"> Run UI tests for all scenarios at the end</label>
+            <label><input type="checkbox" name="holdForManualLiveTest"> Hold after Playwright for manual local testing</label>
           </fieldset>
           <p class="guidance">By default, FixLab implements all selected bug fixes first, runs shared validation once, and prepares one common PR. Select separate PRs to isolate each bug's fix and evidence.</p>
+          <p class="guidance">When manual local testing is selected, FixLab keeps its local frontend running after Playwright and pauses before PR creation until you provide the manual result.</p>
           <p class="guidance">Playwright validation only skips source diagnosis, implementation, review, and pull-request work. It performs required profile setup, reuses browser authentication, starts required applications, and runs the focused browser journey.</p>
           <button id="start-button" type="submit">Start job</button>
           <p class="guidance">FixLab proceeds autonomously. It asks for human input only for authentication, unsafe-data approval, deployment or PR approval, or a genuine blocker.</p>

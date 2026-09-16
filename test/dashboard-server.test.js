@@ -505,6 +505,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
         mode: "fix-and-validate",
         pullRequestStrategy: "per-bug",
         runAllUiScenarios: true,
+        holdForManualLiveTest: true,
         intakeSource: "azure-devops",
         workItems: loaded.body.workItems
       })
@@ -513,10 +514,24 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     assert.equal(started.body.job.workItems.length, 2);
     assert.equal(started.body.job.pullRequestStrategy, "per-bug");
     assert.equal(started.body.job.runAllUiScenarios, true);
+    assert.equal(started.body.job.holdForManualLiveTest, true);
+    assert.equal(
+      started.body.job.manualLiveTestUrl,
+      "http://127.0.0.1:3000"
+    );
     assert.equal("description" in started.body.job.workItems[0], false);
     assert.match(receivedPrompt, /Pull request strategy: per-bug/);
     assert.match(receivedPrompt, /isolated delivery unit/);
     assert.match(receivedPrompt, /every repository-defined Playwright\/UI scenario/);
+    assert.match(
+      receivedPrompt,
+      /Hold for manual local testing after Playwright: yes/
+    );
+    assert.match(
+      receivedPrompt,
+      /keep the FixLab-owned frontend running/
+    );
+    assert.match(receivedPrompt, /manual confirmation is pending/);
     assert.match(receivedPrompt, /users\/fixlab-test/);
 
     await new Promise((resolve) => setTimeout(resolve, 0));

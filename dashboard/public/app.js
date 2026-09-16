@@ -316,7 +316,8 @@ function renderJob(job, currentActiveJob = job) {
   const canRetryLiveTest =
     canResume &&
     job?.status === "blocked" &&
-    job?.stages?.["live-test"]?.status === "blocked";
+    job?.stages?.["live-test"]?.status === "blocked" &&
+    !job?.holdForManualLiveTest;
   const canApprovePullRequest =
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
@@ -349,6 +350,9 @@ function renderJob(job, currentActiveJob = job) {
       jobInputGuidance.textContent =
         canApprovePullRequest
           ? "All required validation gates passed. Explicit approval is required before FixLab creates or updates the pull request."
+          : job?.holdForManualLiveTest &&
+              job?.stages?.["live-test"]?.status === "blocked"
+            ? `Automated Playwright is complete. Test the local application at ${job.manualLiveTestUrl || "the profile-defined URL"}, then select Continue and provide the manual result.`
           : job?.stages?.["live-test"]?.status === "blocked"
           ? "The browser gate could not finish. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
           : "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
@@ -950,6 +954,8 @@ form.addEventListener("submit", async (event) => {
           ? "per-bug"
           : "common",
         runAllUiScenarios: data.get("runAllUiScenarios") === "on",
+        holdForManualLiveTest:
+          data.get("holdForManualLiveTest") === "on",
         intakeSource,
         workItems: intakeSource === "azure-devops" ? loadedWorkItems : [],
         screenshots
