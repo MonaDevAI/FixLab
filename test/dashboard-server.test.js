@@ -550,6 +550,10 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.match(receivedPrompt, /Make no code change/i);
     assert.match(receivedPrompt, /self-review the effective diff/i);
     assert.match(receivedPrompt, /tests, type-checks, and builds/i);
+    assert.match(
+      receivedPrompt,
+      /Do not skip Playwright merely because an unrelated non-browser/
+    );
     assert.match(receivedPrompt, /applications defined by the repository profile/i);
     assert.match(receivedPrompt, /repository-defined live test/i);
     assert.match(

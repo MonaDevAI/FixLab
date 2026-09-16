@@ -70,6 +70,13 @@ allows it. Record the check as skipped or unverified and preserve the resulting
 risk. Authentication, authorization, unsafe data, and process-ownership
 conflicts always remain blockers.
 
+Do not skip browser validation merely because an unrelated non-browser test,
+build, or backend startup is failed or blocked. When the profile-defined
+frontend, authentication, test data, and Playwright journey are independently
+ready and safe, run the browser gate and report its result separately while
+preserving the other blocker. Skip Playwright only when its own prerequisite is
+unavailable or the browser result would be invalid.
+
 ## Completion standard
 
 A task is complete only when the requested behavior is verified by direct
