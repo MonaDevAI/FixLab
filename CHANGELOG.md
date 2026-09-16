@@ -7,8 +7,6 @@ All notable changes to FixLab are documented in this file.
 - Add first-class Playwright test synthesis with repository-configured
   synthetic/intercepted data, structured scenario evidence, and a highlighted
   dashboard summary of data source and mutation behavior.
-- Show the exact cached input-token count beside the dashboard cache-reuse
-  percentage.
 - Add an optional direct GitHub Copilot CLI runtime for the CLI and dashboard
   while retaining Agency as the default compatibility runtime.
 - Add repository-configured Playwright authentication status/connect controls

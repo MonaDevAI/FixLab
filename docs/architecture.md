@@ -203,9 +203,8 @@ execution and queue-wait durations, and parsed Copilot token totals. They never
 contain request text, comments, screenshots, credentials, raw logs, or source
 content. The local API aggregates 24-hour, 7-day, 30-day, or all-retained
 periods. Cache reuse is `cached input / total input`; without a defined
-comparable billing baseline it is not represented as cost savings. The
-dashboard displays the exact cached-input count beside the reuse percentage so
-users can see how many input tokens were reused.
+comparable baseline it is not represented as exact token reduction or cost
+savings.
 
 Changing `HEAD` or profile content causes an automatic cache miss. Instruction
 changes remain an explicit prompt-level invalidation boundary and are reread.
