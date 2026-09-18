@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
 import {
   existsSync,
@@ -18,8 +19,10 @@ import {
   buildJobPrompt,
   createCacheContext,
   createDashboardServer,
+  createProcessCompletion,
   FIXLAB_STAGES,
   inspectRepository,
+  MAX_JOB_ACTIVITY_ENTRIES,
   MAX_CACHE_BYTES,
   MAX_CACHE_ENTRIES,
   MAX_JOB_LOG_ENTRIES
@@ -36,6 +39,21 @@ test("Agency executor keeps long prompts out of process arguments", () => {
     packageRoot: "C:\\FixLab",
     prompt,
     sessionId: "11111111-1111-4111-8111-111111111111"
+  });
+
+  test("executor completion settles after process exit when inherited pipes remain open", async () => {
+    const child = new EventEmitter();
+    const output = [];
+    const completion = createProcessCompletion(
+      child,
+      (stream, text) => output.push({ stream, text }),
+      5
+    );
+
+    child.emit("exit", 0, null);
+
+    assert.deepEqual(await completion, { code: 0, signal: null });
+    assert.deepEqual(output, []);
   });
 
   test("direct Copilot executor preserves stdin sessions and resume", () => {
@@ -157,6 +175,7 @@ function validProfile(overrides = {}) {
         productionAllowed: false
       }
     },
+    environments: ["local", "dev", "sit"],
     pullRequests: {
       defaultTargetBranch: "develop",
       requireConfirmation: true,
@@ -300,6 +319,11 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.equal(status.response.status, 200);
     assert.equal(status.body.readiness.repositoryReady, true);
     assert.equal(status.body.readiness.profileReady, true);
+    assert.deepEqual(status.body.readiness.environments, [
+      "local",
+      "dev",
+      "sit"
+    ]);
     assert.equal(
       status.body.readiness.profileName,
       "Dashboard test repository"
@@ -650,7 +674,8 @@ test("dashboard parses complete stage markers and passes a job", async () => {
       body: JSON.stringify({
         request:
           "Azure DevOps Bug 17037209: Remap failed\nURL: https://dev.azure.com/example/project/_workitems/edit/17037209\n\nAzure DevOps Bug 17032997: Generic generation status",
-        mode: "fix-and-validate"
+        mode: "fix-and-validate",
+        targetEnvironment: "sit"
       })
     });
     assert.equal(started.response.status, 202);
@@ -660,6 +685,7 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.equal(result.body.job.status, "passed");
     assert.equal(result.body.job.error, null);
     assert.equal(result.body.job.requestType, "bug-fix");
+    assert.equal(result.body.job.targetEnvironment, "sit");
     assert.deepEqual(result.body.job.testEvidence, {
       enabled: true,
       source: "synthetic-intercepted",
@@ -708,6 +734,9 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.match(receivedPrompt, /applications defined by the repository profile/i);
     assert.match(receivedPrompt, /repository-defined live test/i);
     assert.match(receivedPrompt, /Test synthesis: enabled/);
+    assert.match(receivedPrompt, /Selected validation environment: sit/);
+    assert.match(receivedPrompt, /Use exactly that repository-approved environment/);
+    assert.match(receivedPrompt, /Do not silently fall back to local/);
     assert.match(
       receivedPrompt,
       /Configured test data source: synthetic-intercepted/
@@ -992,6 +1021,7 @@ test("running job queues a comment and resumes the same session", async () => {
 
 test("dashboard checks and starts repository-owned Playwright authentication", async () => {
   const repository = createRepository();
+  let receivedPrompt = "";
   const profilePath = join(
     repository,
     ".github",
@@ -1030,9 +1060,13 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
   const screenshot = Buffer.from([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
   ]);
+  const video = Buffer.from("webm-video-evidence");
   const { dashboard, url } = await startDashboard(
     repository,
-    () => ({ completion: new Promise(() => {}), terminate() {} })
+    ({ prompt }) => {
+      receivedPrompt = prompt;
+      return { completion: new Promise(() => {}), terminate() {} };
+    }
   );
 
   try {
@@ -1065,32 +1099,64 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
       body: JSON.stringify({
         request: "Capture browser evidence.",
         requestType: "bug-fix",
-        mode: "playwright-only"
+        mode: "playwright-only",
+        recordPlaywrightVideo: true
       })
     });
     assert.equal(job.response.status, 202);
+    assert.equal(job.body.job.recordPlaywrightVideo, true);
     mkdirSync(screenshotDirectory, { recursive: true });
     writeFileSync(
       join(screenshotDirectory, "hold-option.png"),
       screenshot
+    );
+    writeFileSync(
+      join(screenshotDirectory, "hold-option.webm"),
+      video
     );
     const artifacts = await jsonRequest(
       url,
       `/api/playwright/artifacts?jobId=${job.body.job.id}`
     );
     assert.equal(artifacts.response.status, 200);
-    assert.equal(artifacts.body.artifacts.length, 1);
-    assert.equal(artifacts.body.artifacts[0].name, "hold-option.png");
+    assert.equal(artifacts.body.artifacts.length, 2);
+    const imageArtifact = artifacts.body.artifacts.find(
+      (artifact) => artifact.name === "hold-option.png"
+    );
+    const videoArtifact = artifacts.body.artifacts.find(
+      (artifact) => artifact.name === "hold-option.webm"
+    );
+    assert.equal(imageArtifact.kind, "image");
+    assert.equal(videoArtifact.kind, "video");
+    assert.equal(videoArtifact.mimeType, "video/webm");
     assert.match(
-      artifacts.body.artifacts[0].relativePath,
+      imageArtifact.relativePath,
       /test-results[\\/]hold-option\.png/
     );
     const image = await fetch(
-      `${url}${artifacts.body.artifacts[0].url}`
+      `${url}${imageArtifact.url}`
     );
     assert.equal(image.status, 200);
     assert.equal(image.headers.get("content-type"), "image/png");
     assert.deepEqual(Buffer.from(await image.arrayBuffer()), screenshot);
+    const recording = await fetch(`${url}${videoArtifact.url}`);
+    assert.equal(recording.status, 200);
+    assert.equal(recording.headers.get("content-type"), "video/webm");
+    assert.deepEqual(Buffer.from(await recording.arrayBuffer()), video);
+    const partialRecording = await fetch(`${url}${videoArtifact.url}`, {
+      headers: { Range: "bytes=0-3" }
+    });
+    assert.equal(partialRecording.status, 206);
+    assert.equal(
+      partialRecording.headers.get("content-range"),
+      `bytes 0-3/${video.length}`
+    );
+    assert.deepEqual(
+      Buffer.from(await partialRecording.arrayBuffer()),
+      video.subarray(0, 4)
+    );
+    assert.match(receivedPrompt, /Record Playwright video evidence: yes/);
+    assert.match(receivedPrompt, /Save the recording as WebM or MP4/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -1421,6 +1487,58 @@ test("dashboard recovers an orphaned running job as failed and resumable", async
   }
 });
 
+test("dashboard recovery preserves a completed manual live-test hold", async () => {
+  const repository = createGitRepository();
+  const executor = ({ onOutput }) => {
+    for (const stage of FIXLAB_STAGES) {
+      const status =
+        stage === "live-test"
+          ? "blocked"
+          : stage === "fix" || stage === "pr"
+            ? "skipped"
+            : "passed";
+      onOutput(
+        "stdout",
+        `FIXLAB_STAGE|${stage}|${status}|${stage} completed\n`
+      );
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const first = await startDashboard(repository, executor);
+  let jobId;
+
+  try {
+    const started = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Retain this manual live-test hold after restart.",
+        requestType: "bug-fix",
+        mode: "validate-only",
+        holdForManualLiveTest: true
+      })
+    });
+    jobId = started.body.job.id;
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("executor should not run while recovering a job");
+  });
+  try {
+    const status = await jsonRequest(second.url, "/api/status");
+    assert.equal(status.body.job.id, jobId);
+    assert.equal(status.body.job.status, "blocked");
+    assert.equal(status.body.job.canResume, true);
+    assert.equal(status.body.job.stages["live-test"].status, "blocked");
+    assert.equal(status.body.job.error, null);
+  } finally {
+    await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard stops an executor that exceeds the output idle timeout", async () => {
   const repository = createRepository();
   let resolveCompletion;
@@ -1535,6 +1653,58 @@ test("dashboard bounds retained raw logs while preserving stage summaries", asyn
   }
 });
 
+test("dashboard exposes bounded safe agent activity separately from raw logs", async () => {
+  const repository = createRepository();
+  const executor = ({ onOutput }) => {
+    for (let index = 0; index < MAX_JOB_ACTIVITY_ENTRIES + 5; index += 1) {
+      onOutput(
+        "stdout",
+        `FIXLAB_ACTIVITY|diagnosis|Evidence update ${index}\n`
+      );
+    }
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} summary\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Show structured agent analysis.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const result = await jsonRequest(url, "/api/job");
+
+    assert.equal(
+      result.body.job.status,
+      "passed",
+      JSON.stringify(result.body.job)
+    );
+    assert.equal(result.body.job.activity.length, MAX_JOB_ACTIVITY_ENTRIES);
+    assert.deepEqual(result.body.job.activity[0], {
+      timestamp: result.body.job.activity[0].timestamp,
+      stage: "diagnosis",
+      message: "Evidence update 5"
+    });
+    assert.equal(
+      result.body.job.logs.some((entry) =>
+        entry.message.startsWith("FIXLAB_ACTIVITY|")
+      ),
+      true
+    );
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard cache hits and invalidates on profile or HEAD changes", async () => {
   const repository = createGitRepository();
   const prompts = [];
@@ -1621,6 +1791,34 @@ test("validate-only prompt prohibits repository changes", () => {
   assert.match(prompt, /create pull requests/);
   assert.match(prompt, /without creating or updating a pull request/);
   assert.match(prompt, /fix and pr stages must be explicitly skipped/);
+  assert.match(prompt, /FIXLAB_ACTIVITY\|stage\|summary/);
+  assert.match(prompt, /not hidden chain-of-thought/);
+});
+
+test("dashboard rejects validation environments outside the profile allowlist", async () => {
+  const repository = createRepository();
+  const { dashboard, url } = await startDashboard(repository, () => {
+    throw new Error("executor should not run");
+  });
+
+  try {
+    for (const targetEnvironment of ["uat", "production"]) {
+      const result = await jsonRequest(url, "/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request: "Validate the selected environment.",
+          mode: "playwright-only",
+          targetEnvironment
+        })
+      });
+      assert.equal(result.response.status, 400);
+      assert.match(result.body.error, /targetEnvironment/);
+    }
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 test("playwright-only prompt skips review and runs only required browser steps", () => {

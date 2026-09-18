@@ -35,12 +35,14 @@ import {
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
 export const MAX_JOB_LOG_ENTRIES = 1000;
+export const MAX_JOB_ACTIVITY_ENTRIES = 40;
 export const MAX_CACHE_ENTRIES = 20;
 export const MAX_CACHE_BYTES = 64 * 1024;
 export const MAX_METRICS_ENTRIES = 500;
 export const MAX_DASHBOARD_HISTORY_ENTRIES = 20;
 export const MAX_QUEUED_JOBS = 20;
 export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
+export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
 export const FIXLAB_STAGES = [
@@ -253,6 +255,55 @@ function configuredTestSynthesis(profile) {
   };
 }
 
+export function configuredValidationEnvironments(profile) {
+  const configured = Array.isArray(profile?.environments)
+    ? profile.environments
+    : Object.keys(profile?.environments ?? {});
+  const environments = [];
+  const seen = new Set();
+  for (const value of configured) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const environment = value.trim();
+    const normalized = environment.toLowerCase();
+    if (
+      !environment ||
+      environment.length > 64 ||
+      ["prod", "prd", "production"].includes(normalized) ||
+      seen.has(normalized)
+    ) {
+      continue;
+    }
+    seen.add(normalized);
+    environments.push(environment);
+  }
+  return environments;
+}
+
+export function validateTargetEnvironment(value, environments) {
+  if (value === undefined || value === null || value === "") {
+    return "";
+  }
+  if (typeof value !== "string") {
+    throw new Error("targetEnvironment must be a string");
+  }
+  const requested = value.trim();
+  if (["prod", "prd", "production"].includes(requested.toLowerCase())) {
+    throw new Error("targetEnvironment must be a non-production environment");
+  }
+  const selected = environments.find(
+    (environment) =>
+      environment.toLowerCase() === requested.toLowerCase()
+  );
+  if (!selected) {
+    throw new Error(
+      "targetEnvironment must be one of the repository profile environments"
+    );
+  }
+  return selected;
+}
+
 function publicQueue(jobs) {
   return jobs.map((job, index) => ({
     id: job.id,
@@ -261,6 +312,8 @@ function publicQueue(jobs) {
     requestType: job.requestType,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
+    targetEnvironment: job.targetEnvironment,
+    recordPlaywrightVideo: job.recordPlaywrightVideo,
     holdForManualLiveTest: job.holdForManualLiveTest,
     manualLiveTestUrl: job.manualLiveTestUrl,
     testEvidence: job.testEvidence,
@@ -279,6 +332,7 @@ function publicQueue(jobs) {
 function publicHistory(jobs) {
   return jobs.map((job) => ({
     ...publicJob(job),
+    activity: [],
     logs: []
   }));
 }
@@ -286,6 +340,7 @@ function publicHistory(jobs) {
 function privateDashboardSnapshot(value) {
   const snapshot = { ...value };
   delete snapshot.screenshots;
+  delete snapshot.activity;
   delete snapshot.logs;
   delete snapshot.usage;
   return snapshot;
@@ -315,6 +370,7 @@ function restoreDashboardJob(snapshot, repository) {
       outputTokens: 0,
       cacheReusePercent: 0
     },
+    activity: [],
     logs: [],
     droppedLogs: 0,
     nextLogIndex: 0,
@@ -337,6 +393,33 @@ export function recoverInterruptedDashboardJob(
       snapshot.stages?.[stage] ?? { status: "pending", message: "" }
     ])
   );
+  const failedStages = FIXLAB_STAGES.filter(
+    (stage) => stages[stage].status === "failed"
+  );
+  const blockedStages = FIXLAB_STAGES.filter(
+    (stage) => stages[stage].status === "blocked"
+  );
+  const incompleteStages = FIXLAB_STAGES.filter(
+    (stage) => !terminalStatuses.has(stages[stage].status)
+  );
+  const unresolvedBugs = (snapshot.bugs ?? []).filter(
+    (bug) => bug.outcome === "pending"
+  );
+  if (
+    failedStages.length === 0 &&
+    blockedStages.length > 0 &&
+    incompleteStages.length === 0 &&
+    unresolvedBugs.length === 0
+  ) {
+    return {
+      ...snapshot,
+      status: "blocked",
+      stages,
+      error: snapshot.error ?? null,
+      finishedAt: recoveredAt
+    };
+  }
+
   const interruptedStage =
     FIXLAB_STAGES.find((stage) => stages[stage].status === "running") ??
     FIXLAB_STAGES.find((stage) => !terminalStatuses.has(stages[stage].status));
@@ -454,6 +537,7 @@ export function inspectRepository(repository) {
       repositoryReady: true,
       profileReady: true,
       profilePath,
+      environments: configuredValidationEnvironments(profile),
       profileName:
         typeof profile.name === "string" && profile.name.trim()
           ? profile.name.trim()
@@ -478,6 +562,8 @@ export function buildJobPrompt({
   requestType = "bug-fix",
   pullRequestStrategy = "common",
   runAllUiScenarios = false,
+  targetEnvironment = "",
+  recordPlaywrightVideo = false,
   holdForManualLiveTest = false,
   manualLiveTestUrl = "",
   testEvidence = {
@@ -530,6 +616,16 @@ export function buildJobPrompt({
     ? `- After implementation and non-browser validation are complete, run every repository-defined Playwright/UI scenario at the end, not only the focused defect journey.
 - Start the required applications once when safe, preserve each scenario result, and attach non-sensitive screenshot evidence for the complete UI run.`
     : "- Run the smallest repository-defined Playwright journey that proves the selected behavior.";
+  const environmentGuidance = targetEnvironment
+    ? `- The user selected ${targetEnvironment} as the validation environment. Use exactly that repository-approved environment for profile-defined application startup and Playwright live testing.
+- Do not silently fall back to local or another environment. If ${targetEnvironment} is unavailable, unauthenticated, or cannot be used safely, block the affected stage with the exact prerequisite.
+- Focused tests, type-checks, and builds still run locally unless the repository profile explicitly defines otherwise.`
+    : "- No environment override was selected. Use the repository profile's safe default and never select production.";
+  const videoGuidance = recordPlaywrightVideo
+    ? `- Record the focused Playwright journey as non-sensitive video evidence using repository-supported Playwright video recording.
+- Save the recording as WebM or MP4 under the repository-owned test-results, playwright-report, or artifacts directory. Keep it under 50 MiB and capture only the application surface: no credentials, browser profiles, personal windows, or unrelated data.
+- Keep the required screenshot evidence as the lightweight review artifact. If recording is unavailable, report that limitation explicitly instead of claiming video evidence exists.`
+    : "- Playwright video recording was not requested. Preserve the required screenshot evidence and any repository-default traces.";
   const manualLiveTestGuidance = holdForManualLiveTest
     ? `- After automated Playwright finishes successfully, keep the FixLab-owned frontend running at ${manualLiveTestUrl || "the profile-defined local health URL"} for manual local-mode testing.
 - The user explicitly requested this hold, so the owned frontend process may remain running after the agent turn. Record its process identity and never stop an unrelated process.
@@ -557,6 +653,8 @@ export function buildJobPrompt({
 Request type: ${requestType}
 Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
+Selected validation environment: ${targetEnvironment || "profile-defined"}
+Record Playwright video evidence: ${recordPlaywrightVideo ? "yes" : "no"}
 Hold for manual local testing after Playwright: ${holdForManualLiveTest ? "yes" : "no"}
 Test synthesis: ${testEvidence.enabled ? "enabled" : "disabled"}
 Configured test data source: ${testEvidence.source}
@@ -585,6 +683,8 @@ Repository requirements:
 ${requestGuidance}
 ${pullRequestGuidance}
 ${uiScenarioGuidance}
+${environmentGuidance}
+${videoGuidance}
 ${manualLiveTestGuidance}
 ${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
@@ -605,6 +705,10 @@ ${branchNamingGuidance}
 - ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update the pull request only after all required gates pass, and include the collected evidence."}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
 - When one of those human actions is required, emit FIXLAB_STAGE|stage|blocked|exact action needed, emit blocked outcomes for affected bugs when applicable, mark later stages skipped because of the blocker, and exit. The dashboard will collect user input and resume this same session.
+- Emit concise, user-visible analysis updates when evidence changes the diagnosis, validation status, blocker, or next action:
+  FIXLAB_ACTIVITY|stage|summary
+- FIXLAB_ACTIVITY is a decision and evidence summary, not hidden chain-of-thought. State what was checked, what the evidence means, and what happens next without exposing secrets, credentials, private data, or speculative reasoning.
+- Emit no more than two FIXLAB_ACTIVITY lines per stage unless a new blocker materially changes the plan.
 - Keep stage messages and retained logs concise. Summarize relevant command evidence and preserve exact errors, but do not feed unbounded raw output back into prompts.
 - Keep all execution local unless the repository profile and existing authorization explicitly require an allowed external action.
 - For every Azure DevOps bug listed below, emit one terminal outcome line before finishing:
@@ -617,7 +721,7 @@ ${branchNamingGuidance}
 - The expected bug IDs for this request are: ${bugResults.length > 0 ? bugResults.map((bug) => bug.id).join(", ") : "none detected; no FIXLAB_BUG marker is required"}.
 - Emit exactly one or more progress lines in this format:
   FIXLAB_STAGE|stage|status|message
-- Write every FIXLAB_STAGE, FIXLAB_BUG, and FIXLAB_TEST marker as a literal plain-text assistant response line. Never generate markers through shell, Write-Output, echo, files, tools, code blocks, or tables because runtime rendering may hide them from the dashboard.
+- Write every FIXLAB_STAGE, FIXLAB_ACTIVITY, FIXLAB_BUG, and FIXLAB_TEST marker as a literal plain-text assistant response line. Never generate markers through shell, Write-Output, echo, files, tools, code blocks, or tables because runtime rendering may hide them from the dashboard.
 - stage must be one of: ${FIXLAB_STAGES.join(", ")}.
 - status must be pending, running, passed, skipped, blocked, or failed.
 - Before finishing, emit a terminal passed, skipped, blocked, or failed marker for every stage. Never imply an unmarked stage passed.
@@ -1156,15 +1260,7 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
     );
     child.stdin.end(invocation.input);
 
-    const completion = new Promise((resolveCompletion) => {
-      child.once("error", (error) => {
-        onOutput("stderr", `${error.message}\n`);
-        resolveCompletion({ code: null, error });
-      });
-      child.once("close", (code, signal) => {
-        resolveCompletion({ code, signal });
-      });
-    });
+    const completion = createProcessCompletion(child, onOutput);
 
     return {
       completion,
@@ -1175,6 +1271,39 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
       }
     };
   };
+}
+
+export function createProcessCompletion(
+  child,
+  onOutput,
+  outputDrainTimeoutMs = 500
+) {
+  return new Promise((resolveCompletion) => {
+    let settled = false;
+    let outputDrainTimer = null;
+    const settle = (result) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(outputDrainTimer);
+      resolveCompletion(result);
+    };
+
+    child.once("error", (error) => {
+      onOutput("stderr", `${error.message}\n`);
+      settle({ code: null, error });
+    });
+    child.once("exit", (code, signal) => {
+      outputDrainTimer = setTimeout(
+        () => settle({ code, signal }),
+        outputDrainTimeoutMs
+      );
+    });
+    child.once("close", (code, signal) => {
+      settle({ code, signal });
+    });
+  });
 }
 
 export function createAgencyExecutor({ packageRoot }) {
@@ -1223,6 +1352,8 @@ function publicJob(job) {
     requestType: job.requestType,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
+    targetEnvironment: job.targetEnvironment,
+    recordPlaywrightVideo: job.recordPlaywrightVideo,
     holdForManualLiveTest: job.holdForManualLiveTest,
     manualLiveTestUrl: job.manualLiveTestUrl,
     testEvidence: job.testEvidence,
@@ -1255,6 +1386,7 @@ function publicJob(job) {
     stages: job.stages,
     pullRequestReadiness: getPullRequestReadiness(job),
     bugs: job.bugs,
+    activity: job.activity,
     logs: job.logs,
     droppedLogs: job.droppedLogs
   };
@@ -1447,6 +1579,25 @@ function appendLine(job, stream, line) {
   if (usage) {
     job.usage = usage;
   }
+  const activityMarker = line.match(/^FIXLAB_ACTIVITY\|([^|]+)\|(.*)$/);
+  if (activityMarker) {
+    const [, stage, message] = activityMarker;
+    if (!FIXLAB_STAGES.includes(stage)) {
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: `Ignored invalid activity marker: ${line}`
+      });
+      return;
+    }
+    pushActivity(job, {
+      timestamp: new Date().toISOString(),
+      stage,
+      message: safeSummary(message)
+    });
+    return;
+  }
   const bugMarker = line.match(
     /^FIXLAB_BUG\|(\d+)\|([^|]+)\|([^|]+)\|(.*)$/
   );
@@ -1521,6 +1672,13 @@ function pushLog(job, entry) {
   if (job.logs.length > MAX_JOB_LOG_ENTRIES) {
     job.logs.shift();
     job.droppedLogs += 1;
+  }
+}
+
+function pushActivity(job, entry) {
+  job.activity.push(entry);
+  if (job.activity.length > MAX_JOB_ACTIVITY_ENTRIES) {
+    job.activity.shift();
   }
 }
 
@@ -1706,7 +1864,11 @@ function collectPlaywrightArtifacts(root, directory = root, depth = 0) {
       continue;
     }
     const extension = extname(entry.name).toLowerCase();
-    if (![".png", ".jpg", ".jpeg", ".webp"].includes(extension)) {
+    if (
+      ![".png", ".jpg", ".jpeg", ".webp", ".webm", ".mp4"].includes(
+        extension
+      )
+    ) {
       continue;
     }
     const resolvedPath = realpathSync(path);
@@ -1718,7 +1880,11 @@ function collectPlaywrightArtifacts(root, directory = root, depth = 0) {
       continue;
     }
     const stats = statSync(resolvedPath);
-    if (stats.size > MAX_SCREENSHOT_BYTES) {
+    const video = [".webm", ".mp4"].includes(extension);
+    if (
+      stats.size >
+      (video ? MAX_PLAYWRIGHT_VIDEO_BYTES : MAX_SCREENSHOT_BYTES)
+    ) {
       continue;
     }
     files.push({
@@ -1728,12 +1894,17 @@ function collectPlaywrightArtifacts(root, directory = root, depth = 0) {
       relativePath,
       bytes: stats.size,
       updatedAt: stats.mtime.toISOString(),
+      kind: video ? "video" : "image",
       mimeType:
         extension === ".png"
           ? "image/png"
           : extension === ".webp"
             ? "image/webp"
-            : "image/jpeg"
+            : extension === ".webm"
+              ? "video/webm"
+              : extension === ".mp4"
+                ? "video/mp4"
+                : "image/jpeg"
     });
   }
   return files;
@@ -2389,6 +2560,26 @@ export function createDashboardServer({
         });
         return;
       }
+      const recordPlaywrightVideo = body.recordPlaywrightVideo ?? false;
+      if (typeof recordPlaywrightVideo !== "boolean") {
+        sendJson(response, 400, {
+          error: "recordPlaywrightVideo must be a boolean"
+        });
+        return;
+      }
+      const repositoryProfile = loadRepositoryProfile(resolvedRepository);
+      const allowedEnvironments =
+        configuredValidationEnvironments(repositoryProfile);
+      let targetEnvironment;
+      try {
+        targetEnvironment = validateTargetEnvironment(
+          body.targetEnvironment,
+          allowedEnvironments
+        );
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       const holdForManualLiveTest =
         body.holdForManualLiveTest ?? false;
       if (typeof holdForManualLiveTest !== "boolean") {
@@ -2397,7 +2588,6 @@ export function createDashboardServer({
         });
         return;
       }
-      const repositoryProfile = loadRepositoryProfile(resolvedRepository);
       const manualLiveTestUrl =
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       const testEvidence = configuredTestSynthesis(repositoryProfile);
@@ -2522,6 +2712,8 @@ export function createDashboardServer({
         requestType,
         pullRequestStrategy,
         runAllUiScenarios,
+        targetEnvironment,
+        recordPlaywrightVideo,
         holdForManualLiveTest,
         manualLiveTestUrl,
         testEvidence,
@@ -2553,6 +2745,7 @@ export function createDashboardServer({
           ])
         ),
         bugs: extractBugResults(requestText, workItems),
+        activity: [],
         logs: [],
         droppedLogs: 0,
         nextLogIndex: 0,
@@ -2565,6 +2758,8 @@ export function createDashboardServer({
         requestType,
         pullRequestStrategy,
         runAllUiScenarios,
+        targetEnvironment,
+        recordPlaywrightVideo,
         holdForManualLiveTest,
         manualLiveTestUrl,
         testEvidence,
@@ -2647,12 +2842,14 @@ export function createDashboardServer({
       }
       sendJson(response, 200, {
         artifacts: artifacts.map(
-          ({ id, name, relativePath, bytes, updatedAt }) => ({
+          ({ id, name, relativePath, bytes, updatedAt, kind, mimeType }) => ({
             id,
             name,
             relativePath,
             bytes,
             updatedAt,
+            kind,
+            mimeType,
             url: `/api/playwright/artifacts/${id}`
           })
         )
@@ -2669,9 +2866,44 @@ export function createDashboardServer({
         sendJson(response, 404, { error: "Playwright artifact not found" });
         return;
       }
+      const range = artifact.kind === "video"
+        ? request.headers.range?.match(/^bytes=(\d*)-(\d*)$/)
+        : null;
+      if (range) {
+        const requestedStart = range[1] ? Number(range[1]) : 0;
+        const requestedEnd = range[2]
+          ? Number(range[2])
+          : artifact.bytes - 1;
+        const start = Math.max(0, requestedStart);
+        const end = Math.min(artifact.bytes - 1, requestedEnd);
+        if (
+          !Number.isSafeInteger(start) ||
+          !Number.isSafeInteger(end) ||
+          start > end ||
+          start >= artifact.bytes
+        ) {
+          response.writeHead(416, {
+            "Content-Range": `bytes */${artifact.bytes}`,
+            "Cache-Control": "no-store"
+          });
+          response.end();
+          return;
+        }
+        response.writeHead(206, {
+          "Content-Type": artifact.mimeType,
+          "Content-Length": end - start + 1,
+          "Content-Range": `bytes ${start}-${end}/${artifact.bytes}`,
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "no-store",
+          "X-Content-Type-Options": "nosniff"
+        });
+        createReadStream(artifact.path, { start, end }).pipe(response);
+        return;
+      }
       response.writeHead(200, {
         "Content-Type": artifact.mimeType,
         "Content-Length": artifact.bytes,
+        "Accept-Ranges": artifact.kind === "video" ? "bytes" : "none",
         "Cache-Control": "no-store",
         "X-Content-Type-Options": "nosniff"
       });
@@ -2789,6 +3021,7 @@ export function createDashboardServer({
       };
     },
     async close() {
+      persistDashboardState();
       if (activeHandle?.terminate) {
         activeHandle.terminate();
       }

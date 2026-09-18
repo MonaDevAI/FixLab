@@ -26,6 +26,8 @@ const queueCount = document.querySelector("#queue-count");
 const queueList = document.querySelector("#queue-list");
 const bugResultsPanel = document.querySelector("#bug-results-panel");
 const bugResultsElement = document.querySelector("#bug-results");
+const agentActivityPanel = document.querySelector("#agent-activity-panel");
+const agentActivityElement = document.querySelector("#agent-activity");
 const logsElement = document.querySelector("#logs");
 const azureDevOpsIntake = document.querySelector("#azure-devops-intake");
 const workItemInput = document.querySelector("#work-item");
@@ -37,6 +39,9 @@ const requestInput = document.querySelector("#request");
 const screenshotInput = document.querySelector("#screenshots");
 const screenshotList = document.querySelector("#screenshot-list");
 const screenshotMessage = document.querySelector("#screenshot-message");
+const targetEnvironmentSelect = document.querySelector(
+  "#target-environment"
+);
 const jobInputPanel = document.querySelector("#job-input-panel");
 const jobInputTitle = document.querySelector("#job-input-title");
 const jobInputCount = document.querySelector("#job-input-count");
@@ -81,8 +86,8 @@ const playwrightEvidence = document.createElement("div");
 playwrightEvidence.className = "playwright-evidence";
 playwrightEvidence.innerHTML = `
   <div class="section-heading">
-    <h3 id="playwright-evidence-title">Selected job Playwright screenshot</h3>
-    <button id="playwright-evidence-refresh" type="button">Refresh screenshots</button>
+    <h3 id="playwright-evidence-title">Selected job Playwright evidence</h3>
+    <button id="playwright-evidence-refresh" type="button">Refresh evidence</button>
   </div>
   <p id="playwright-evidence-guidance" class="guidance">Select a job to view its browser evidence.</p>
   <div id="playwright-evidence-list" class="evidence-gallery"></div>
@@ -152,6 +157,24 @@ function renderReadiness(readiness) {
     ? `Ready: ${readiness.profileName || readiness.repository}`
     : `Not ready: ${readiness.error}`;
   startButton.disabled = !ready;
+  const selectedEnvironment = targetEnvironmentSelect.value;
+  const environments = Array.isArray(readiness.environments)
+    ? readiness.environments
+    : [];
+  targetEnvironmentSelect.replaceChildren(
+    new Option("Profile default", ""),
+    ...environments.map(
+      (environment) =>
+        new Option(environment.toUpperCase(), environment)
+    )
+  );
+  if (
+    environments.some(
+      (environment) => environment === selectedEnvironment
+    )
+  ) {
+    targetEnvironmentSelect.value = selectedEnvironment;
+  }
 }
 
 function labelTestEvidence(value) {
@@ -216,7 +239,9 @@ function renderJob(job, currentActiveJob = job) {
       ? Date.now() - Date.parse(job.lastActivityAt)
       : null;
   jobStatusElement.textContent = job
-    ? `${job.status} · ${job.requestType} · ${formatDuration(job.durationMs)}${
+    ? `${job.status} · ${job.requestType} · ${
+        job.targetEnvironment || "profile default"
+      } · ${formatDuration(job.durationMs)}${
         lastActivityAge === null
           ? ""
           : ` · last output ${formatDuration(lastActivityAge)} ago`
@@ -245,9 +270,9 @@ function renderJob(job, currentActiveJob = job) {
   if (renderedEvidenceJobId !== job?.id) {
     renderedEvidenceJobId = job?.id ?? null;
     playwrightEvidenceTitle.textContent =
-      `${bugIdentity} · Playwright screenshot`;
+      `${bugIdentity} · Playwright evidence`;
     playwrightEvidenceGuidance.textContent = job?.id
-      ? "Checking this job's safe Playwright screenshots."
+      ? "Checking this job's safe Playwright screenshots and videos."
       : "Select a job to view its browser evidence.";
     playwrightEvidenceList.replaceChildren();
     void refreshPlaywrightEvidence();
@@ -330,6 +355,24 @@ function renderJob(job, currentActiveJob = job) {
     pullRequest.title = readiness.message;
     row.append(identity, outcome, owner, summary, pullRequest);
     bugResultsElement.append(row);
+  }
+
+  const activity = job?.activity ?? [];
+  agentActivityPanel.hidden = activity.length === 0;
+  agentActivityElement.replaceChildren();
+  for (const entry of activity) {
+    const item = document.createElement("li");
+    const heading = document.createElement("div");
+    const stage = document.createElement("strong");
+    const timestamp = document.createElement("time");
+    const message = document.createElement("p");
+    stage.textContent = entry.stage;
+    timestamp.dateTime = entry.timestamp;
+    timestamp.textContent = new Date(entry.timestamp).toLocaleTimeString();
+    message.textContent = entry.message;
+    heading.append(stage, timestamp);
+    item.append(heading, message);
+    agentActivityElement.append(item);
   }
 
   const logLines = job?.logs?.map(
@@ -450,20 +493,36 @@ async function refreshPlaywrightEvidence() {
     playwrightEvidenceList.replaceChildren();
     playwrightEvidenceGuidance.textContent =
       body.artifacts.length > 0
-        ? `${body.artifacts.length} screenshot(s) for this job`
-        : "No safe screenshot exists for this job yet. This updates automatically while Playwright runs.";
+        ? `${body.artifacts.length} evidence artifact(s) for this job`
+        : "No safe screenshot or video exists for this job yet. This updates automatically while Playwright runs.";
     for (const artifact of body.artifacts) {
-      const link = document.createElement("a");
-      link.href = artifact.url;
-      link.target = "_blank";
-      link.rel = "noreferrer";
-      const image = document.createElement("img");
-      image.src = artifact.url;
-      image.alt = `Playwright evidence: ${artifact.name}`;
+      const item = artifact.kind === "video"
+        ? document.createElement("div")
+        : document.createElement("a");
+      if (artifact.kind === "video") {
+        item.className = "evidence-item";
+        const media = document.createElement("video");
+        media.src = artifact.url;
+        media.controls = true;
+        media.preload = "metadata";
+        media.setAttribute(
+          "aria-label",
+          `Playwright video evidence: ${artifact.name}`
+        );
+        item.append(media);
+      } else {
+        item.href = artifact.url;
+        item.target = "_blank";
+        item.rel = "noreferrer";
+        const media = document.createElement("img");
+        media.src = artifact.url;
+        media.alt = `Playwright evidence: ${artifact.name}`;
+        item.append(media);
+      }
       const caption = document.createElement("span");
       caption.textContent = artifact.relativePath;
-      link.append(image, caption);
-      playwrightEvidenceList.append(link);
+      item.append(caption);
+      playwrightEvidenceList.append(item);
     }
   } catch (error) {
     playwrightEvidenceGuidance.textContent = error.message;
@@ -495,6 +554,7 @@ function queuedJobView(job) {
       ),
     bugs: job.bugs ?? [],
     logs: [],
+    activity: [],
     droppedLogs: 0
   };
 }
@@ -988,6 +1048,9 @@ form.addEventListener("submit", async (event) => {
           ? "per-bug"
           : "common",
         runAllUiScenarios: data.get("runAllUiScenarios") === "on",
+        targetEnvironment: data.get("targetEnvironment"),
+        recordPlaywrightVideo:
+          data.get("recordPlaywrightVideo") === "on",
         holdForManualLiveTest:
           data.get("holdForManualLiveTest") === "on",
         intakeSource,

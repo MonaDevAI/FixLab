@@ -33,6 +33,7 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
   assert.match(result.stdout, /--runtime <agency\|copilot>/);
+  assert.match(result.stdout, /--environment <name>/);
   assert.match(result.stdout, /FIXLAB_RUNTIME/);
   assert.match(result.stdout, /127\.0\.0\.1:4317/);
 });
@@ -430,7 +431,16 @@ test("run launches the Agency-resolved FixLab agent", () => {
     }
 
     const result = run(
-      ["run", repository, "--", "repair", "the", "defect"],
+      [
+        "run",
+        repository,
+        "--environment",
+        "development",
+        "--",
+        "repair",
+        "the",
+        "defect"
+      ],
       repository,
       {
         PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
@@ -439,7 +449,9 @@ test("run launches the Agency-resolved FixLab agent", () => {
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
-    assert.match(result.stdout, /--interactive repair the defect/);
+    assert.match(result.stdout, /Use development as the user-selected validation environment/);
+    assert.match(result.stdout, /Do not silently fall back/);
+    assert.match(result.stdout, /Request: repair the defect/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -501,4 +513,21 @@ test("runtime selection rejects unsupported values", () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /runtime must be one of: agency, copilot/);
+});
+
+test("run rejects an environment outside the repository profile", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const result = run(
+      ["run", repository, "--environment", "production", "--", "validate"],
+      repository
+    );
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /non-production environment/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });

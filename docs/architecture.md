@@ -74,6 +74,14 @@ implementation, effective-diff self-review, focused local validation,
 profile-defined startup and live testing, evidence collection, and the gated
 pull-request outcome. It asks for human interaction only for authentication,
 unsafe-data approval, deployment or pull-request approval, or genuine blockers.
+The job form also exposes the repository profile's allowed non-production
+environments. A user can explicitly select environments such as DEV or SIT for
+profile-defined application startup and Playwright live testing. The server
+rejects values outside the profile allowlist and production aliases. The agent
+must use the selected environment exactly or block with the missing
+prerequisite; it cannot silently fall back to local or another environment.
+Direct CLI runs provide the equivalent
+`fixlab run --environment <profile-environment>` option.
 An optional manual-live-test hold keeps the FixLab-owned frontend available
 after successful Playwright validation and blocks the PR stage until the user
 records a manual local-mode result. The resumed session then stops only its
@@ -87,6 +95,14 @@ smallest focused Playwright scenario and measurable assertions. A
 changing external records. The agent emits structured `FIXLAB_TEST` evidence;
 the dashboard highlights the actual data source, mutation behavior, and
 scenario beside the job roadmap.
+
+Jobs can also request local Playwright video evidence. The agent records only
+the focused application journey using repository-supported Playwright video
+capture, retains the required screenshot, and stores WebM or MP4 output under
+the same repository-owned evidence roots. The dashboard serves recordings only
+from those allowlisted roots, limits each video to 50 MiB, and never persists
+video contents or paths in dashboard history. Recordings must exclude
+credentials, browser profiles, personal windows, and unrelated data.
 
 The repository-onboarding panel detects Azure DevOps organization and project
 values from an Azure DevOps Git origin and can persist them to the
@@ -131,11 +147,22 @@ dashboard records the time of the latest executor output and stops only its
 owned executor when no output arrives for the profile-defined
 `validation.agentIdleTimeoutMinutes` period (20 minutes by default). The job
 then fails explicitly and remains resumable instead of appearing to run
-forever. On startup, a persisted `running` job cannot still own its original
-process, so the dashboard converts it to an interrupted, resumable failure.
+forever. Runtime completion normally waits for output streams to close, but
+also settles shortly after the runtime process exits because a retained local
+application may inherit an output pipe for a manual-test hold. On startup, a
+persisted `running` job with complete terminal markers and a blocked manual
+gate is restored as blocked and resumable. Other persisted `running` jobs
+cannot still own their original process, so the dashboard converts them to an
+interrupted, resumable failure.
 New requests submitted while a job is running, blocked, or failed enter the
 bounded queue. A passed active job starts the next queued job. Blocked and
 failed jobs pause queue advancement so the same session remains resumable.
+During execution, the agent can emit bounded `FIXLAB_ACTIVITY` evidence and
+decision summaries. The dashboard shows these summaries in a separate Agent
+analysis panel so users can follow what was checked, what the evidence means,
+and what happens next without exposing hidden model reasoning, credentials, or
+raw private context. Activity is retained only in the active in-memory job and
+is excluded from persisted dashboard history.
 The dashboard job list is read-only selectable. Selecting an active, queued,
 or recently completed job changes only the displayed roadmap and evidence; it
 does not reorder, start, stop, or resume execution. The local server retains
@@ -182,8 +209,9 @@ The loopback dashboard exposes a bounded, selected-job Playwright evidence
 gallery. It scans
 only repository-owned `test-results`, `playwright-report`, and `artifacts`
 directories below the configured browser working directory, ignores symbolic
-links and non-image files, and serves at most 20 images created after the
-selected job started and within the normal screenshot size limit.
+links and unsupported files, and serves at most 20 images or videos created
+after the selected job started. Images use the normal screenshot size limit;
+WebM and MP4 videos are limited to 50 MiB each.
 Authentication-state paths are outside these allowlisted roots and are never
 displayed.
 

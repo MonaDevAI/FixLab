@@ -12,10 +12,12 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   buildCopilotInvocation,
+  configuredValidationEnvironments,
   createDashboardServer,
   DEFAULT_DASHBOARD_PORT,
   FIXLAB_RUNTIMES,
   inspectRepository,
+  validateTargetEnvironment,
   validateLiveTestProfile,
   validatePort
 } from "../dashboard/server.js";
@@ -46,7 +48,7 @@ Usage:
   fixlab prepare [repository] [--yes]
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
-  fixlab run [repository] [--runtime <agency|copilot>] [--] [request...]
+  fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
   fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
   fixlab --help
@@ -65,7 +67,8 @@ Runtime:
   agency    Use Agency Copilot (default).
   copilot   Use GitHub Copilot CLI directly.
 
-Set FIXLAB_RUNTIME or pass --runtime to select the runtime.`);
+Set FIXLAB_RUNTIME or pass --runtime to select the runtime.
+Run with --environment to select an allowed non-production environment from the repository profile.`);
 }
 
 function resolveRepository(value) {
@@ -602,12 +605,23 @@ function setupPlaywright(repository, approved) {
   return 0;
 }
 
-function launch(repository, request, runtime) {
-  const { error } = loadProfile(repository);
+function launch(repository, request, runtime, targetEnvironment = "") {
+  const { profile, error } = loadProfile(repository);
   if (error) {
     console.error(
       `Cannot launch FixLab because ${error}. Run "fixlab init ${repository}" first.`
     );
+    return 1;
+  }
+
+  let selectedEnvironment;
+  try {
+    selectedEnvironment = validateTargetEnvironment(
+      targetEnvironment,
+      configuredValidationEnvironments(profile)
+    );
+  } catch (validationError) {
+    console.error(validationError.message);
     return 1;
   }
 
@@ -618,11 +632,17 @@ function launch(repository, request, runtime) {
     return 1;
   }
 
+  const environmentDirective = selectedEnvironment
+    ? `Use ${selectedEnvironment} as the user-selected validation environment for profile-defined application startup and Playwright live testing. Do not silently fall back to another environment; block with the exact prerequisite if ${selectedEnvironment} is unavailable or unsafe.`
+    : "";
+  const prompt = environmentDirective
+    ? `${environmentDirective}${request ? ` Request: ${request}` : ""}`
+    : request;
   const invocation =
     runtime === "copilot"
       ? buildCopilotInvocation({
           packageRoot,
-          prompt: request,
+          prompt,
           sessionId: randomUUID()
         })
       : {
@@ -632,16 +652,55 @@ function launch(repository, request, runtime) {
             packageRoot,
             "--agent",
             "fixlab:fixlab",
-            ...(request ? ["--interactive", request] : [])
+            ...(prompt ? ["--interactive", prompt] : [])
           ]
         };
   const result = spawnSync(runtime, invocation.args, {
     cwd: repository,
-    stdio: request && runtime === "copilot" ? ["pipe", "inherit", "inherit"] : "inherit",
+    stdio: prompt && runtime === "copilot" ? ["pipe", "inherit", "inherit"] : "inherit",
     input: runtime === "copilot" ? invocation.input : undefined,
     shell: process.platform === "win32"
   });
   return result.status ?? 1;
+}
+
+function parseRunArguments(args) {
+  let repositoryArgument;
+  let targetEnvironment = "";
+  const request = [];
+  let afterSeparator = false;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--") {
+      afterSeparator = true;
+      continue;
+    }
+    if (!afterSeparator && argument === "--environment") {
+      if (!args[index + 1]) {
+        return { error: "run requires a value after --environment" };
+      }
+      targetEnvironment = args[index + 1];
+      index += 1;
+      continue;
+    }
+    if (!afterSeparator && argument.startsWith("--environment=")) {
+      targetEnvironment = argument.slice("--environment=".length);
+      if (!targetEnvironment) {
+        return { error: "run requires a value after --environment" };
+      }
+      continue;
+    }
+    if (!afterSeparator && !repositoryArgument && !argument.startsWith("-")) {
+      repositoryArgument = argument;
+      continue;
+    }
+    request.push(argument);
+  }
+  return {
+    repository: resolveRepository(repositoryArgument),
+    request: request.join(" ").trim(),
+    targetEnvironment
+  };
 }
 
 function parseValidateArguments(args) {
@@ -802,15 +861,17 @@ async function main(args) {
       console.error(parsed.error);
       return 1;
     }
-    const repository = resolveRepository(parsed.args[0]);
-    const requestStart =
-      parsed.args[0] && !parsed.args[0].startsWith("-") ? 1 : 0;
-    const request = parsed.args
-      .slice(requestStart)
-      .filter((value) => value !== "--")
-      .join(" ")
-      .trim();
-    return launch(repository, request, parsed.runtime);
+    const runArguments = parseRunArguments(parsed.args);
+    if (runArguments.error) {
+      console.error(runArguments.error);
+      return 1;
+    }
+    return launch(
+      runArguments.repository,
+      runArguments.request,
+      parsed.runtime,
+      runArguments.targetEnvironment
+    );
   }
 
   if (command === "validate") {

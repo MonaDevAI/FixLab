@@ -105,7 +105,8 @@ test.beforeAll(async () => {
           policy: "Use mocked data and intercept mutations.",
           productionAllowed: false
         }
-      }
+      },
+      environments: ["local", "dev", "sit"]
     })
   );
 
@@ -129,6 +130,7 @@ test.afterAll(async () => {
 });
 
 test("dashboard exposes repository readiness through the running server", async ({
+  page,
   request
 }) => {
   const response = await request.get(`${baseUrl}/api/status`);
@@ -138,6 +140,18 @@ test("dashboard exposes repository readiness through the running server", async 
   expect(body.readiness.repositoryReady).toBe(true);
   expect(body.readiness.profileReady).toBe(true);
   expect(body.readiness.profileName).toBe("E2E repository");
+  expect(body.readiness.environments).toEqual(["local", "dev", "sit"]);
+
+  await page.goto(baseUrl);
+  await expect(page.locator("#target-environment option")).toHaveText([
+    "Profile default",
+    "LOCAL",
+    "DEV",
+    "SIT"
+  ]);
+  await expect(
+    page.locator('input[name="recordPlaywrightVideo"]')
+  ).toBeVisible();
 });
 
 test("dashboard exposes multi-bug intake and resumable user input", async ({
@@ -169,11 +183,11 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
   ).toBeDisabled();
   await expect(
     page.getByRole("heading", {
-      name: /Playwright screenshot/
+      name: /Playwright evidence/
     })
   ).toBeVisible();
   await expect(
-    page.getByRole("button", { name: "Refresh screenshots" })
+    page.getByRole("button", { name: "Refresh evidence" })
   ).toBeVisible();
   await expect(
     page.getByLabel("Playwright validation only")

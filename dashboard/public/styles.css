@@ -264,7 +264,8 @@ button.secondary {
   margin-top: .8rem;
 }
 
-.evidence-gallery a {
+.evidence-gallery a,
+.evidence-gallery .evidence-item {
   overflow: hidden;
   border: 1px solid #405275;
   border-radius: 8px;
@@ -273,11 +274,13 @@ button.secondary {
   text-decoration: none;
 }
 
-.evidence-gallery img {
+.evidence-gallery img,
+.evidence-gallery video {
   display: block;
   width: 100%;
   height: 110px;
   object-fit: cover;
+  background: #000;
 }
 
 .evidence-gallery span {
@@ -552,6 +555,42 @@ th {
 .intervention select {
   width: 100%;
   margin: .5rem 0 1rem;
+}
+
+.activity-list {
+  display: grid;
+  gap: .75rem;
+  margin: 1rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.activity-list li {
+  padding: .9rem 1rem;
+  border-left: 4px solid #46d8be;
+  border-radius: 8px;
+  background: #0a1426;
+}
+
+.activity-list div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.activity-list strong {
+  color: #67e8cf;
+  text-transform: capitalize;
+}
+
+.activity-list time {
+  color: #8fa3c0;
+  font-size: .85rem;
+}
+
+.activity-list p {
+  margin: .45rem 0 0;
+  color: #d4deed;
 }
 
 pre {
