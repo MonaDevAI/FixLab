@@ -30,3 +30,57 @@ and publishes with npm provenance.
 The workflow verifies that the tag matches the package and plugin versions,
 runs tests, validates the package contents, publishes `@fixlab/cli`, and
 creates the GitHub release.
+
+## Publish through the GitHub Copilot plugin marketplace
+
+FixLab uses the Agent Plugins 1.0 layout and remains hosted in this repository.
+Submit it to
+[`github/copilot-plugins`](https://github.com/github/copilot-plugins) as an
+external GitHub source by adding an entry like this to
+`.github/plugin/marketplace.json`:
+
+```json
+{
+  "name": "fixlab",
+  "source": {
+    "source": "github",
+    "repo": "MonaDevAI/FixLab"
+  },
+  "description": "Evidence-backed defect diagnosis, repair, and validation for React and .NET repositories.",
+  "version": "0.5.2",
+  "author": {
+    "name": "FixLab Contributors"
+  },
+  "homepage": "https://github.com/MonaDevAI/FixLab",
+  "repository": "https://github.com/MonaDevAI/FixLab",
+  "keywords": [
+    "testing",
+    "validation",
+    "react",
+    "dotnet",
+    "playwright",
+    "pull-requests"
+  ],
+  "license": "MIT"
+}
+```
+
+Before opening the marketplace pull request:
+
+1. Confirm the release tag, `package.json`, `package-lock.json`, `plugin.json`,
+   and changelog version match.
+2. Run `npm run validate`.
+3. Verify discovery with
+   `copilot --plugin-dir . plugin list`.
+4. Install the GitHub-hosted release with
+   `copilot plugin install MonaDevAI/FixLab`.
+5. Run a non-destructive smoke prompt through
+   `copilot --agent fixlab:fixlab`.
+6. Include the validation results, supported operating systems, required local
+   tools, and the security and data-handling boundaries in the pull request.
+
+After the marketplace change is merged, users install FixLab with:
+
+```shell
+copilot plugin install fixlab@copilot-plugins
+```

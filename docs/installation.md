@@ -50,6 +50,23 @@ fixlab --help
 This installs the CLI, dashboard assets, and packaged FixLab plugin. The
 selected runtime remains a separate prerequisite.
 
+Direct GitHub repository plugin installation is supported for development and
+pre-release verification:
+
+```powershell
+copilot plugin install MonaDevAI/FixLab
+```
+
+GitHub Copilot CLI warns that direct repository plugin installs are deprecated.
+After FixLab is accepted into the official marketplace, use the stable
+marketplace form:
+
+```powershell
+copilot plugin install fixlab@copilot-plugins
+```
+
+The installed custom agent is selected as `fixlab:fixlab`.
+
 After `fixlab init` and profile configuration, review and run the target
 repository's own dependency restore commands:
 

@@ -58,6 +58,13 @@ passed, what was skipped, and what still needs human attention.
    overwriting existing files. Installation does not start a server; `fixlab
    dashboard` explicitly starts the local dashboard and opens it in the system
    browser.
+
+   After FixLab is listed in the official GitHub Copilot plugin marketplace,
+   install the plugin directly with:
+
+   ```shell
+   copilot plugin install fixlab@copilot-plugins
+   ```
 3. **Describe the application.**
    Set the frontend and backend paths, restore and test commands, startup
    commands, ports, safe environments, and browser journeys.
@@ -351,8 +358,8 @@ Agency is the default compatibility runtime:
 agency copilot --plugin-dir <fixlab-package> --agent fixlab:fixlab
 ```
 
-Direct mode uses the same packaged plugin. Copilot CLI registers its agent as
-`fixlab`, while Agency uses the plugin-qualified `fixlab:fixlab` name:
+Direct mode uses the same packaged plugin. Both runtimes select the namespaced
+agent identifier `fixlab:fixlab`:
 
 ```shell
 fixlab run --runtime copilot -- "fix this defect"

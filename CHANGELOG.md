@@ -4,6 +4,8 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.5.2 - 2026-09-18
+
 - Recover persisted running jobs as interrupted and resumable after dashboard
   restart.
 - Stop an owned executor after a configurable no-output interval and display
@@ -35,6 +37,9 @@ All notable changes to FixLab are documented in this file.
   multi-commit rollback restoration, plus a scheduled proof drill.
 - Require code-owner review, stale-approval dismissal, and passing CI/CodeQL
   checks for normal changes to `main`.
+- Add Agent Plugins 1.0 marketplace release guidance, correct the documented
+  GitHub Copilot agent identifier, and provide a concrete private vulnerability
+  reporting route.
 
 ## 0.5.1
 

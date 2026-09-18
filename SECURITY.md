@@ -2,7 +2,9 @@
 
 Do not report vulnerabilities in public issues.
 
-Use the private security-reporting channel configured by the repository owner.
+Use
+[GitHub private vulnerability reporting](https://github.com/MonaDevAI/FixLab/security/advisories/new)
+to report a vulnerability confidentially to the repository maintainers.
 Include:
 
 - Affected version
