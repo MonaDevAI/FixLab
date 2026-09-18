@@ -19,7 +19,8 @@ import {
   isAbsolute,
   join,
   relative,
-  resolve
+  resolve,
+  sep
 } from "node:path";
 import {
   createAzureDevOpsLoader,
@@ -209,7 +210,9 @@ export function validateLiveTestProfile(profile, repository) {
     if (dataSafety?.productionAllowed !== false) {
       missing.push("browserAutomation.dataSafety.productionAllowed=false");
     }
-    if (testSynthesis !== undefined) {
+    if (testSynthesis === undefined) {
+      missing.push("browserAutomation.testSynthesis");
+    } else {
       if (testSynthesis?.enabled !== true) {
         missing.push("browserAutomation.testSynthesis.enabled=true");
       }
@@ -337,25 +340,63 @@ function publicHistory(jobs) {
   }));
 }
 
-function privateDashboardSnapshot(value) {
-  const snapshot = { ...value };
-  delete snapshot.screenshots;
-  delete snapshot.activity;
-  delete snapshot.logs;
-  delete snapshot.usage;
-  return snapshot;
+function safePersistedSummary(value) {
+  return safeSummary(value).replace(/https?:\/\/\S+/giu, "[omitted URL]");
 }
 
 function dashboardSnapshot(job) {
   return {
-    ...privateDashboardSnapshot(publicJob(job)),
+    id: job.id,
+    request: safePersistedSummary(job.request),
+    requestType: job.requestType,
+    pullRequestStrategy: job.pullRequestStrategy,
+    runAllUiScenarios: job.runAllUiScenarios,
+    targetEnvironment: job.targetEnvironment,
+    recordPlaywrightVideo: job.recordPlaywrightVideo,
+    holdForManualLiveTest: job.holdForManualLiveTest,
+    manualLiveTestUrl: "",
+    testEvidence: {
+      enabled: job.testEvidence.enabled,
+      source: job.testEvidence.source,
+      mutationMode: job.testEvidence.mutationMode,
+      requireScenarioEvidence: job.testEvidence.requireScenarioEvidence,
+      reported: job.testEvidence.reported,
+      scenario: safePersistedSummary(job.testEvidence.scenario)
+    },
+    branchNaming: job.branchNaming ?? null,
+    intakeSource: job.intakeSource,
+    workItem: persistedWorkItem(job.workItem),
+    workItems: job.workItems.map(persistedWorkItem),
+    mode: job.mode,
+    status: job.status,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    finishedAt: job.finishedAt,
+    lastActivityAt: job.lastActivityAt,
+    error: job.error ? safePersistedSummary(job.error) : null,
+    stages: Object.fromEntries(
+      FIXLAB_STAGES.map((stage) => [
+        stage,
+        {
+          status: job.stages[stage].status,
+          message: safePersistedSummary(job.stages[stage].message)
+        }
+      ])
+    ),
+    bugs: job.bugs.map((bug) => ({
+      id: bug.id,
+      outcome: bug.outcome,
+      owner: safePersistedSummary(bug.owner),
+      summary: safePersistedSummary(bug.summary)
+    })),
     canResume: false,
     canComment: false
   };
 }
 
 function restoreDashboardJob(snapshot, repository) {
-  return {
+  const profile = loadRepositoryProfile(repository);
+  const restored = {
     ...snapshot,
     workItem: snapshot.workItem ?? null,
     workItems: snapshot.workItems ?? [],
@@ -377,6 +418,26 @@ function restoreDashboardJob(snapshot, repository) {
     cacheContext: createCacheContext(repository),
     partial: { stdout: "", stderr: "" }
   };
+  restored.initialPrompt = buildJobPrompt({
+    request: restored.request,
+    mode: restored.mode,
+    requestType: restored.requestType,
+    pullRequestStrategy: restored.pullRequestStrategy,
+    runAllUiScenarios: restored.runAllUiScenarios,
+    targetEnvironment: restored.targetEnvironment,
+    recordPlaywrightVideo: restored.recordPlaywrightVideo,
+    holdForManualLiveTest: restored.holdForManualLiveTest,
+    manualLiveTestUrl:
+      profile.applications?.frontend?.healthUrl ?? "",
+    testEvidence: restored.testEvidence,
+    branchNaming: restored.branchNaming,
+    intakeSource: restored.intakeSource,
+    workItem: restored.workItem,
+    workItems: restored.workItems,
+    screenshotPaths: [],
+    cacheSummary: loadCacheSummary(restored.cacheContext)
+  });
+  return restored;
 }
 
 export function recoverInterruptedDashboardJob(
@@ -593,6 +654,7 @@ export function buildJobPrompt({
       workItemType,
       webUrl,
       comments,
+      commentCount,
       commentsWarning
     }) => ({
       id,
@@ -600,7 +662,11 @@ export function buildJobPrompt({
       state,
       workItemType,
       webUrl,
-      commentCount: comments.length,
+      commentCount: Array.isArray(comments)
+        ? comments.length
+        : Number.isSafeInteger(commentCount)
+          ? commentCount
+          : 0,
       commentsWarning
     })
   );
@@ -1403,6 +1469,7 @@ function publicWorkItem(workItem) {
     workItemType,
     webUrl,
     comments,
+    commentCount,
     commentsWarning
   } = workItem;
   return {
@@ -1411,8 +1478,25 @@ function publicWorkItem(workItem) {
     state,
     workItemType,
     webUrl,
-    commentCount: comments.length,
+    commentCount: Array.isArray(comments)
+      ? comments.length
+      : Number.isSafeInteger(commentCount)
+        ? commentCount
+        : 0,
     commentsWarning
+  };
+}
+
+function persistedWorkItem(workItem) {
+  const summary = publicWorkItem(workItem);
+  if (!summary) {
+    return null;
+  }
+  return {
+    ...summary,
+    title: safePersistedSummary(summary.title),
+    webUrl: "",
+    commentsWarning: safePersistedSummary(summary.commentsWarning)
   };
 }
 
@@ -1690,6 +1774,18 @@ function finishJob(job, result) {
     }
   }
 
+  if (
+    job.testEvidence.enabled &&
+    job.testEvidence.requireScenarioEvidence &&
+    job.stages["live-test"].status === "passed" &&
+    (!job.testEvidence.reported || !job.testEvidence.scenario)
+  ) {
+    const message =
+      "Live-test passed without required FIXLAB_TEST scenario evidence.";
+    job.stages["live-test"] = { status: "failed", message };
+    job.error = job.error ? `${job.error}; ${message}` : message;
+  }
+
   const missing = FIXLAB_STAGES.filter(
     (stage) => !terminalStatuses.has(job.stages[stage].status)
   );
@@ -1775,15 +1871,47 @@ function requiresFreshRetry(job, action) {
   );
 }
 
+function isContainedPath(root, candidate) {
+  const relativePath = relative(root, candidate);
+  return (
+    relativePath === "" ||
+    (relativePath !== ".." &&
+      !relativePath.startsWith(`..${sep}`) &&
+      !isAbsolute(relativePath))
+  );
+}
+
+function resolveContainedPath(root, candidate, label, { mustExist = false } = {}) {
+  const resolvedRoot = resolve(root);
+  const resolvedCandidate = resolve(resolvedRoot, candidate);
+  if (!isContainedPath(resolvedRoot, resolvedCandidate)) {
+    throw new Error(`${label} must stay within ${resolvedRoot}`);
+  }
+  if (!existsSync(resolvedCandidate)) {
+    if (mustExist) {
+      throw new Error(`${label} does not exist`);
+    }
+    return resolvedCandidate;
+  }
+  const realRoot = realpathSync(resolvedRoot);
+  const realCandidate = realpathSync(resolvedCandidate);
+  if (!isContainedPath(realRoot, realCandidate)) {
+    throw new Error(`${label} resolves outside ${realRoot}`);
+  }
+  return realCandidate;
+}
+
 function playwrightAuthenticationConfig(repository) {
   const profile = loadRepositoryProfile(repository);
   const browserAutomation = profile.browserAutomation ?? {};
   const authentication = browserAutomation.authentication ?? {};
-  const workingDirectory = resolve(
+  const workingDirectory = resolveContainedPath(
     repository,
     browserAutomation.workingDirectory ??
       profile.applications?.frontend?.workingDirectory ??
-      "."
+      ".",
+    "browserAutomation.workingDirectory",
+    { mustExist: true }
   );
   const command =
     typeof authentication.command === "string"
@@ -1824,7 +1952,11 @@ function playwrightAuthenticationStatus(repository, connection) {
     };
   }
   const paths = configuration.statusPaths.map((relativePath) => {
-    const path = resolve(configuration.workingDirectory, relativePath);
+    const path = resolveContainedPath(
+      configuration.workingDirectory,
+      relativePath,
+      "browserAutomation.authentication.statusPaths entry"
+    );
     return {
       path: relativePath,
       ready: existsSync(path)
@@ -1834,7 +1966,10 @@ function playwrightAuthenticationStatus(repository, connection) {
     configured: Boolean(
       configuration.command && configuration.statusPaths.length > 0
     ),
-    ready: paths.length > 0 && paths.every((entry) => entry.ready),
+    ready:
+      Boolean(configuration.command) &&
+      paths.length > 0 &&
+      paths.every((entry) => entry.ready),
     running: Boolean(connection.handle),
     error: "",
     lastResult: connection.lastResult,
@@ -1845,7 +1980,13 @@ function playwrightAuthenticationStatus(repository, connection) {
 function playwrightArtifactRoots(repository) {
   const configuration = playwrightAuthenticationConfig(repository);
   return ["test-results", "playwright-report", "artifacts"]
-    .map((directory) => resolve(configuration.workingDirectory, directory))
+    .map((directory) =>
+      resolveContainedPath(
+        configuration.workingDirectory,
+        directory,
+        `Playwright artifact root ${directory}`
+      )
+    )
     .filter((directory) => existsSync(directory));
 }
 
@@ -1914,11 +2055,6 @@ function listPlaywrightArtifacts(repository, { since = null } = {}) {
   return playwrightArtifactRoots(repository)
     .flatMap((root) =>
       collectPlaywrightArtifacts(root)
-        .filter(
-          (artifact) =>
-            !artifact.relativePath.includes("\\") &&
-            !artifact.relativePath.includes("/")
-        )
         .map((artifact) => ({
           ...artifact,
           relativePath: join(basename(root), artifact.relativePath)
@@ -2019,13 +2155,9 @@ export function createDashboardServer({
   function persistDashboardState() {
     const snapshots = [
       ...(currentJob ? [dashboardSnapshot(currentJob)] : []),
-      ...publicQueue(queuedJobs).map((job) => ({
-        ...privateDashboardSnapshot(job),
-        canResume: false,
-        canComment: false
-      })),
+      ...queuedJobs.map(dashboardSnapshot),
       ...completedJobs.map(dashboardSnapshot),
-      ...persistedJobs.map(privateDashboardSnapshot)
+      ...persistedJobs
     ];
     const unique = [];
     const ids = new Set();

@@ -573,6 +573,20 @@ function selectJob(jobId) {
 }
 
 function renderQueue(currentJob, queue = [], history = []) {
+  const visibleIds = new Set([
+    currentJob?.id,
+    ...queue.map((job) => job.id),
+    ...history.map((job) => job.id)
+  ]);
+  for (const jobId of observedJobs.keys()) {
+    if (!visibleIds.has(jobId)) {
+      observedJobs.delete(jobId);
+      expandedJobIds.delete(jobId);
+    }
+  }
+  if (selectedJobId && !visibleIds.has(selectedJobId)) {
+    selectedJobId = currentJob?.id ?? null;
+  }
   rememberJob(currentJob);
   for (const job of history) {
     rememberJob(job);
@@ -1103,7 +1117,7 @@ retryLiveTestButton.addEventListener("click", async () => {
       body: JSON.stringify({
         action: "retry",
         details:
-          "Reuse the saved authenticated Edge profile and all completed diagnosis, fix, review, and local validation evidence. Rerun only the blocked authenticated Playwright live-test gate with one worker, save at least one non-sensitive screenshot under ms.sap.fmdm.portal/test-results, emit the terminal live-test result, and continue to pull-request creation. Do not skip the live-test or PR stage."
+          "Reuse the repository-profile-defined browser authentication and all completed diagnosis, fix, review, and local validation evidence. Rerun only the blocked Playwright live-test gate using the profile-defined browser and test command, save at least one non-sensitive screenshot under the profile-defined working directory's test-results folder, emit the terminal live-test result, and continue to pull-request creation. Do not skip the live-test or PR stage."
       })
     });
     jobInputMessage.textContent =

@@ -239,6 +239,29 @@ test("dashboard readiness validates configured test synthesis", () => {
   }
 });
 
+test("dashboard readiness requires an explicit test synthesis contract", () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+
+  try {
+    const profile = validProfile();
+    delete profile.browserAutomation.testSynthesis;
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const readiness = inspectRepository(repository);
+
+    assert.equal(readiness.profileReady, false);
+    assert.match(readiness.error, /browserAutomation\.testSynthesis/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard readiness validates the agent idle timeout", () => {
   const repository = createRepository();
   const profilePath = join(
@@ -292,11 +315,38 @@ async function startDashboard(
   workItemLoader,
   options = {}
 ) {
+  const effectiveExecutor =
+    options.autoTestEvidence === false
+      ? executor
+      : (input) => {
+          let reported = false;
+          return executor({
+            ...input,
+            onOutput(stream, text) {
+              if (/FIXLAB_TEST\|/u.test(text)) {
+                reported = true;
+              }
+              if (
+                !reported &&
+                /FIXLAB_STAGE\|live-test\|passed\|/u.test(text)
+              ) {
+                input.onOutput(
+                  "stdout",
+                  "FIXLAB_TEST|synthetic-intercepted|intercepted|Test harness scenario evidence.\n"
+                );
+                reported = true;
+              }
+              input.onOutput(stream, text);
+            }
+          });
+        };
   const dashboard = createDashboardServer({
     repository,
     packageRoot,
-    executor,
-    ...options,
+    executor: effectiveExecutor,
+    ...Object.fromEntries(
+      Object.entries(options).filter(([name]) => name !== "autoTestEvidence")
+    ),
     ...(workItemLoader ? { workItemLoader } : {})
   });
   const address = await dashboard.listen({ port: await availablePort() });
@@ -774,6 +824,42 @@ test("dashboard parses complete stage markers and passes a job", async () => {
   }
 });
 
+test("dashboard fails a passed live test without required scenario evidence", async () => {
+  const repository = createRepository();
+  const executor = ({ onOutput }) => {
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} completed\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(
+    repository,
+    executor,
+    null,
+    { autoTestEvidence: false }
+  );
+
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Require explicit browser scenario evidence.",
+        mode: "validate-only"
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const result = await jsonRequest(url, "/api/job");
+    assert.equal(result.body.job.status, "failed");
+    assert.equal(result.body.job.stages["live-test"].status, "failed");
+    assert.match(result.body.job.error, /required FIXLAB_TEST/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard accepts rendered text stage markers", async () => {
   const repository = createRepository();
   const executor = ({ onOutput }) => {
@@ -1037,6 +1123,12 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
         package: "@playwright/test",
         browser: "chromium",
         testCommand: "npm run test:e2e",
+        testSynthesis: {
+          enabled: true,
+          defaultDataSource: "synthetic-intercepted",
+          mutationMode: "intercepted",
+          requireScenarioEvidence: true
+        },
         authentication: {
           required: true,
           command: "node playwright-auth.js",
@@ -1114,12 +1206,15 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
       join(screenshotDirectory, "hold-option.webm"),
       video
     );
+    const nestedDirectory = join(screenshotDirectory, "nested-journey");
+    mkdirSync(nestedDirectory);
+    writeFileSync(join(nestedDirectory, "nested-proof.png"), screenshot);
     const artifacts = await jsonRequest(
       url,
       `/api/playwright/artifacts?jobId=${job.body.job.id}`
     );
     assert.equal(artifacts.response.status, 200);
-    assert.equal(artifacts.body.artifacts.length, 2);
+    assert.equal(artifacts.body.artifacts.length, 3);
     const imageArtifact = artifacts.body.artifacts.find(
       (artifact) => artifact.name === "hold-option.png"
     );
@@ -1129,6 +1224,13 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.equal(imageArtifact.kind, "image");
     assert.equal(videoArtifact.kind, "video");
     assert.equal(videoArtifact.mimeType, "video/webm");
+    assert.ok(
+      artifacts.body.artifacts.some((artifact) =>
+        /test-results[\\/]nested-journey[\\/]nested-proof\.png/u.test(
+          artifact.relativePath
+        )
+      )
+    );
     assert.match(
       imageArtifact.relativePath,
       /test-results[\\/]hold-option\.png/
@@ -1623,6 +1725,10 @@ test("dashboard bounds retained raw logs while preserving stage summaries", asyn
     for (let index = 0; index < MAX_JOB_LOG_ENTRIES + 20; index += 1) {
       onOutput("stdout", `diagnostic line ${index}\n`);
     }
+    onOutput(
+      "stdout",
+      "FIXLAB_TEST|synthetic-intercepted|intercepted|Bounded logging scenario evidence.\n"
+    );
     for (const stage of FIXLAB_STAGES) {
       onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} summary\n`);
     }
@@ -1645,7 +1751,7 @@ test("dashboard bounds retained raw logs while preserving stage summaries", asyn
 
     assert.equal(result.body.job.status, "passed");
     assert.equal(result.body.job.logs.length, MAX_JOB_LOG_ENTRIES);
-    assert.equal(result.body.job.droppedLogs, 28);
+    assert.equal(result.body.job.droppedLogs, 29);
     assert.equal(result.body.job.stages.pr.message, "pr summary");
   } finally {
     await dashboard.close();

@@ -510,7 +510,9 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
   ).toBeVisible();
   await page.getByRole("button", { name: "Retry Playwright live test" }).click();
   expect(submittedInput.action).toBe("retry");
-  expect(submittedInput.details).toContain("one worker");
+  expect(submittedInput.details).toContain(
+    "profile-defined browser and test command"
+  );
   expect(submittedInput.details).toContain("save at least one");
   expect(submittedInput.details).toContain("Do not skip");
 });
