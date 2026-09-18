@@ -4,6 +4,11 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.5.3 - 2026-09-18
+
+- Install the Playwright Chromium runtime before the tagged release validation
+  gate so browser tests can run on a fresh GitHub-hosted runner.
+
 ## 0.5.2 - 2026-09-18
 
 - Recover persisted running jobs as interrupted and resumable after dashboard
