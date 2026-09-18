@@ -41,56 +41,6 @@ test("Agency executor keeps long prompts out of process arguments", () => {
     sessionId: "11111111-1111-4111-8111-111111111111"
   });
 
-  test("executor completion settles after process exit when inherited pipes remain open", async () => {
-    const child = new EventEmitter();
-    const output = [];
-    const completion = createProcessCompletion(
-      child,
-      (stream, text) => output.push({ stream, text }),
-      5
-    );
-
-    child.emit("exit", 0, null);
-
-    assert.deepEqual(await completion, { code: 0, signal: null });
-    assert.deepEqual(output, []);
-  });
-
-  test("direct Copilot executor preserves stdin sessions and resume", () => {
-    const prompt = `Validate this batch:\n${"x".repeat(40000)}`;
-    const invocation = buildCopilotInvocation({
-      packageRoot: "C:\\FixLab",
-      prompt,
-      sessionId: "22222222-2222-4222-8222-222222222222"
-    });
-
-    assert.equal(invocation.input, prompt);
-    assert.equal(invocation.args.includes(prompt), false);
-    assert.deepEqual(invocation.args.slice(0, 4), [
-      "--plugin-dir",
-      "C:\\FixLab",
-      "--agent",
-      "fixlab:fixlab"
-    ]);
-    assert.equal(invocation.args.includes("--autopilot"), true);
-    assert.deepEqual(invocation.args.slice(-2), [
-      "--session-id",
-      "22222222-2222-4222-8222-222222222222"
-    ]);
-
-    const resumed = buildCopilotInvocation({
-      packageRoot: "C:\\FixLab",
-      prompt,
-      sessionId: "22222222-2222-4222-8222-222222222222",
-      resume: true
-    });
-    assert.equal(resumed.args.includes("--session-id"), false);
-    assert.equal(
-      resumed.args.at(-1),
-      "--resume=22222222-2222-4222-8222-222222222222"
-    );
-  });
-
   assert.equal(invocation.input, prompt);
   assert.equal(invocation.args.includes(prompt), false);
   assert.equal(invocation.args.includes("--interactive"), false);
@@ -116,6 +66,56 @@ test("Agency executor keeps long prompts out of process arguments", () => {
   assert.equal(
     resumed.args.at(-1),
     "--resume=11111111-1111-4111-8111-111111111111"
+  );
+});
+
+test("executor completion settles after process exit when inherited pipes remain open", async () => {
+  const child = new EventEmitter();
+  const output = [];
+  const completion = createProcessCompletion(
+    child,
+    (stream, text) => output.push({ stream, text }),
+    5
+  );
+
+  child.emit("exit", 0, null);
+
+  assert.deepEqual(await completion, { code: 0, signal: null });
+  assert.deepEqual(output, []);
+});
+
+test("direct Copilot executor preserves stdin sessions and resume", () => {
+  const prompt = `Validate this batch:\n${"x".repeat(40000)}`;
+  const invocation = buildCopilotInvocation({
+    packageRoot: "C:\\FixLab",
+    prompt,
+    sessionId: "22222222-2222-4222-8222-222222222222"
+  });
+
+  assert.equal(invocation.input, prompt);
+  assert.equal(invocation.args.includes(prompt), false);
+  assert.deepEqual(invocation.args.slice(0, 4), [
+    "--plugin-dir",
+    "C:\\FixLab",
+    "--agent",
+    "fixlab:fixlab"
+  ]);
+  assert.equal(invocation.args.includes("--autopilot"), true);
+  assert.deepEqual(invocation.args.slice(-2), [
+    "--session-id",
+    "22222222-2222-4222-8222-222222222222"
+  ]);
+
+  const resumed = buildCopilotInvocation({
+    packageRoot: "C:\\FixLab",
+    prompt,
+    sessionId: "22222222-2222-4222-8222-222222222222",
+    resume: true
+  });
+  assert.equal(resumed.args.includes("--session-id"), false);
+  assert.equal(
+    resumed.args.at(-1),
+    "--resume=22222222-2222-4222-8222-222222222222"
   );
 });
 

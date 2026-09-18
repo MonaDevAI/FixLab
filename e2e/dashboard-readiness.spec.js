@@ -208,7 +208,7 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     .getByPlaceholder("123, 456, or one URL/ID per line")
     .fill("123");
   await page.getByRole("button", { name: "Load bugs" }).click();
-  await expect(page.getByAltText("Preview of 123-bug.png")).toBeVisible();
+  await expect(page.locator("#screenshot-list")).toContainText("123-bug.png");
   await expect(page.getByText("1 image(s)")).toBeVisible();
   await expect(page.getByText("Continue this job")).toBeHidden();
   await expect(page.getByText("Workflow statistics")).toBeVisible();
@@ -255,7 +255,7 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
     );
   });
   expect(imagePastePrevented).toBe(true);
-  await expect(page.getByAltText("Preview of clipboard.png")).toBeVisible();
+  await expect(page.locator("#screenshot-list")).toContainText("clipboard.png");
   await expect(page.locator("#screenshot-message")).toHaveText(
     "1 pasted screenshot(s) attached. 1 of 5 selected."
   );

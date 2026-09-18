@@ -113,7 +113,6 @@ const metricCacheReuse = document.querySelector("#metric-cache-reuse");
 const metricStatuses = document.querySelector("#metric-statuses");
 let loadedWorkItems = [];
 let selectedScreenshots = [];
-let screenshotPreviewUrls = [];
 let activeJob = null;
 let selectedJobId = null;
 const observedJobs = new Map();
@@ -778,21 +777,12 @@ function validateSelectedScreenshots() {
 }
 
 function renderScreenshots() {
-  for (const url of screenshotPreviewUrls) {
-    URL.revokeObjectURL(url);
-  }
-  screenshotPreviewUrls = [];
   screenshotList.replaceChildren();
   for (const file of selectedScreenshots) {
     const item = document.createElement("li");
-    const preview = document.createElement("img");
-    const previewUrl = URL.createObjectURL(file);
-    screenshotPreviewUrls.push(previewUrl);
-    preview.src = previewUrl;
-    preview.alt = `Preview of ${file.name}`;
     const label = document.createElement("span");
     label.textContent = `${file.name} (${Math.ceil(file.size / 1024)} KiB)`;
-    item.append(preview, label);
+    item.append(label);
     screenshotList.append(item);
   }
 }
