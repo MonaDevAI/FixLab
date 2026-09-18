@@ -5,20 +5,7 @@ claim. The repository must make its operating constraints discoverable, expose
 repeatable validation, retain machine-readable evidence, and keep humans on the
 review loop.
 
-## Baseline
-
-The initial CodeBlend composite evaluation scored FixLab at **41.1/100**:
-
-- Substrate: 49.4
-- Operation: 34.2
-- Verdict: not AI-ready
-
-The baseline identified missing agent instructions, reproducible environment
-configuration, dependency locking, validation tooling, review ownership,
-machine-readable evidence, bounded cleanup automation, and deterministic
-documentation drift controls.
-
-## Implemented transformation
+## Present readiness controls
 
 - `AGENTS.md`, scoped dashboard instructions, Copilot instructions, and a
   repository custom agent define operating and safety contracts.
@@ -66,7 +53,7 @@ documentation drift controls.
    configuration solely to influence scoring.
 5. Run `npm run validate` and review the machine-readable CI evidence.
 6. Record durable architectural decisions under `docs/adr/`.
-7. Reassess and compare the new score with the prior baseline.
+7. Reassess the current repository state and address material gaps.
 
 Semantic review remains advisory. A control is considered complete only when a
 deterministic repository-wide gate verifies it on affected pull requests.
