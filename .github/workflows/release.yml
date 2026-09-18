@@ -37,8 +37,18 @@ jobs:
           }
           NODE
       - run: npm run validate
-      - run: npm publish --access public --provenance
       - name: Create GitHub release
         run: gh release create "$GITHUB_REF_NAME" --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: Publish to npm
+        if: vars.NPM_PUBLISH_ENABLED == 'true'
+        run: npm publish --access public --provenance
+      - name: Record skipped npm publication
+        if: vars.NPM_PUBLISH_ENABLED != 'true'
+        run: |
+          {
+            echo "## npm publication"
+            echo
+            echo "Skipped because the repository variable \`NPM_PUBLISH_ENABLED\` is not \`true\`."
+          } >> "$GITHUB_STEP_SUMMARY"

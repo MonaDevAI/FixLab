@@ -4,6 +4,11 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.5.4 - 2026-09-18
+
+- Create tagged GitHub releases independently of optional npm publication and
+  require an explicit repository opt-in before publishing to the npm registry.
+
 ## 0.5.3 - 2026-09-18
 
 - Install the Playwright Chromium runtime before the tagged release validation

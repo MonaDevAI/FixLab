@@ -12,6 +12,8 @@ FixLab uses GitHub Actions for continuous integration and tagged releases.
    - Workflow: `.github/workflows/release.yml`
    - Environment: `npm`
 5. Confirm that the npm organization owns the `@fixlab` scope.
+6. Set the repository Actions variable `NPM_PUBLISH_ENABLED` to `true` only
+   after the scope, package, and trusted publisher are ready.
 
 Do not commit npm tokens. The release workflow requests an OpenID Connect token
 and publishes with npm provenance.
@@ -28,8 +30,9 @@ and publishes with npm provenance.
    ```
 
 The workflow verifies that the tag matches the package and plugin versions,
-runs tests, validates the package contents, publishes `@fixlab/cli`, and
-creates the GitHub release.
+runs tests, validates the package contents, and creates the GitHub release.
+It publishes `@fixlab/cli` only when `NPM_PUBLISH_ENABLED` is explicitly set to
+`true`; otherwise the job records that npm publication was skipped.
 
 ## Publish through the GitHub Copilot plugin marketplace
 
@@ -47,7 +50,7 @@ external GitHub source by adding an entry like this to
     "repo": "MonaDevAI/FixLab"
   },
   "description": "Evidence-backed defect diagnosis, repair, and validation for React and .NET repositories.",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "author": {
     "name": "FixLab Contributors"
   },
