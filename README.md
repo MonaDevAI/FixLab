@@ -184,6 +184,7 @@ See the full [security model](docs/security.md).
 | Path | Purpose |
 | --- | --- |
 | [`docs/installation.md`](docs/installation.md) | Agency prerequisite, CLI installation, onboarding, update, and uninstall |
+| [`docs/FixLab-Installation-and-Smoke-Test.docx`](docs/FixLab-Installation-and-Smoke-Test.docx) | Shareable Word guide for GitHub Copilot CLI or Agency installation and a validation-only smoke test |
 | [`docs/getting-started.md`](docs/getting-started.md) | First validation workflow |
 | [`docs/architecture.md`](docs/architecture.md) | Dashboard, broker, runner, profile, and evidence architecture |
 | [`docs/repository-onboarding.md`](docs/repository-onboarding.md) | How an application adopts FixLab |
