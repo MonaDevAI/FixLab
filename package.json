@@ -1,6 +1,6 @@
 {
   "name": "@fixlab/cli",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "Copilot-powered CLI and plugin for evidence-backed React and .NET defect validation.",
   "license": "MIT",
   "homepage": "https://github.com/MonaDevAI/FixLab#readme",
