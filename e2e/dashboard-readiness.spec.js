@@ -430,6 +430,187 @@ test("dashboard lets users select active and queued job roadmaps", async ({
   await expect(page.locator(".stage.passed")).toHaveCount(8);
 });
 
+test("dashboard clears the bug input after adding a job to the queue", async ({
+  page
+}) => {
+  const activeJob = {
+    id: "active-job",
+    request: "Active bug",
+    requestType: "bug-fix",
+    mode: "validate-only",
+    status: "running",
+    stages: {},
+    bugs: [],
+    logs: [],
+    canComment: true,
+    canResume: false,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
+  let submittedRequest;
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "Queued submission",
+          error: null
+        },
+        job: activeJob,
+        queue: [],
+        history: []
+      })
+    });
+  });
+  await page.route("**/api/jobs", async (route) => {
+    submittedRequest = route.request().postDataJSON().request;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: activeJob,
+        queued: true,
+        queuedJob: {
+          id: "queued-job",
+          position: 1,
+          request: submittedRequest,
+          requestType: "bug-fix",
+          mode: "validate-only",
+          status: "queued",
+          bugCount: 0,
+          screenshotCount: 0,
+          stages: {}
+        },
+        queue: [
+          {
+            id: "queued-job",
+            position: 1,
+            request: submittedRequest,
+            requestType: "bug-fix",
+            mode: "validate-only",
+            status: "queued",
+            bugCount: 0,
+            screenshotCount: 0,
+            stages: {}
+          }
+        ],
+        history: []
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+  const requestField = page.getByLabel("Bug or required enhancement");
+  await requestField.fill("Queue this bug and clear the form.");
+  await page.getByRole("button", { name: "Add to queue" }).click();
+
+  await expect.poll(() => submittedRequest).toBe(
+    "Queue this bug and clear the form."
+  );
+  await expect(requestField).toHaveValue("");
+  await expect(requestField).toBeFocused();
+});
+
+test("dashboard explains how to resume a failed job and release the queue", async ({
+  page
+}) => {
+  let dismissed = false;
+  const failedJob = {
+    id: "failed-job",
+    status: "failed",
+    request: "Validate the current pull request.",
+    requestType: "bug-fix",
+    mode: "validate-only",
+    error: "The runtime prerequisite is unavailable.",
+    stages: {},
+    bugs: [],
+    logs: [],
+    canResume: true,
+    canComment: false,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "Failed job guidance",
+          error: null
+        },
+        job: failedJob,
+        queue: [
+          {
+            id: "queued-job",
+            position: 1,
+            request: "Validate the next pull request.",
+            requestType: "bug-fix",
+            mode: "validate-only",
+            status: "queued",
+            bugCount: 0,
+            screenshotCount: 0,
+            stages: {}
+          }
+        ],
+        history: []
+      })
+    });
+  });
+  await page.route("**/api/job/dismiss", async (route) => {
+    dismissed = true;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          id: "queued-job",
+          status: "running",
+          request: "Validate the next pull request.",
+          requestType: "bug-fix",
+          mode: "validate-only",
+          stages: {},
+          bugs: [],
+          logs: [],
+          canResume: false,
+          canComment: true,
+          inputCount: 0,
+          pendingInputCount: 0
+        },
+        dismissedJob: failedJob,
+        queue: [],
+        history: [failedJob]
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+
+  await expect(page.getByRole("heading", { name: "Retry or correct this job" })).toBeVisible();
+  await expect(page.locator("#job-input-guidance")).toContainText(
+    "choose Retry with the available prerequisite"
+  );
+  await expect(page.locator("#job-input-guidance")).toContainText(
+    "dismiss it as failed"
+  );
+  await expect(page.getByRole("button", { name: "Resume FixLab" })).toBeVisible();
+  const dismissButton = page.getByRole("button", {
+    name: "Dismiss failed job and continue queue"
+  });
+  await expect(dismissButton).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await dismissButton.click();
+  await expect.poll(() => dismissed).toBe(true);
+  await expect(page.locator("#job-input-message")).toContainText(
+    "next queued job has started"
+  );
+});
+
 test("dashboard retries a blocked Playwright gate without shell input", async ({
   page
 }) => {

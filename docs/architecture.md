@@ -156,7 +156,10 @@ cannot still own their original process, so the dashboard converts them to an
 interrupted, resumable failure.
 New requests submitted while a job is running, blocked, or failed enter the
 bounded queue. A passed active job starts the next queued job. Blocked and
-failed jobs pause queue advancement so the same session remains resumable.
+failed jobs pause queue advancement so the same session remains resumable. A
+user may explicitly dismiss a failed job without resuming it; FixLab preserves
+the failed outcome in dashboard history, performs no repository mutation for
+that job, and starts the next queued job.
 During execution, the agent can emit bounded `FIXLAB_ACTIVITY` evidence and
 decision summaries. The dashboard shows these summaries in a separate Agent
 analysis panel so users can follow what was checked, what the evidence means,

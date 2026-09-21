@@ -157,7 +157,9 @@ needed; it does not create an empty pull request for external-only outcomes.
 While a job is running, the submit action changes to **Add to queue**. Up to 20
 pending jobs are shown by position. A passed job starts the next automatically;
 a blocked or failed job pauses the queue so its action-needed state remains
-available for same-session resume.
+available for same-session resume. An obsolete failed job can be dismissed
+explicitly; it remains failed in dashboard history and the next queued job
+starts without resuming the failed session.
 Use **Add comment to current job** for a new instruction that belongs to the
 active bug batch or existing pull request. FixLab queues the text for the same
 session and delivers it after the current agent turn instead of creating a
@@ -230,6 +232,10 @@ and resume. Failed jobs can be retried with corrected details, and completed
 jobs can accept one focused addition and update the existing pull request.
 FixLab resumes the same selected-runtime session rather than starting
 diagnosis again.
+A failed job that should not resume can use **Dismiss failed job and continue
+queue**. The dashboard asks for confirmation, retains the failed result in
+history, and starts the next queued job without changing repository work for
+the dismissed job.
 A controlled skip remains visibly recorded as an unverified risk.
 
 For efficient repeat work in the same repository, FixLab reads the profile and

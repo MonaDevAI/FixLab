@@ -66,10 +66,17 @@ approvePullRequestButton.id = "approve-pull-request";
 approvePullRequestButton.type = "button";
 approvePullRequestButton.textContent = "Approve and create PR";
 approvePullRequestButton.hidden = true;
+const dismissFailedJobButton = document.createElement("button");
+dismissFailedJobButton.id = "dismiss-failed-job";
+dismissFailedJobButton.type = "button";
+dismissFailedJobButton.className = "secondary";
+dismissFailedJobButton.textContent = "Dismiss failed job and continue queue";
+dismissFailedJobButton.hidden = true;
 jobInputSubmit.before(
   retryLiveTestButton,
   skipLiveTestButton,
-  approvePullRequestButton
+  approvePullRequestButton,
+  dismissFailedJobButton
 );
 const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
@@ -397,6 +404,8 @@ function renderJob(job, currentActiveJob = job) {
   const canApprovePullRequest =
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
+  const canDismissFailedJob =
+    canResume && job?.status === "failed";
   jobInputPanel.hidden = !(canResume || canComment);
   jobInputSubmit.disabled = !(canResume || canComment);
   retryLiveTestButton.hidden = !canRetryLiveTest;
@@ -405,6 +414,8 @@ function renderJob(job, currentActiveJob = job) {
   skipLiveTestButton.disabled = !canRetryLiveTest;
   approvePullRequestButton.hidden = !canApprovePullRequest;
   approvePullRequestButton.disabled = !canApprovePullRequest;
+  dismissFailedJobButton.hidden = !canDismissFailedJob;
+  dismissFailedJobButton.disabled = !canDismissFailedJob;
   jobInputCount.textContent = job
     ? `${job.inputCount} update(s) · ${job.pendingInputCount} pending`
     : "";
@@ -435,7 +446,7 @@ function renderJob(job, currentActiveJob = job) {
     } else if (job.status === "failed") {
       jobInputTitle.textContent = "Retry or correct this job";
       jobInputGuidance.textContent =
-        "Add the information needed to correct the failure without repeating completed work.";
+        "Review the failure above. To preserve and resume this job, choose Retry with the available prerequisite, enter the correction, then select Resume FixLab. If the job is obsolete, dismiss it as failed to start the next queued job without resuming or changing its repository work.";
     } else {
       jobInputTitle.textContent = "Add details or update the existing PR";
       jobInputGuidance.textContent =
@@ -1062,6 +1073,8 @@ form.addEventListener("submit", async (event) => {
         screenshots
       })
     });
+    requestInput.value = "";
+    requestInput.focus();
     selectedScreenshots = [];
     renderScreenshots();
     showScreenshotResult("");
@@ -1103,6 +1116,41 @@ jobInputSubmit.addEventListener("click", async () => {
   } catch (error) {
     formError.textContent = error.message;
     jobInputSubmit.disabled = false;
+  }
+});
+
+dismissFailedJobButton.addEventListener("click", async () => {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  if (
+    !window.confirm(
+      "Dismiss this failed job? It will remain failed in dashboard history, its session will not resume, and the next queued job will start."
+    )
+  ) {
+    return;
+  }
+  dismissFailedJobButton.disabled = true;
+  try {
+    const body = await fetchJson("/api/job/dismiss", {
+      method: "POST"
+    });
+    jobInputMessage.textContent = body.job
+      ? "Failed job dismissed. The next queued job has started."
+      : "Failed job dismissed. The queue is empty.";
+    if (body.dismissedJob) {
+      rememberJob(body.dismissedJob);
+    }
+    activeJob = body.job;
+    selectedJobId = body.job?.id ?? body.dismissedJob?.id ?? null;
+    if (body.job) {
+      rememberJob(body.job);
+    }
+    renderJob(body.job, activeJob);
+    renderQueue(activeJob, body.queue, body.history);
+    await refreshMetrics();
+  } catch (error) {
+    formError.textContent = error.message;
+    dismissFailedJobButton.disabled = false;
   }
 });
 

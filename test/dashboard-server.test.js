@@ -1407,6 +1407,71 @@ test("dashboard queues concurrent jobs and starts the next passed job", async ()
   }
 });
 
+test("dashboard dismisses a failed job and starts the next queued job", async () => {
+  const repository = createRepository();
+  let executorCalls = 0;
+  const executor = () => {
+    executorCalls += 1;
+    if (executorCalls === 1) {
+      return {
+        completion: Promise.resolve({ code: 1 }),
+        terminate() {}
+      };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const first = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "This failed job should remain in history.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    assert.equal(first.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const failed = await jsonRequest(url, "/api/job");
+    assert.equal(failed.body.job.status, "failed");
+
+    const second = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Start this queued job after dismissal.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    assert.equal(second.response.status, 202);
+    assert.equal(second.body.queued, true);
+
+    const dismissed = await jsonRequest(url, "/api/job/dismiss", {
+      method: "POST"
+    });
+    assert.equal(dismissed.response.status, 202, JSON.stringify(dismissed.body));
+    assert.equal(dismissed.body.dismissedJob.status, "failed");
+    assert.equal(dismissed.body.job.request, "Start this queued job after dismissal.");
+    assert.equal(dismissed.body.job.status, "running");
+    assert.deepEqual(dismissed.body.queue, []);
+    assert.equal(dismissed.body.history[0].status, "failed");
+    assert.equal(executorCalls, 2);
+
+    const rejected = await jsonRequest(url, "/api/job/dismiss", {
+      method: "POST"
+    });
+    assert.equal(rejected.response.status, 409);
+    assert.match(rejected.body.error, /still running/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard persists privacy-safe token and duration metrics", async () => {
   const repository = createGitRepository();
   const executor = ({ onOutput }) => {
