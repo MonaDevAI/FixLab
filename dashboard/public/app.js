@@ -435,7 +435,7 @@ function renderJob(job, currentActiveJob = job) {
     } else if (job.status === "failed") {
       jobInputTitle.textContent = "Retry or correct this job";
       jobInputGuidance.textContent =
-        "Add the information needed to correct the failure without repeating completed work.";
+        "Review the failure above. Choose Retry with the available prerequisite, enter the correction or prerequisite, then select Resume FixLab. Queued jobs remain paused until this active job completes.";
     } else {
       jobInputTitle.textContent = "Add details or update the existing PR";
       jobInputGuidance.textContent =

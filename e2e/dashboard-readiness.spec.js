@@ -430,6 +430,65 @@ test("dashboard lets users select active and queued job roadmaps", async ({
   await expect(page.locator(".stage.passed")).toHaveCount(8);
 });
 
+test("dashboard explains how to resume a failed job and release the queue", async ({
+  page
+}) => {
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "Failed job guidance",
+          error: null
+        },
+        job: {
+          id: "failed-job",
+          status: "failed",
+          request: "Validate the current pull request.",
+          requestType: "bug-fix",
+          mode: "validate-only",
+          error: "The runtime prerequisite is unavailable.",
+          stages: {},
+          bugs: [],
+          logs: [],
+          canResume: true,
+          canComment: false,
+          inputCount: 0,
+          pendingInputCount: 0
+        },
+        queue: [
+          {
+            id: "queued-job",
+            position: 1,
+            request: "Validate the next pull request.",
+            requestType: "bug-fix",
+            mode: "validate-only",
+            status: "queued",
+            bugCount: 0,
+            screenshotCount: 0,
+            stages: {}
+          }
+        ],
+        history: []
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+
+  await expect(page.getByRole("heading", { name: "Retry or correct this job" })).toBeVisible();
+  await expect(page.locator("#job-input-guidance")).toContainText(
+    "Choose Retry with the available prerequisite"
+  );
+  await expect(page.locator("#job-input-guidance")).toContainText(
+    "Queued jobs remain paused"
+  );
+  await expect(page.getByRole("button", { name: "Resume FixLab" })).toBeVisible();
+});
+
 test("dashboard retries a blocked Playwright gate without shell input", async ({
   page
 }) => {
