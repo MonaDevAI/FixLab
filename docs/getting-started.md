@@ -110,6 +110,14 @@ from reaching external systems. The dashboard highlights the configured data
 source and mutation mode, then replaces the pending description with the
 scenario reported by the agent.
 
+When the profile declares `non-production-read-only` and the user explicitly
+selects DEV or SIT, FixLab queries that environment first without intercepting
+business-data reads. If the backend is unavailable or has no safe records
+capable of exercising the required behavior, FixLab records the limitation and
+uses `synthetic-intercepted` for the focused UI assertion. It does not replace
+an expected empty-state check with synthetic data or claim that a synthetic
+pass validated the selected backend.
+
 Start the local dashboard explicitly:
 
 ```powershell

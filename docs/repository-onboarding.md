@@ -63,6 +63,13 @@ instead declare `local-fixture`, `non-production-read-only`, or
 `non-production-approved`; any approved write still requires the normal human
 unsafe-data approval.
 
+With `non-production-read-only`, an explicitly selected DEV or SIT environment
+is tried first. If that backend is unavailable or cannot provide a safe record
+required for the assertion, FixLab may fall back to
+`synthetic-intercepted`/`intercepted` and must report that the backend was not
+validated. Expected empty-state scenarios must remain against the selected
+backend and must not be replaced by synthetic results.
+
 Do not place real credentials, tokens, user identities, customer records, or
 internal service URLs in the profile.
 

@@ -1966,6 +1966,30 @@ test("validate-only prompt prohibits repository changes", () => {
   assert.match(prompt, /not hidden chain-of-thought/);
 });
 
+test("selected non-production data falls back to synthetic only when required", () => {
+  const prompt = buildJobPrompt({
+    request: "Validate result rendering against DEV data.",
+    mode: "validate-only",
+    requestType: "bug-fix",
+    targetEnvironment: "dev",
+    testEvidence: {
+      enabled: true,
+      source: "non-production-read-only",
+      mutationMode: "intercepted",
+      requireScenarioEvidence: true
+    }
+  });
+
+  assert.match(prompt, /Use the selected dev backend and API as the primary/);
+  assert.match(prompt, /Do not fulfill or intercept business-data reads while the selected backend is available/);
+  assert.match(prompt, /returns no safe records capable of exercising/);
+  assert.match(prompt, /fall back to synthetic-intercepted data/);
+  assert.match(prompt, /Do not replace an expected empty-state assertion with synthetic data/);
+  assert.match(prompt, /FIXLAB_TEST with source synthetic-intercepted and mutation mode intercepted/);
+  assert.match(prompt, /A synthetic pass proves the UI behavior only/);
+  assert.match(prompt, /do not claim the selected backend or its data was validated/);
+});
+
 test("dashboard rejects validation environments outside the profile allowlist", async () => {
   const repository = createRepository();
   const { dashboard, url } = await startDashboard(repository, () => {

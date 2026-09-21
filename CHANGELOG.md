@@ -16,6 +16,9 @@ All notable changes to FixLab are documented in this file.
   history entry and advances the queue without resuming repository work.
 - Clear and refocus the bug input after every successful submission, including
   jobs added to the running queue.
+- Use an explicitly selected DEV or SIT read-only backend as the primary data
+  source, with visible synthetic fallback only when required data is
+  unavailable and without claiming backend validation.
 
 ## 0.5.4 - 2026-09-18
 

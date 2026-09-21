@@ -96,6 +96,14 @@ changing external records. The agent emits structured `FIXLAB_TEST` evidence;
 the dashboard highlights the actual data source, mutation behavior, and
 scenario beside the job roadmap.
 
+For an explicitly selected non-production environment whose profile uses
+`non-production-read-only`, the selected backend is the primary data source.
+FixLab may fall back to `synthetic-intercepted` only when the backend cannot be
+reached or cannot provide safe records required to exercise the reported
+behavior. Expected empty-state checks remain real-backend checks. A fallback is
+reported through activity and test-evidence markers and proves only the focused
+UI behavior, not the selected backend or its data.
+
 Jobs can also request local Playwright video evidence. The agent records only
 the focused application journey using repository-supported Playwright video
 capture, retains the required screenshot, and stores WebM or MP4 output under
