@@ -433,6 +433,22 @@ test("dashboard lets users select active and queued job roadmaps", async ({
 test("dashboard explains how to resume a failed job and release the queue", async ({
   page
 }) => {
+  let dismissed = false;
+  const failedJob = {
+    id: "failed-job",
+    status: "failed",
+    request: "Validate the current pull request.",
+    requestType: "bug-fix",
+    mode: "validate-only",
+    error: "The runtime prerequisite is unavailable.",
+    stages: {},
+    bugs: [],
+    logs: [],
+    canResume: true,
+    canComment: false,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
   await page.route("**/api/status", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -444,21 +460,7 @@ test("dashboard explains how to resume a failed job and release the queue", asyn
           profileName: "Failed job guidance",
           error: null
         },
-        job: {
-          id: "failed-job",
-          status: "failed",
-          request: "Validate the current pull request.",
-          requestType: "bug-fix",
-          mode: "validate-only",
-          error: "The runtime prerequisite is unavailable.",
-          stages: {},
-          bugs: [],
-          logs: [],
-          canResume: true,
-          canComment: false,
-          inputCount: 0,
-          pendingInputCount: 0
-        },
+        job: failedJob,
         queue: [
           {
             id: "queued-job",
@@ -476,17 +478,53 @@ test("dashboard explains how to resume a failed job and release the queue", asyn
       })
     });
   });
+  await page.route("**/api/job/dismiss", async (route) => {
+    dismissed = true;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          id: "queued-job",
+          status: "running",
+          request: "Validate the next pull request.",
+          requestType: "bug-fix",
+          mode: "validate-only",
+          stages: {},
+          bugs: [],
+          logs: [],
+          canResume: false,
+          canComment: true,
+          inputCount: 0,
+          pendingInputCount: 0
+        },
+        dismissedJob: failedJob,
+        queue: [],
+        history: [failedJob]
+      })
+    });
+  });
 
   await page.goto(baseUrl);
 
   await expect(page.getByRole("heading", { name: "Retry or correct this job" })).toBeVisible();
   await expect(page.locator("#job-input-guidance")).toContainText(
-    "Choose Retry with the available prerequisite"
+    "choose Retry with the available prerequisite"
   );
   await expect(page.locator("#job-input-guidance")).toContainText(
-    "Queued jobs remain paused"
+    "dismiss it as failed"
   );
   await expect(page.getByRole("button", { name: "Resume FixLab" })).toBeVisible();
+  const dismissButton = page.getByRole("button", {
+    name: "Dismiss failed job and continue queue"
+  });
+  await expect(dismissButton).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await dismissButton.click();
+  await expect.poll(() => dismissed).toBe(true);
+  await expect(page.locator("#job-input-message")).toContainText(
+    "next queued job has started"
+  );
 });
 
 test("dashboard retries a blocked Playwright gate without shell input", async ({

@@ -2518,6 +2518,52 @@ export function createDashboardServer({
 
     if (
       request.method === "POST" &&
+      requestUrl.pathname === "/api/job/dismiss"
+    ) {
+      if (!currentJob) {
+        sendJson(response, 404, { error: "no FixLab job is available" });
+        return;
+      }
+      if (activeHandle) {
+        sendJson(response, 409, {
+          error: "the current FixLab agent is still running or shutting down"
+        });
+        return;
+      }
+      if (currentJob.status !== "failed") {
+        sendJson(response, 409, {
+          error: "only a failed FixLab job can be dismissed"
+        });
+        return;
+      }
+
+      const dismissedJob = currentJob;
+      pushLog(dismissedJob, {
+        index: dismissedJob.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message:
+          "Failed job dismissed by the user; its failed outcome remains in dashboard history."
+      });
+      if (dismissedJob.artifactDirectory) {
+        removeArtifactDirectory(dismissedJob.artifactDirectory);
+        artifactDirectories.delete(dismissedJob.artifactDirectory);
+      }
+      archiveJob(dismissedJob);
+      currentJob = null;
+      startNextJob();
+      persistDashboardState();
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        dismissedJob: publicJob(dismissedJob),
+        queue: publicQueue(queuedJobs),
+        history: dashboardHistory()
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
       requestUrl.pathname === "/api/job/input"
     ) {
       if (!currentJob) {

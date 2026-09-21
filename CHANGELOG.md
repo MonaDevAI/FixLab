@@ -12,6 +12,8 @@ All notable changes to FixLab are documented in this file.
   mandatory fields, and document the explicit test-synthesis upgrade.
 - Explain directly in the dashboard how to correct and resume a failed active
   job before its paused queue can continue.
+- Add an explicit, confirmed failed-job dismissal that preserves the failed
+  history entry and advances the queue without resuming repository work.
 
 ## 0.5.4 - 2026-09-18
 
