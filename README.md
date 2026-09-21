@@ -257,6 +257,11 @@ mode. With `synthetic-intercepted`, Playwright fulfills business-data reads
 locally and intercepts mutations, allowing the UI payload and request count to
 be verified without changing a real record. The dashboard displays the
 reported scenario, data source, and mutation behavior as explicit evidence.
+When a user selects DEV or SIT and the profile uses
+`non-production-read-only`, FixLab uses that selected backend first. It falls
+back to synthetic-intercepted data only when the backend is unavailable or
+cannot provide safe records needed for the assertion, and it records that the
+synthetic result did not validate the backend.
 
 The primary input is only the bug or required enhancement. FixLab obtains
 commands, applications, allowed systems and environments, and live-test
