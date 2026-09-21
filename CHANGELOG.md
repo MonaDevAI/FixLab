@@ -8,6 +8,8 @@ All notable changes to FixLab are documented in this file.
   guidance to distinguish current GitHub distribution from pending npm,
   marketplace, and hosted-service work.
 - Identify MonaDevAI as the plugin publisher in marketplace-facing metadata.
+- Warn when `fixlab init` preserves an older profile that requires newly
+  mandatory fields, and document the explicit test-synthesis upgrade.
 
 ## 0.5.4 - 2026-09-18
 

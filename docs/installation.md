@@ -158,6 +158,41 @@ Replace the template paths, commands, ports, health URLs, environments, and
 pull request settings with values owned by that repository. Never add
 credentials or sensitive test data to the profile.
 
+### Upgrade an existing repository profile
+
+`fixlab init` preserves an existing profile and never overwrites repository
+policy. After updating FixLab, run:
+
+```powershell
+fixlab init
+fixlab doctor --runtime copilot
+```
+
+The first command reports fields that require a manual profile upgrade. The
+doctor command validates the resulting profile before the dashboard starts.
+
+Profiles created before test synthesis became required must add an explicit
+policy. Use the repository's actual data-safety model rather than copying an
+environment choice blindly:
+
+```json
+{
+  "browserAutomation": {
+    "testSynthesis": {
+      "enabled": true,
+      "defaultDataSource": "synthetic-intercepted",
+      "mutationMode": "intercepted",
+      "requireScenarioEvidence": true
+    }
+  }
+}
+```
+
+Use `synthetic-intercepted` when reads and writes should remain local. A
+repository that intentionally reads approved DEV or SIT data can use
+`non-production-read-only`; retain `intercepted` unless external writes have a
+separately reviewed approval policy.
+
 ## Check the machine and repository
 
 Run:
