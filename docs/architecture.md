@@ -96,6 +96,14 @@ changing external records. The agent emits structured `FIXLAB_TEST` evidence;
 the dashboard highlights the actual data source, mutation behavior, and
 scenario beside the job roadmap.
 
+Synthesized Playwright source files are transient validation artifacts by
+default. FixLab removes them, along with validation-only configuration edits,
+before reviewing or creating the product pull request. A generated
+authenticated test is persisted only when the user explicitly requests
+permanent browser-test coverage or repository instructions require that exact
+test. Existing unrelated browser journeys are not changed to make a broad
+suite pass.
+
 For an explicitly selected non-production environment whose profile uses
 `non-production-read-only`, the selected backend is the primary data source.
 FixLab may fall back to `synthetic-intercepted` only when the backend cannot be

@@ -56,6 +56,13 @@ The profile must also declare:
 - `browserAutomation.dataSafety.policy`, describing mock, read-only, or intercepted-mutation behavior.
 - `browserAutomation.dataSafety.productionAllowed: false`.
 
+Synthesized scenario source is transient by default. The agent must remove
+generated test files and validation-only configuration changes before the
+product pull request. A repository can require a permanent generated browser
+test through its instructions, or the user can request one explicitly;
+otherwise newly created authenticated `*.auth.spec.ts` files are validation
+artifacts rather than product changes.
+
 Use `defaultDataSource: "synthetic-intercepted"` with
 `mutationMode: "intercepted"` when Playwright should fulfill reads locally and
 capture mutation intent without changing an external record. Repositories may

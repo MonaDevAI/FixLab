@@ -797,6 +797,22 @@ test("dashboard parses complete stage markers and passes a job", async () => {
       receivedPrompt,
       /save at least one non-sensitive screenshot/i
     );
+    assert.match(
+      receivedPrompt,
+      /Treat a synthesized Playwright scenario as a transient validation artifact/
+    );
+    assert.match(
+      receivedPrompt,
+      /Do not add a newly generated authenticated test such as `\*\.auth\.spec\.ts`/
+    );
+    assert.match(
+      receivedPrompt,
+      /Remove its source file and any validation-only configuration edits before diff review/
+    );
+    assert.match(
+      receivedPrompt,
+      /do not broaden the pull request to repair unrelated or stale browser journeys/
+    );
     assert.match(receivedPrompt, /Do not invent or hardcode environment choices/i);
     assert.match(receivedPrompt, /Create or update the pull request only after all required gates pass/i);
     assert.match(receivedPrompt, /authentication, unsafe-data approval/i);
