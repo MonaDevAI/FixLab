@@ -30,6 +30,13 @@ Install only the tools required by the repository profile.
 6. Document the repository's process ownership and cleanup rules.
 7. Validate the profile before enabling pull request creation.
 
+When the profile already exists, `fixlab init` preserves it and reports that
+new required fields must be merged manually. Run `fixlab doctor` after every
+FixLab update; a dashboard **Not ready** message identifies the exact missing
+or invalid profile field. See the
+[installation guide](installation.md#upgrade-an-existing-repository-profile)
+for the current profile-upgrade workflow.
+
 Review the repository-owned restore commands, then prepare the fresh checkout:
 
 ```powershell

@@ -272,6 +272,21 @@ function init(repository) {
   let created = 0;
   if (existsSync(destination)) {
     console.log(`Kept existing FixLab profile: ${destination}`);
+    console.log(
+      "Existing profiles are preserved and are not upgraded automatically. Run fixlab doctor and merge newly required fields from the current profile template."
+    );
+    try {
+      const profile = JSON.parse(readFileSync(destination, "utf8"));
+      if (profile?.browserAutomation?.testSynthesis === undefined) {
+        console.log(
+          "Profile upgrade required: add browserAutomation.testSynthesis with an approved data source, mutation mode, and scenario evidence requirement."
+        );
+      }
+    } catch {
+      console.log(
+        "The existing profile could not be parsed; fix its JSON before running fixlab doctor."
+      );
+    }
   } else {
     mkdirSync(dirname(destination), { recursive: true });
     copyFileSync(

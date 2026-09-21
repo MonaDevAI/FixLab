@@ -137,6 +137,14 @@ test("init preserves existing profile and prompt files", () => {
 
     assert.equal(second.status, 0);
     assert.match(second.stdout, /Kept existing FixLab profile/);
+    assert.match(
+      second.stdout,
+      /Existing profiles are preserved and are not upgraded automatically/
+    );
+    assert.match(
+      second.stdout,
+      /Profile upgrade required: add browserAutomation\.testSynthesis/
+    );
     assert.match(second.stdout, /Kept existing FixLab prompt/);
     assert.match(second.stdout, /Kept existing FixLab agent/);
     assert.equal(readFileSync(profilePath, "utf8"), '{"name":"custom"}');
