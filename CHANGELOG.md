@@ -4,6 +4,8 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.6.0 - 2026-09-21
+
 - Refresh installation, release, marketplace, availability, and team-rollout
   guidance to distinguish current GitHub distribution from pending npm,
   marketplace, and hosted-service work.

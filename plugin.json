@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "fixlab",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "description": "Evidence-backed defect diagnosis, repair, and validation for React and .NET repositories.",
   "homepage": "https://github.com/MonaDevAI/FixLab",
   "repository": "https://github.com/MonaDevAI/FixLab",

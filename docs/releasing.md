@@ -34,7 +34,7 @@ runs tests, validates the package contents, and creates the GitHub release.
 It publishes `@fixlab/cli` only when `NPM_PUBLISH_ENABLED` is explicitly set to
 `true`; otherwise the job records that npm publication was skipped.
 
-As of `v0.5.4`, the GitHub release is published, npm publication remains
+As of `v0.6.0`, the GitHub release is published, npm publication remains
 disabled, and the generated GitHub release has no attached `.tgz` asset.
 Install the current CLI directly from `github:MonaDevAI/FixLab`.
 
@@ -54,7 +54,7 @@ external GitHub source by adding an entry like this to
     "repo": "MonaDevAI/FixLab"
   },
   "description": "Evidence-backed defect diagnosis, repair, and validation for React and .NET repositories.",
-  "version": "0.5.4",
+  "version": "0.6.0",
   "author": {
     "name": "MonaDevAI",
     "url": "https://github.com/MonaDevAI"

@@ -208,7 +208,7 @@ See the full [security model](docs/security.md).
 
 ## Current availability
 
-The current GitHub release is `v0.5.4`. This repository contains an installable
+The current GitHub release is `v0.6.0`. This repository contains an installable
 CLI, an Agent Plugins 1.0 package for direct GitHub Copilot CLI use, an
 Agency-compatible agent, the local dashboard, repository onboarding assets,
 and the validation workflow. Install from GitHub while npm and official
