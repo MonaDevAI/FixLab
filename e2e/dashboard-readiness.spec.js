@@ -430,6 +430,90 @@ test("dashboard lets users select active and queued job roadmaps", async ({
   await expect(page.locator(".stage.passed")).toHaveCount(8);
 });
 
+test("dashboard clears the bug input after adding a job to the queue", async ({
+  page
+}) => {
+  const activeJob = {
+    id: "active-job",
+    request: "Active bug",
+    requestType: "bug-fix",
+    mode: "validate-only",
+    status: "running",
+    stages: {},
+    bugs: [],
+    logs: [],
+    canComment: true,
+    canResume: false,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
+  let submittedRequest;
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "Queued submission",
+          error: null
+        },
+        job: activeJob,
+        queue: [],
+        history: []
+      })
+    });
+  });
+  await page.route("**/api/jobs", async (route) => {
+    submittedRequest = route.request().postDataJSON().request;
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: activeJob,
+        queued: true,
+        queuedJob: {
+          id: "queued-job",
+          position: 1,
+          request: submittedRequest,
+          requestType: "bug-fix",
+          mode: "validate-only",
+          status: "queued",
+          bugCount: 0,
+          screenshotCount: 0,
+          stages: {}
+        },
+        queue: [
+          {
+            id: "queued-job",
+            position: 1,
+            request: submittedRequest,
+            requestType: "bug-fix",
+            mode: "validate-only",
+            status: "queued",
+            bugCount: 0,
+            screenshotCount: 0,
+            stages: {}
+          }
+        ],
+        history: []
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+  const requestField = page.getByLabel("Bug or required enhancement");
+  await requestField.fill("Queue this bug and clear the form.");
+  await page.getByRole("button", { name: "Add to queue" }).click();
+
+  await expect.poll(() => submittedRequest).toBe(
+    "Queue this bug and clear the form."
+  );
+  await expect(requestField).toHaveValue("");
+  await expect(requestField).toBeFocused();
+});
+
 test("dashboard explains how to resume a failed job and release the queue", async ({
   page
 }) => {

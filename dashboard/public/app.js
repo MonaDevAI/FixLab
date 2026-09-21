@@ -1073,6 +1073,8 @@ form.addEventListener("submit", async (event) => {
         screenshots
       })
     });
+    requestInput.value = "";
+    requestInput.focus();
     selectedScreenshots = [];
     renderScreenshots();
     showScreenshotResult("");

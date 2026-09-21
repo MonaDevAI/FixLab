@@ -14,6 +14,8 @@ All notable changes to FixLab are documented in this file.
   job before its paused queue can continue.
 - Add an explicit, confirmed failed-job dismissal that preserves the failed
   history entry and advances the queue without resuming repository work.
+- Clear and refocus the bug input after every successful submission, including
+  jobs added to the running queue.
 
 ## 0.5.4 - 2026-09-18
 
