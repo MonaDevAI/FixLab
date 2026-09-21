@@ -110,6 +110,12 @@ from reaching external systems. The dashboard highlights the configured data
 source and mutation mode, then replaces the pending description with the
 scenario reported by the agent.
 
+Generated Playwright scenario files are temporary by default and are removed
+before the product diff is committed or proposed. FixLab does not add a new
+authenticated `*.auth.spec.ts` file unless the request explicitly asks for
+permanent browser-test coverage or repository instructions require that exact
+test.
+
 When the profile declares `non-production-read-only` and the user explicitly
 selects DEV or SIT, FixLab queries that environment first without intercepting
 business-data reads. If the backend is unavailable or has no safe records

@@ -50,6 +50,14 @@ instructions provide authoritative commands.
 9. Stop only processes owned by the current FixLab job.
 10. Present evidence, skipped gates, and remaining risks.
 
+Runtime-synthesized Playwright scenarios are transient validation artifacts by
+default. Remove their source files and validation-only configuration edits
+before review, commit, push, or pull-request creation. Do not add newly
+generated authenticated tests such as `*.auth.spec.ts` to a product change
+unless the user explicitly requests permanent browser-test coverage or
+repository instructions require that exact persisted test. Do not modify
+unrelated or stale browser journeys merely to make a broad suite pass.
+
 ## Safety boundaries
 
 - Never select production automatically.

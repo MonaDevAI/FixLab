@@ -4,6 +4,12 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.6.1 - 2026-09-21
+
+- Keep synthesized authenticated Playwright scenarios out of product pull
+  requests unless permanent browser-test coverage is explicitly requested or
+  required by repository instructions.
+
 ## 0.6.0 - 2026-09-21
 
 - Refresh installation, release, marketplace, availability, and team-rollout
