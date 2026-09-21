@@ -25,14 +25,18 @@ and publishes with npm provenance.
 3. Create and push the matching tag:
 
    ```shell
-   git tag v0.3.0
-   git push origin v0.3.0
+   git tag v<version>
+   git push origin v<version>
    ```
 
 The workflow verifies that the tag matches the package and plugin versions,
 runs tests, validates the package contents, and creates the GitHub release.
 It publishes `@fixlab/cli` only when `NPM_PUBLISH_ENABLED` is explicitly set to
 `true`; otherwise the job records that npm publication was skipped.
+
+As of `v0.5.4`, the GitHub release is published, npm publication remains
+disabled, and the generated GitHub release has no attached `.tgz` asset.
+Install the current CLI directly from `github:MonaDevAI/FixLab`.
 
 ## Publish through the GitHub Copilot plugin marketplace
 
@@ -52,7 +56,8 @@ external GitHub source by adding an entry like this to
   "description": "Evidence-backed defect diagnosis, repair, and validation for React and .NET repositories.",
   "version": "0.5.4",
   "author": {
-    "name": "FixLab Contributors"
+    "name": "MonaDevAI",
+    "url": "https://github.com/MonaDevAI"
   },
   "homepage": "https://github.com/MonaDevAI/FixLab",
   "repository": "https://github.com/MonaDevAI/FixLab",
@@ -82,7 +87,10 @@ Before opening the marketplace pull request:
 6. Include the validation results, supported operating systems, required local
    tools, and the security and data-handling boundaries in the pull request.
 
-After the marketplace change is merged, users install FixLab with:
+Marketplace publication is independent of merging changes into
+`MonaDevAI/FixLab`. Until the separate `github/copilot-plugins` pull request is
+accepted, users must install from the FixLab repository. After that marketplace
+change is merged, users install FixLab with:
 
 ```shell
 copilot plugin install fixlab@copilot-plugins

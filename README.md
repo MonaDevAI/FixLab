@@ -59,8 +59,11 @@ passed, what was skipped, and what still needs human attention.
    dashboard` explicitly starts the local dashboard and opens it in the system
    browser.
 
-   After FixLab is listed in the official GitHub Copilot plugin marketplace,
-   install the plugin directly with:
+   FixLab is not yet listed in the official GitHub Copilot plugin marketplace
+   and `@fixlab/cli` is not published to the public npm registry. For current
+   evaluation, install the CLI and plugin directly from this GitHub repository.
+   After the separate marketplace submission is reviewed and merged, the
+   stable plugin command will be:
 
    ```shell
    copilot plugin install fixlab@copilot-plugins
@@ -184,6 +187,7 @@ See the full [security model](docs/security.md).
 | Path | Purpose |
 | --- | --- |
 | [`docs/installation.md`](docs/installation.md) | Agency prerequisite, CLI installation, onboarding, update, and uninstall |
+| [`docs/FixLab-Installation-and-Smoke-Test.docx`](docs/FixLab-Installation-and-Smoke-Test.docx) | Shareable Word guide for GitHub Copilot CLI or Agency installation and a validation-only smoke test |
 | [`docs/getting-started.md`](docs/getting-started.md) | First validation workflow |
 | [`docs/architecture.md`](docs/architecture.md) | Dashboard, broker, runner, profile, and evidence architecture |
 | [`docs/repository-onboarding.md`](docs/repository-onboarding.md) | How an application adopts FixLab |
@@ -204,15 +208,16 @@ See the full [security model](docs/security.md).
 
 ## Current availability
 
-This repository now contains an installable CLI and local Agency plugin in
-addition to the reusable architecture, onboarding contract, and repository
-profile template. The CLI provides repository initialization, prerequisite
-diagnostics, direct agent launch, and validation-only pull request launch.
+The current GitHub release is `v0.5.4`. This repository contains an installable
+CLI, an Agent Plugins 1.0 package for direct GitHub Copilot CLI use, an
+Agency-compatible agent, the local dashboard, repository onboarding assets,
+and the validation workflow. Install from GitHub while npm and official
+marketplace publication remain pending.
 
 The current package launches Agency locally by default and can launch GitHub
-Copilot CLI directly. A shared dashboard, durable broker, and registered runner
-service remain separate future distribution layers. The included dashboard is
-a single-user local interface bound to `127.0.0.1`.
+Copilot CLI directly. The included dashboard is a single-user local interface
+bound to `127.0.0.1`. FixLab does not currently provide a hosted multi-user
+broker, shared dashboard, or managed runner service.
 
 Start it from an onboarded repository:
 
