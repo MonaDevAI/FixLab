@@ -40,7 +40,8 @@ dashboard starts only when you run `fixlab dashboard`.
 
 ## Install directly from GitHub
 
-Install the public repository with npm:
+FixLab is not currently published to the public npm registry. Install the
+public GitHub repository with npm:
 
 ```powershell
 npm install --global github:MonaDevAI/FixLab
@@ -58,8 +59,9 @@ copilot plugin install MonaDevAI/FixLab
 ```
 
 GitHub Copilot CLI warns that direct repository plugin installs are deprecated.
-After FixLab is accepted into the official marketplace, use the stable
-marketplace form:
+FixLab is not yet listed in the official marketplace. After its separate
+marketplace pull request is reviewed and merged, use the stable marketplace
+form:
 
 ```powershell
 copilot plugin install fixlab@copilot-plugins
@@ -136,15 +138,6 @@ fixlab --help
 
 This installs the `fixlab` command. The CLI retains the packaged Agency plugin
 and launches it through the existing `agency` executable.
-
-## Install from a package file
-
-If a release provides `fixlab-cli-<version>.tgz`, install it directly:
-
-```powershell
-npm install --global .\fixlab-cli-0.4.0.tgz
-fixlab --help
-```
 
 ## Onboard an application repository
 

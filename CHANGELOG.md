@@ -4,6 +4,11 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Refresh installation, release, marketplace, availability, and team-rollout
+  guidance to distinguish current GitHub distribution from pending npm,
+  marketplace, and hosted-service work.
+- Identify MonaDevAI as the plugin publisher in marketplace-facing metadata.
+
 ## 0.5.4 - 2026-09-18
 
 - Create tagged GitHub releases independently of optional npm publication and
