@@ -31,8 +31,10 @@ review loop.
 - The versioned contracts under `specs/v1/` define autofix behavior and
   evidence requirements, while the repository policy checker keeps local
   branch-protection intent aligned with CI and rollback controls.
-- The active `main` ruleset requires an approving code-owner review, dismisses
-  stale approvals, and blocks merging until `test` and `analyze` succeed.
+- The active `main` ruleset uses the repository's explicit solo-maintainer
+  model: it does not require an impossible independent self-approval, but still
+  requires resolved review threads plus passing `test` and `analyze` checks.
+  Linear history, deletion protection, and force-push protection remain active.
 - The scheduled `agentic-rule-review` workflow reviews independent run
   evidence and may open a bounded candidate-rule issue; promotion remains a
   human-reviewed pull-request change.

@@ -16,11 +16,12 @@ import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../bin/fixlab.js", import.meta.url));
 
-function run(args, cwd, environment = {}) {
+function run(args, cwd, environment = {}, input = undefined) {
   return spawnSync(process.execPath, [cli, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...environment }
+    env: { ...process.env, ...environment },
+    input
   });
 }
 
@@ -441,8 +442,8 @@ test("run launches the Agency-resolved FixLab agent", () => {
     writeFileSync(
       executable,
       process.platform === "win32"
-        ? "@echo off\r\necho %*\r\n"
-        : "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+        ? "@echo off\r\necho ARGS:%*\r\nmore\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\ncat\n"
     );
     if (process.platform !== "win32") {
       chmodSync(executable, 0o755);
@@ -466,7 +467,8 @@ test("run launches the Agency-resolved FixLab agent", () => {
     );
 
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
+    assert.match(result.stdout, /ARGS:copilot --plugin-dir .*FixLab --agent fixlab:fixlab/);
+    assert.doesNotMatch(result.stdout, /--interactive/);
     assert.match(result.stdout, /Use development as the user-selected validation environment/);
     assert.match(result.stdout, /Do not silently fall back/);
     assert.match(result.stdout, /primary business-data source/);
@@ -476,6 +478,79 @@ test("run launches the Agency-resolved FixLab agent", () => {
     assert.match(result.stdout, /transient validation artifacts/);
     assert.match(result.stdout, /\*\.auth\.spec\.ts/);
     assert.match(result.stdout, /Request: repair the defect/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("Agency backend-first guidance requires both environment and read-only source", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "agency.cmd" : "agency"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\nmore\r\n"
+        : "#!/bin/sh\ncat\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+    const environment = {
+      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+    };
+
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    const selectedWithoutReadOnly = run(
+      [
+        "run",
+        repository,
+        "--environment",
+        "development",
+        "--",
+        "repair",
+        "the",
+        "defect"
+      ],
+      repository,
+      environment
+    );
+    assert.equal(selectedWithoutReadOnly.status, 0);
+    assert.match(
+      selectedWithoutReadOnly.stdout,
+      /Use development as the user-selected validation environment/
+    );
+    assert.doesNotMatch(
+      selectedWithoutReadOnly.stdout,
+      /primary business-data source/
+    );
+
+    profile.browserAutomation.testSynthesis.defaultDataSource =
+      "non-production-read-only";
+    writeFileSync(profilePath, JSON.stringify(profile));
+    const readOnlyWithoutSelection = run(
+      ["run", repository, "--", "repair", "the", "defect"],
+      repository,
+      environment
+    );
+    assert.equal(readOnlyWithoutSelection.status, 0);
+    assert.doesNotMatch(
+      readOnlyWithoutSelection.stdout,
+      /primary business-data source/
+    );
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -495,8 +570,8 @@ test("run launches the FixLab plugin directly through Copilot", () => {
     writeFileSync(
       executable,
       process.platform === "win32"
-        ? "@echo off\r\nset /p PROMPT=\r\necho ARGS:%*\r\necho PROMPT:%PROMPT%\r\n"
-        : "#!/bin/sh\nIFS= read -r prompt\nprintf 'ARGS:%s\\nPROMPT:%s\\n' \"$*\" \"$prompt\"\n"
+        ? "@echo off\r\necho ARGS:%*\r\nmore\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\ncat\n"
     );
     if (process.platform !== "win32") {
       chmodSync(executable, 0o755);
@@ -545,20 +620,116 @@ test("run without a request preserves interactive Agency mode", () => {
     writeFileSync(
       executable,
       process.platform === "win32"
-        ? "@echo off\r\necho %*\r\n"
-        : "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+        ? "@echo off\r\necho ARGS:%*\r\nmore\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\ncat\n"
     );
     if (process.platform !== "win32") {
       chmodSync(executable, 0o755);
     }
 
-    const result = run(["run", repository], repository, {
-      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
-    });
+    const result = run(
+      ["run", repository],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      },
+      "interactive input\n"
+    );
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
     assert.doesNotMatch(result.stdout, /--interactive/);
+    assert.match(result.stdout, /interactive input/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("run without a request keeps Agency guidance interactive", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "agency.cmd" : "agency"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\necho ARGS:%*\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(
+      ["run", repository, "--environment", "development"],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      }
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /--interactive/);
+    assert.doesNotMatch(result.stdout, /--session-id/);
+    assert.doesNotMatch(result.stdout, /--no-ask-user/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("run without a request keeps Copilot environment guidance interactive", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "copilot.cmd" : "copilot"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\necho ARGS:%*\r\nmore\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\ncat\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(
+      [
+        "run",
+        repository,
+        "--runtime",
+        "copilot",
+        "--environment",
+        "development"
+      ],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      },
+      "inherited-standard-input\n"
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /--interactive/);
+    assert.match(
+      result.stdout,
+      /Use development as the user-selected validation environment/
+    );
+    assert.doesNotMatch(result.stdout, /--session-id/);
+    assert.doesNotMatch(result.stdout, /--no-ask-user/);
+    assert.doesNotMatch(result.stdout, /--autopilot/);
+    assert.match(result.stdout, /inherited-standard-input/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

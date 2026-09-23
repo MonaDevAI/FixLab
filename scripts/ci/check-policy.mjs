@@ -31,14 +31,21 @@ export function checkBranchPolicy(policy) {
       failures.push(`branch policy is missing required check: ${requiredCheck}`);
     }
   }
-  if ((policy.pullRequest?.requiredApprovingReviews ?? 0) < 1) {
-    failures.push("branch policy must require at least one approving review");
+  if (policy.maintainerModel !== "solo") {
+    failures.push("branch policy must declare the solo maintainer model");
+  }
+  if (policy.pullRequest?.requiredApprovingReviews !== 0) {
+    failures.push(
+      "solo branch policy must not require an impossible independent approval"
+    );
   }
   if (policy.pullRequest?.dismissStaleApprovals !== true) {
     failures.push("branch policy must dismiss stale approvals");
   }
-  if (policy.pullRequest?.requireCodeOwnerReview !== true) {
-    failures.push("branch policy must require code-owner review");
+  if (policy.pullRequest?.requireCodeOwnerReview !== false) {
+    failures.push(
+      "solo branch policy must not require approval from its only code owner"
+    );
   }
   if (policy.pullRequest?.requireReviewThreadResolution !== true) {
     failures.push("branch policy must require review-thread resolution");

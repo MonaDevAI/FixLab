@@ -11,6 +11,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildAgencyInvocation,
   buildCopilotInvocation,
   configuredValidationEnvironments,
   createDashboardServer,
@@ -669,27 +670,34 @@ function launch(repository, request, runtime, targetEnvironment = "") {
     request || selectedEnvironment
       ? `${guidance}${request ? ` Request: ${request}` : ""}`
       : "";
-  const invocation =
-    runtime === "copilot"
+  const invocation = request
+    ? runtime === "copilot"
       ? buildCopilotInvocation({
           packageRoot,
           prompt,
           sessionId: randomUUID()
         })
-      : {
-          args: [
-            "copilot",
-            "--plugin-dir",
-            packageRoot,
-            "--agent",
-            "fixlab:fixlab",
-            ...(prompt ? ["--interactive", prompt] : [])
-          ]
-        };
+      : buildAgencyInvocation({
+          packageRoot,
+          prompt,
+          sessionId: randomUUID()
+        })
+    : {
+        args: [
+          ...(runtime === "agency" ? ["copilot"] : []),
+          "--plugin-dir",
+          packageRoot,
+          "--agent",
+          "fixlab:fixlab",
+          ...(prompt ? ["--interactive", prompt] : [])
+        ]
+      };
+  const forwardsPrompt =
+    typeof invocation.input === "string" && invocation.input.length > 0;
   const result = spawnSync(runtime, invocation.args, {
     cwd: repository,
-    stdio: prompt && runtime === "copilot" ? ["pipe", "inherit", "inherit"] : "inherit",
-    input: runtime === "copilot" ? invocation.input : undefined,
+    stdio: forwardsPrompt ? ["pipe", "inherit", "inherit"] : "inherit",
+    input: forwardsPrompt ? invocation.input : undefined,
     shell: process.platform === "win32"
   });
   return result.status ?? 1;

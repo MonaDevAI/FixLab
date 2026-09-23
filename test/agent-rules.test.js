@@ -40,14 +40,17 @@ test("agent rule governance accepts a bounded lifecycle corpus", () => {
 
 test("cross-runtime validation guidance stays aligned", () => {
   const root = join(import.meta.dirname, "..");
-  const entryPoints = [
+  const runtimeEntryPoints = [
     "dashboard/server.js",
-    "bin/fixlab.js",
+    "bin/fixlab.js"
+  ];
+  const agentEntryPoints = [
     "agents/fixlab.md",
     "com.github.copilot/agents/fixlab.agent.md",
     "templates/fixlab-autofix.agent.md",
     ".github/agents/fixlab-autofix.agent.md"
   ];
+  const entryPoints = [...runtimeEntryPoints, ...agentEntryPoints];
 
   for (const entryPoint of entryPoints) {
     const content = readFileSync(join(root, entryPoint), "utf8");
@@ -98,6 +101,20 @@ test("cross-runtime validation guidance stays aligned", () => {
     );
   }
 
+  for (const entryPoint of agentEntryPoints) {
+    const content = readFileSync(join(root, entryPoint), "utf8");
+    assert.match(
+      content,
+      /profile selects `non-production-read-only`[\s\S]{0,160}selects any profile-approved non-production environment[\s\S]{0,220}primary business-data source/,
+      `${entryPoint} must condition backend-first guidance on both profile source and environment selection`
+    );
+    assert.match(
+      content,
+      /Fall back to `synthetic-intercepted` only when[\s\S]{0,180}(?:unreachable|access fails)[\s\S]{0,180}no safe records/,
+      `${entryPoint} must condition synthetic fallback on access or safe-record failure`
+    );
+  }
+
   const browserRule = readFileSync(
     join(
       root,
@@ -117,13 +134,15 @@ test("repository policy matches enforced CI and rollback controls", () => {
   assert.deepEqual(checkPolicy(root), []);
 });
 
-test("branch policy rejects missing or disabled code-owner review", () => {
+test("branch policy supports a protected solo-maintainer workflow", () => {
   const policy = {
     targetBranch: "main",
+    maintainerModel: "solo",
     requiredStatusChecks: ["test", "analyze"],
     pullRequest: {
-      requiredApprovingReviews: 1,
+      requiredApprovingReviews: 0,
       dismissStaleApprovals: true,
+      requireCodeOwnerReview: false,
       requireReviewThreadResolution: true
     },
     history: {
@@ -132,11 +151,19 @@ test("branch policy rejects missing or disabled code-owner review", () => {
       blockForcePush: true
     }
   };
-  const failure = "branch policy must require code-owner review";
 
-  assert.ok(checkBranchPolicy(policy).includes(failure));
-  policy.pullRequest.requireCodeOwnerReview = false;
-  assert.ok(checkBranchPolicy(policy).includes(failure));
+  assert.deepEqual(checkBranchPolicy(policy), []);
+  policy.pullRequest.requiredApprovingReviews = 1;
+  assert.ok(
+    checkBranchPolicy(policy).includes(
+      "solo branch policy must not require an impossible independent approval"
+    )
+  );
+  policy.pullRequest.requiredApprovingReviews = 0;
   policy.pullRequest.requireCodeOwnerReview = true;
-  assert.ok(!checkBranchPolicy(policy).includes(failure));
+  assert.ok(
+    checkBranchPolicy(policy).includes(
+      "solo branch policy must not require approval from its only code owner"
+    )
+  );
 });

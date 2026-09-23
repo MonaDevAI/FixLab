@@ -3,14 +3,15 @@
   "repository": "MonaDevAI/FixLab",
   "rulesetId": 22968357,
   "targetBranch": "main",
+  "maintainerModel": "solo",
   "requiredStatusChecks": [
     "test",
     "analyze"
   ],
   "pullRequest": {
-    "requiredApprovingReviews": 1,
+    "requiredApprovingReviews": 0,
     "dismissStaleApprovals": true,
-    "requireCodeOwnerReview": true,
+    "requireCodeOwnerReview": false,
     "requireReviewThreadResolution": true,
     "allowedMergeMethods": [
       "squash"

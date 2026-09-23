@@ -2006,6 +2006,41 @@ test("selected non-production data falls back to synthetic only when required", 
   assert.match(prompt, /do not claim the selected backend or its data was validated/);
 });
 
+test("backend-first prompt guidance requires environment and read-only source", () => {
+  const withoutEnvironment = buildJobPrompt({
+    request: "Validate result rendering.",
+    mode: "validate-only",
+    requestType: "bug-fix",
+    testEvidence: {
+      enabled: true,
+      source: "non-production-read-only",
+      mutationMode: "intercepted",
+      requireScenarioEvidence: true
+    }
+  });
+  assert.doesNotMatch(
+    withoutEnvironment,
+    /backend and API as the primary business-data source/
+  );
+
+  const withoutReadOnlySource = buildJobPrompt({
+    request: "Validate result rendering against DEV data.",
+    mode: "validate-only",
+    requestType: "bug-fix",
+    targetEnvironment: "dev",
+    testEvidence: {
+      enabled: true,
+      source: "profile-defined",
+      mutationMode: "profile-defined",
+      requireScenarioEvidence: true
+    }
+  });
+  assert.doesNotMatch(
+    withoutReadOnlySource,
+    /backend and API as the primary business-data source/
+  );
+});
+
 test("dashboard rejects validation environments outside the profile allowlist", async () => {
   const repository = createRepository();
   const { dashboard, url } = await startDashboard(repository, () => {

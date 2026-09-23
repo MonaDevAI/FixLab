@@ -9,6 +9,15 @@ All notable changes to FixLab are documented in this file.
   entry points.
 - Promote a scoped learned rule and regression gate for cross-runtime
   behavioral guidance parity.
+- Forward CLI requests to Agency over standard input and verify that
+  backend-first guidance appears only when both an approved environment and
+  non-production read-only data are selected.
+- Keep request-free runs interactive in both runtimes by reserving stdin
+  forwarding and autonomous invocation flags for runs that carry a request,
+  and preserve inherited terminal input for interactive use.
+- Align the protected `main` ruleset with the explicit solo-maintainer model
+  while retaining CI, CodeQL, review-thread, linear-history, deletion, and
+  force-push controls.
 
 ## 0.6.1 - 2026-09-21
 
