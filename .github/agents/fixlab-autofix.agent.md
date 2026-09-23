@@ -57,7 +57,12 @@ only for information that cannot be established safely from the repository.
 6. **Prove UI-visible fixes.** For a browser-visible bug, create or update a
    real Playwright scenario using the configured browser working directory.
    Derive the route, inputs, action, and exact observable assertion from the
-   bug. Do not ship a skipped placeholder.
+   bug. Do not ship a skipped placeholder. Treat a runtime-synthesized
+   Playwright scenario as a transient validation artifact by default. Remove
+   its source file and validation-only configuration edits before review,
+   commit, push, or pull-request creation. Do not add a newly generated
+   authenticated test such as `*.auth.spec.ts` unless the developer explicitly
+   requests permanent coverage or repository instructions require it.
 7. **Validate.** Run the narrowest relevant profile commands first, then every
    required type-check, lint, test, build, and browser gate affected by the
    change. Use only profile-approved non-production environments. Never report
@@ -79,3 +84,10 @@ only for information that cannot be established safely from the repository.
 - Start only profile-defined applications and stop only processes started and
   tracked during this bugfix session.
 - Never bypass a validation or approval gate merely to make a scenario pass.
+- When the profile selects `non-production-read-only` test data and the
+  developer selects any profile-approved non-production environment, use that
+  backend and API as the primary business-data source, keep access read-only,
+  and intercept mutations. Fall back to `synthetic-intercepted` only when
+  access fails or no safe records can exercise the behavior. Preserve the
+  limitation, do not replace an expected empty state, and report that a
+  synthetic pass proves UI behavior only.
