@@ -381,8 +381,11 @@ fixlab dashboard --runtime copilot
 
 Set `FIXLAB_RUNTIME=copilot` to make direct mode the local default. Long
 dashboard prompts continue to travel over standard input rather than process
-arguments. Session IDs, resume, streaming output, stage markers, queueing,
-metrics, evidence, and validation gates remain identical across adapters.
+arguments. `fixlab run` also uses stdin when request text is supplied. Without
+a request, the CLI inherits terminal stdin and stays interactive; an
+environment-only selection is supplied as interactive guidance. Session IDs,
+resume, streaming output, stage markers, queueing, metrics, evidence, and
+validation gates remain identical across dashboard adapters.
 
 The dashboard includes **Check status** and **Connect Playwright** controls when
 the repository profile defines `browserAutomation.authentication`. Status is

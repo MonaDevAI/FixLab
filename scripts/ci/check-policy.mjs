@@ -31,20 +31,21 @@ export function checkBranchPolicy(policy) {
       failures.push(`branch policy is missing required check: ${requiredCheck}`);
     }
   }
-  if (policy.maintainerModel !== "solo") {
-    failures.push("branch policy must declare the solo maintainer model");
+  if (policy.maintainerModel !== "owner-bypass") {
+    failures.push("branch policy must declare the owner-bypass maintainer model");
   }
-  if (policy.pullRequest?.requiredApprovingReviews !== 0) {
-    failures.push(
-      "solo branch policy must not require an impossible independent approval"
-    );
+  if ((policy.pullRequest?.requiredApprovingReviews ?? 0) < 1) {
+    failures.push("branch policy must require contributor approval");
   }
   if (policy.pullRequest?.dismissStaleApprovals !== true) {
     failures.push("branch policy must dismiss stale approvals");
   }
-  if (policy.pullRequest?.requireCodeOwnerReview !== false) {
+  if (policy.pullRequest?.requireCodeOwnerReview !== true) {
+    failures.push("branch policy must require code-owner review");
+  }
+  if (policy.bypass?.repositoryRole !== "admin") {
     failures.push(
-      "solo branch policy must not require approval from its only code owner"
+      "branch policy must reserve owner bypass for repository administrators"
     );
   }
   if (policy.pullRequest?.requireReviewThreadResolution !== true) {

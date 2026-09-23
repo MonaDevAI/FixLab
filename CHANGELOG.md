@@ -15,9 +15,10 @@ All notable changes to FixLab are documented in this file.
 - Keep request-free runs interactive in both runtimes by reserving stdin
   forwarding and autonomous invocation flags for runs that carry a request,
   and preserve inherited terminal input for interactive use.
-- Align the protected `main` ruleset with the explicit solo-maintainer model
-  while retaining CI, CodeQL, review-thread, linear-history, deletion, and
-  force-push controls.
+- Require code-owner approval for non-admin contributors while retaining an
+  administrator bypass for the repository owner's own validated changes.
+- Clarify that request-bearing CLI runs forward prompts through stdin while
+  request-free runs inherit terminal input and remain interactive.
 
 ## 0.6.1 - 2026-09-21
 

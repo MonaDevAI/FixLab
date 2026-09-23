@@ -205,16 +205,20 @@ omitted; it does not feed unbounded logs back into prompts.
 Polled job responses expose only Azure DevOps identity and state summaries,
 not the full loaded descriptions and reproduction text.
 
-Both runtime adapters stream the generated agent prompt through standard input rather
-than placing it on the process command line. This keeps multi-bug requests and
-other long inputs below operating-system command-line limits while preserving
-the same in-memory prompt and output stream.
+Dashboard jobs stream the generated agent prompt through standard input rather
+than placing it on the process command line. Request-bearing `fixlab run`
+commands use the same stdin transport. Request-free CLI runs instead inherit
+terminal stdin so Agency or direct Copilot remains interactive; an
+environment-only selection is passed as interactive guidance rather than
+starting an autonomous session. This keeps long requests below operating-system
+command-line limits without breaking terminal interaction.
 
-The Agency adapter invokes `agency copilot` with the plugin-qualified
-`fixlab:fixlab` agent. The direct adapter invokes `copilot`, where the packaged
-agent is registered as `fixlab`, with explicit UUID session or resume identity,
-streaming output, non-interactive blocker behavior, and the same tool approval
-contract. Direct mode additionally enables Copilot autopilot.
+The dashboard Agency adapter invokes `agency copilot` with the plugin-qualified
+`fixlab:fixlab` agent. The direct dashboard adapter invokes `copilot`, where the
+packaged agent is registered as `fixlab`, with explicit UUID session or resume
+identity, streaming output, non-interactive blocker behavior, and the same tool
+approval contract. Direct dashboard mode additionally enables Copilot
+autopilot.
 Runtime selection changes only execution transport; queueing, marker parsing,
 metrics, evidence, validation gates, and pull-request rules remain shared.
 
