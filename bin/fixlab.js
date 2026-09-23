@@ -647,12 +647,28 @@ function launch(repository, request, runtime, targetEnvironment = "") {
     return 1;
   }
 
-  const environmentDirective = selectedEnvironment
-    ? `Use ${selectedEnvironment} as the user-selected validation environment for profile-defined application startup and Playwright live testing. Do not silently fall back to another environment; block with the exact prerequisite if ${selectedEnvironment} is unavailable or unsafe.`
-    : "";
-  const prompt = environmentDirective
-    ? `${environmentDirective}${request ? ` Request: ${request}` : ""}`
-    : request;
+  const guidance = [
+    "Treat runtime-synthesized Playwright scenarios as transient validation artifacts by default. Remove their source files and validation-only configuration edits before review, commit, push, or pull-request creation. Do not add newly generated authenticated tests such as *.auth.spec.ts unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.",
+    ...(selectedEnvironment
+      ? [
+        `Use ${selectedEnvironment} as the user-selected validation environment for profile-defined application startup and Playwright live testing. Do not silently fall back to another environment; block with the exact prerequisite if ${selectedEnvironment} is unavailable or unsafe.`,
+        ...(profile.browserAutomation?.testSynthesis?.defaultDataSource ===
+        "non-production-read-only"
+          ? [
+              `Use the selected ${selectedEnvironment} backend and API as the primary business-data source. Keep backend access read-only and intercept every mutating request.`,
+              "Do not fulfill or intercept business-data reads while the selected backend is available and returns safe records that can prove the required assertions.",
+              "Fall back to synthetic-intercepted data only when the selected backend is unreachable, access prevents the read, or it returns no safe records capable of exercising the required behavior. Preserve the exact backend limitation.",
+              "Do not replace an expected empty-state assertion with synthetic data. A synthetic pass proves the UI behavior only and must not be reported as validation of the selected backend or its data.",
+              "When fallback occurs, emit FIXLAB_ACTIVITY with the reason and FIXLAB_TEST with source synthetic-intercepted and mutation mode intercepted."
+            ]
+          : [])
+      ]
+      : [])
+  ].join(" ");
+  const prompt =
+    request || selectedEnvironment
+      ? `${guidance}${request ? ` Request: ${request}` : ""}`
+      : "";
   const invocation =
     runtime === "copilot"
       ? buildCopilotInvocation({

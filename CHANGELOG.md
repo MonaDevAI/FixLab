@@ -4,6 +4,12 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Keep backend-first validation and transient synthesized-Playwright cleanup
+  guidance aligned across dashboard, CLI, packaged-agent, and initialized-agent
+  entry points.
+- Promote a scoped learned rule and regression gate for cross-runtime
+  behavioral guidance parity.
+
 ## 0.6.1 - 2026-09-21
 
 - Keep synthesized authenticated Playwright scenarios out of product pull

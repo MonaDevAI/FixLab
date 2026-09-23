@@ -423,6 +423,16 @@ test("run launches the Agency-resolved FixLab agent", () => {
 
   try {
     assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.browserAutomation.testSynthesis.defaultDataSource =
+      "non-production-read-only";
+    writeFileSync(profilePath, JSON.stringify(profile));
     mkdirSync(executableDirectory);
     const executable = join(
       executableDirectory,
@@ -459,6 +469,12 @@ test("run launches the Agency-resolved FixLab agent", () => {
     assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
     assert.match(result.stdout, /Use development as the user-selected validation environment/);
     assert.match(result.stdout, /Do not silently fall back/);
+    assert.match(result.stdout, /primary business-data source/);
+    assert.match(result.stdout, /synthetic pass proves the UI behavior only/);
+    assert.match(result.stdout, /FIXLAB_ACTIVITY/);
+    assert.match(result.stdout, /FIXLAB_TEST/);
+    assert.match(result.stdout, /transient validation artifacts/);
+    assert.match(result.stdout, /\*\.auth\.spec\.ts/);
     assert.match(result.stdout, /Request: repair the defect/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
@@ -506,7 +522,9 @@ test("run launches the FixLab plugin directly through Copilot", () => {
     assert.equal(result.status, 0);
     assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
     assert.match(result.stdout, /--autopilot/);
-    assert.match(result.stdout, /PROMPT:repair the defect/);
+    assert.match(result.stdout, /transient validation artifacts/);
+    assert.match(result.stdout, /\*\.auth\.spec\.ts/);
+    assert.match(result.stdout, /Request: repair the defect/);
     assert.doesNotMatch(result.stdout, /--interactive repair the defect/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
