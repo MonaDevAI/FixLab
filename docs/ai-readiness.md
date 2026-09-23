@@ -32,10 +32,12 @@ review loop.
   evidence requirements, while the repository policy checker keeps local
   branch-protection intent aligned with CI and rollback controls.
 - The active `main` ruleset requires one code-owner approval for non-admin
-  contributors. The repository owner can use the ruleset's administrator bypass
-  for their own validated changes after `test` and `analyze` pass. Review-thread
-  resolution, linear history, deletion protection, and force-push protection
-  remain active for every merge.
+  contributors. The repository owner has an administrator bypass for their own
+  changes, and repository policy permits using it only after `test` and
+  `analyze` pass. GitHub's administrator bypass can technically skip ruleset
+  controls, so owner merges rely on that documented maintainer discipline;
+  non-bypassed merges enforce approval, review-thread resolution, linear
+  history, deletion protection, and force-push protection.
 - The scheduled `agentic-rule-review` workflow reviews independent run
   evidence and may open a bounded candidate-rule issue; promotion remains a
   human-reviewed pull-request change.

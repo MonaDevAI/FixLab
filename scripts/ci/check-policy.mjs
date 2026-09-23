@@ -40,7 +40,9 @@ export function checkBranchPolicy(policy) {
     !Number.isInteger(requiredApprovingReviews) ||
     requiredApprovingReviews !== 1
   ) {
-    failures.push("branch policy must require exactly one contributor approval");
+    failures.push(
+      "branch policy must require exactly one contributor approval"
+    );
   }
   if (policy.pullRequest?.dismissStaleApprovals !== true) {
     failures.push("branch policy must dismiss stale approvals");
