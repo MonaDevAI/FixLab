@@ -178,4 +178,11 @@ test("branch policy requires contributor review while allowing owner bypass", ()
       "branch policy must reserve owner bypass for repository administrators"
     )
   );
+  policy.bypass.repositoryRole = "admin";
+  policy.maintainerModel = "solo";
+  assert.ok(
+    checkBranchPolicy(policy).includes(
+      "branch policy must declare the owner-bypass maintainer model"
+    )
+  );
 });
