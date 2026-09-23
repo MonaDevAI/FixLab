@@ -531,6 +531,39 @@ test("run launches the FixLab plugin directly through Copilot", () => {
   }
 });
 
+test("run without a request preserves interactive Agency mode", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "agency.cmd" : "agency"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\necho %*\r\n"
+        : "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(["run", repository], repository, {
+      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+    });
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
+    assert.doesNotMatch(result.stdout, /--interactive/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("runtime selection rejects unsupported values", () => {
   const result = run(
     ["run", "--runtime", "unknown", "--", "validate"],

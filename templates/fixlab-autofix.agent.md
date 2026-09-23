@@ -85,8 +85,9 @@ only for information that cannot be established safely from the repository.
   tracked during this bugfix session.
 - Never bypass a validation or approval gate merely to make a scenario pass.
 - When the profile selects `non-production-read-only` test data and the
-  developer selects DEV or SIT, use that backend and API as the primary
-  business-data source, keep access read-only, and intercept mutations. Fall
-  back to `synthetic-intercepted` only when access fails or no safe records can
-  exercise the behavior. Preserve the limitation, do not replace an expected
-  empty state, and report that a synthetic pass proves UI behavior only.
+  developer selects any profile-approved non-production environment, use that
+  backend and API as the primary business-data source, keep access read-only,
+  and intercept mutations. Fall back to `synthetic-intercepted` only when
+  access fails or no safe records can exercise the behavior. Preserve the
+  limitation, do not replace an expected empty state, and report that a
+  synthetic pass proves UI behavior only.

@@ -59,13 +59,13 @@ repository instructions require that exact persisted test. Do not modify
 unrelated or stale browser journeys merely to make a broad suite pass.
 
 When the repository profile selects `non-production-read-only` test data and
-the user selects a DEV or SIT environment, use that backend and API as the
-primary business-data source. Keep access read-only and intercept mutations.
-Fall back to `synthetic-intercepted` only when the backend is unreachable,
-access prevents the read, or no safe records can exercise the required
-behavior. Preserve the exact limitation, do not replace an expected empty
-state with synthetic data, and state that a synthetic pass proves UI behavior
-only rather than validation of the selected backend or its data.
+the user selects any profile-approved non-production environment, use that
+backend and API as the primary business-data source. Keep access read-only and
+intercept mutations. Fall back to `synthetic-intercepted` only when the backend
+is unreachable, access prevents the read, or no safe records can exercise the
+required behavior. Preserve the exact limitation, do not replace an expected
+empty state with synthetic data, and state that a synthetic pass proves UI
+behavior only rather than validation of the selected backend or its data.
 
 ## Safety boundaries
 

@@ -58,6 +58,31 @@ test("cross-runtime validation guidance stays aligned", () => {
     );
     assert.match(
       content,
+      /read-only/,
+      `${entryPoint} must preserve read-only backend access`
+    );
+    assert.match(
+      content,
+      /intercept(?:\s+every)?\s+mutat/,
+      `${entryPoint} must preserve mutation interception`
+    );
+    assert.match(
+      content,
+      /(?:unreachable|access fails|access prevents the read)/,
+      `${entryPoint} must preserve access-failure fallback conditions`
+    );
+    assert.match(
+      content,
+      /no safe records/,
+      `${entryPoint} must preserve safe-record fallback conditions`
+    );
+    assert.match(
+      content,
+      /expected\s+empty[- ]state|expected\s+empty\s+state/,
+      `${entryPoint} must preserve empty-state behavior`
+    );
+    assert.match(
+      content,
       /synthetic pass proves\s+(?:the\s+)?UI\s+behavior\s+only/,
       `${entryPoint} must preserve the synthetic fallback limitation`
     );
@@ -72,6 +97,18 @@ test("cross-runtime validation guidance stays aligned", () => {
       `${entryPoint} must preserve authenticated-test persistence guidance`
     );
   }
+
+  const browserRule = readFileSync(
+    join(
+      root,
+      ".github",
+      "instructions",
+      "browser-event-registration.instructions.md"
+    ),
+    "utf8"
+  );
+  assert.match(browserRule, /applyTo: "dashboard\/public\/\*\*\/\*\.js"/);
+  assert.match(browserRule, /event registration/);
 });
 
 test("repository policy matches enforced CI and rollback controls", () => {

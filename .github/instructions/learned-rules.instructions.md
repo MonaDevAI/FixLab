@@ -1,19 +1,8 @@
 ---
-applyTo: "**/*"
+applyTo: "dashboard/server.js,bin/fixlab.js,agents/**/*.md,com.github.copilot/agents/**/*.md,templates/**/*.md,.github/agents/**/*.md"
 ---
 
 # Active learned rules
-
-## Keep browser event registration outside request helpers
-
-Request helpers must perform one request, validate its response, and return the
-response body. Browser event registration and reusable UI helpers must remain
-at module scope. This prevents repeated handler registration and avoids
-helpers becoming inaccessible to later UI flows.
-
-**Origin:** ESLint exposed nested dashboard helpers during the 2026 AI-readiness
-transformation. The correction moved handlers and helper functions out of
-`fetchJson` and added enforced lint coverage.
 
 ## Mirror cross-runtime guidance in every execution entry point
 
