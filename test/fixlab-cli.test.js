@@ -620,20 +620,26 @@ test("run without a request preserves interactive Agency mode", () => {
     writeFileSync(
       executable,
       process.platform === "win32"
-        ? "@echo off\r\necho %*\r\n"
-        : "#!/bin/sh\nprintf '%s\\n' \"$*\"\n"
+        ? "@echo off\r\necho ARGS:%*\r\nmore\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\ncat\n"
     );
     if (process.platform !== "win32") {
       chmodSync(executable, 0o755);
     }
 
-    const result = run(["run", repository], repository, {
-      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
-    });
+    const result = run(
+      ["run", repository],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      },
+      "interactive input\n"
+    );
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
     assert.doesNotMatch(result.stdout, /--interactive/);
+    assert.match(result.stdout, /interactive input/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
