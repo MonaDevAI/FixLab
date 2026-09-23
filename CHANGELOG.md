@@ -12,6 +12,8 @@ All notable changes to FixLab are documented in this file.
 - Forward CLI requests to Agency over standard input and verify that
   backend-first guidance appears only when both an approved environment and
   non-production read-only data are selected.
+- Keep request-free runs interactive by reserving stdin forwarding and the
+  autonomous Agency invocation for runs that carry a request.
 
 ## 0.6.1 - 2026-09-21
 

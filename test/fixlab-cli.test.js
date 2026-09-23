@@ -16,11 +16,12 @@ import { fileURLToPath } from "node:url";
 
 const cli = fileURLToPath(new URL("../bin/fixlab.js", import.meta.url));
 
-function run(args, cwd, environment = {}) {
+function run(args, cwd, environment = {}, input = undefined) {
   return spawnSync(process.execPath, [cli, ...args], {
     cwd,
     encoding: "utf8",
-    env: { ...process.env, ...environment }
+    env: { ...process.env, ...environment },
+    input
   });
 }
 
@@ -633,6 +634,79 @@ test("run without a request preserves interactive Agency mode", () => {
     assert.equal(result.status, 0);
     assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
     assert.doesNotMatch(result.stdout, /--interactive/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("run without a request keeps Agency guidance interactive", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "agency.cmd" : "agency"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\necho ARGS:%*\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(
+      ["run", repository, "--environment", "development"],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      }
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /--interactive/);
+    assert.doesNotMatch(result.stdout, /--session-id/);
+    assert.doesNotMatch(result.stdout, /--no-ask-user/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("run without a request keeps Copilot standard input interactive", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "copilot.cmd" : "copilot"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32" ? "@echo off\r\nmore\r\n" : "#!/bin/sh\ncat\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+
+    const result = run(
+      ["run", repository, "--runtime", "copilot"],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      },
+      "inherited-standard-input\n"
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /inherited-standard-input/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

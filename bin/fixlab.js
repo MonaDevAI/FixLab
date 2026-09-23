@@ -677,7 +677,7 @@ function launch(repository, request, runtime, targetEnvironment = "") {
           prompt,
           sessionId: randomUUID()
         })
-      : prompt
+      : request
         ? buildAgencyInvocation({
             packageRoot,
             prompt,
@@ -689,10 +689,12 @@ function launch(repository, request, runtime, targetEnvironment = "") {
             "--plugin-dir",
             packageRoot,
             "--agent",
-            "fixlab:fixlab"
+            "fixlab:fixlab",
+            ...(prompt ? ["--interactive", prompt] : [])
           ]
         };
-  const forwardsPrompt = typeof invocation.input === "string";
+  const forwardsPrompt =
+    typeof invocation.input === "string" && invocation.input.length > 0;
   const result = spawnSync(runtime, invocation.args, {
     cwd: repository,
     stdio: forwardsPrompt ? ["pipe", "inherit", "inherit"] : "inherit",
