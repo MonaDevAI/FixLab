@@ -134,13 +134,15 @@ test("repository policy matches enforced CI and rollback controls", () => {
   assert.deepEqual(checkPolicy(root), []);
 });
 
-test("branch policy rejects missing or disabled code-owner review", () => {
+test("branch policy supports a protected solo-maintainer workflow", () => {
   const policy = {
     targetBranch: "main",
+    maintainerModel: "solo",
     requiredStatusChecks: ["test", "analyze"],
     pullRequest: {
-      requiredApprovingReviews: 1,
+      requiredApprovingReviews: 0,
       dismissStaleApprovals: true,
+      requireCodeOwnerReview: false,
       requireReviewThreadResolution: true
     },
     history: {
@@ -149,11 +151,19 @@ test("branch policy rejects missing or disabled code-owner review", () => {
       blockForcePush: true
     }
   };
-  const failure = "branch policy must require code-owner review";
 
-  assert.ok(checkBranchPolicy(policy).includes(failure));
-  policy.pullRequest.requireCodeOwnerReview = false;
-  assert.ok(checkBranchPolicy(policy).includes(failure));
+  assert.deepEqual(checkBranchPolicy(policy), []);
+  policy.pullRequest.requiredApprovingReviews = 1;
+  assert.ok(
+    checkBranchPolicy(policy).includes(
+      "solo branch policy must not require an impossible independent approval"
+    )
+  );
+  policy.pullRequest.requiredApprovingReviews = 0;
   policy.pullRequest.requireCodeOwnerReview = true;
-  assert.ok(!checkBranchPolicy(policy).includes(failure));
+  assert.ok(
+    checkBranchPolicy(policy).includes(
+      "solo branch policy must not require approval from its only code owner"
+    )
+  );
 });
