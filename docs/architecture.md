@@ -215,7 +215,7 @@ command-line limits without breaking terminal interaction.
 
 The dashboard Agency adapter invokes `agency copilot` with the plugin-qualified
 `fixlab:fixlab` agent. The direct dashboard adapter invokes `copilot`, where the
-packaged agent is registered as `fixlab`, with explicit UUID session or resume
+packaged agent is selected as `fixlab:fixlab`, with explicit UUID session or resume
 identity, streaming output, non-interactive blocker behavior, and the same tool
 approval contract. Direct dashboard mode additionally enables Copilot
 autopilot.
