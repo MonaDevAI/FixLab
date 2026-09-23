@@ -683,7 +683,7 @@ test("run without a request keeps Agency guidance interactive", () => {
   }
 });
 
-test("run without a request keeps Copilot standard input interactive", () => {
+test("run without a request keeps Copilot environment guidance interactive", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
   const executableDirectory = join(repository, "bin");
 
@@ -696,14 +696,23 @@ test("run without a request keeps Copilot standard input interactive", () => {
     );
     writeFileSync(
       executable,
-      process.platform === "win32" ? "@echo off\r\nmore\r\n" : "#!/bin/sh\ncat\n"
+      process.platform === "win32"
+        ? "@echo off\r\necho ARGS:%*\r\nmore\r\n"
+        : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\ncat\n"
     );
     if (process.platform !== "win32") {
       chmodSync(executable, 0o755);
     }
 
     const result = run(
-      ["run", repository, "--runtime", "copilot"],
+      [
+        "run",
+        repository,
+        "--runtime",
+        "copilot",
+        "--environment",
+        "development"
+      ],
       repository,
       {
         PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
@@ -712,6 +721,14 @@ test("run without a request keeps Copilot standard input interactive", () => {
     );
 
     assert.equal(result.status, 0);
+    assert.match(result.stdout, /--interactive/);
+    assert.match(
+      result.stdout,
+      /Use development as the user-selected validation environment/
+    );
+    assert.doesNotMatch(result.stdout, /--session-id/);
+    assert.doesNotMatch(result.stdout, /--no-ask-user/);
+    assert.doesNotMatch(result.stdout, /--autopilot/);
     assert.match(result.stdout, /inherited-standard-input/);
   } finally {
     rmSync(repository, { recursive: true, force: true });

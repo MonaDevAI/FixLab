@@ -670,29 +670,28 @@ function launch(repository, request, runtime, targetEnvironment = "") {
     request || selectedEnvironment
       ? `${guidance}${request ? ` Request: ${request}` : ""}`
       : "";
-  const invocation =
-    runtime === "copilot"
+  const invocation = request
+    ? runtime === "copilot"
       ? buildCopilotInvocation({
           packageRoot,
           prompt,
           sessionId: randomUUID()
         })
-      : request
-        ? buildAgencyInvocation({
-            packageRoot,
-            prompt,
-            sessionId: randomUUID()
-          })
-      : {
-          args: [
-            "copilot",
-            "--plugin-dir",
-            packageRoot,
-            "--agent",
-            "fixlab:fixlab",
-            ...(prompt ? ["--interactive", prompt] : [])
-          ]
-        };
+      : buildAgencyInvocation({
+          packageRoot,
+          prompt,
+          sessionId: randomUUID()
+        })
+    : {
+        args: [
+          ...(runtime === "agency" ? ["copilot"] : []),
+          "--plugin-dir",
+          packageRoot,
+          "--agent",
+          "fixlab:fixlab",
+          ...(prompt ? ["--interactive", prompt] : [])
+        ]
+      };
   const forwardsPrompt =
     typeof invocation.input === "string" && invocation.input.length > 0;
   const result = spawnSync(runtime, invocation.args, {
