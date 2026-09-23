@@ -34,7 +34,12 @@ export function checkBranchPolicy(policy) {
   if (policy.maintainerModel !== "owner-bypass") {
     failures.push("branch policy must declare the owner-bypass maintainer model");
   }
-  if ((policy.pullRequest?.requiredApprovingReviews ?? 0) < 1) {
+  const requiredApprovingReviews =
+    policy.pullRequest?.requiredApprovingReviews;
+  if (
+    !Number.isInteger(requiredApprovingReviews) ||
+    requiredApprovingReviews < 1
+  ) {
     failures.push("branch policy must require contributor approval");
   }
   if (policy.pullRequest?.dismissStaleApprovals !== true) {

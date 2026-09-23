@@ -156,12 +156,14 @@ test("branch policy requires contributor review while allowing owner bypass", ()
   };
 
   assert.deepEqual(checkBranchPolicy(policy), []);
-  policy.pullRequest.requiredApprovingReviews = 0;
-  assert.ok(
-    checkBranchPolicy(policy).includes(
-      "branch policy must require contributor approval"
-    )
-  );
+  for (const invalidCount of [0, "1", true, 1.5, Infinity]) {
+    policy.pullRequest.requiredApprovingReviews = invalidCount;
+    assert.ok(
+      checkBranchPolicy(policy).includes(
+        "branch policy must require contributor approval"
+      )
+    );
+  }
   policy.pullRequest.requiredApprovingReviews = 1;
   policy.pullRequest.requireCodeOwnerReview = false;
   assert.ok(
