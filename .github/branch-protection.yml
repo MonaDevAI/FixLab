@@ -3,15 +3,15 @@
   "repository": "MonaDevAI/FixLab",
   "rulesetId": 22968357,
   "targetBranch": "main",
-  "maintainerModel": "solo",
+  "maintainerModel": "owner-bypass",
   "requiredStatusChecks": [
     "test",
     "analyze"
   ],
   "pullRequest": {
-    "requiredApprovingReviews": 0,
+    "requiredApprovingReviews": 1,
     "dismissStaleApprovals": true,
-    "requireCodeOwnerReview": false,
+    "requireCodeOwnerReview": true,
     "requireReviewThreadResolution": true,
     "allowedMergeMethods": [
       "squash"
@@ -24,6 +24,6 @@
   },
   "bypass": {
     "repositoryRole": "admin",
-    "reason": "Emergency recovery for the single-maintainer repository; normal changes use pull requests."
+    "reason": "The repository owner may merge their own validated changes; all non-admin contributors require code-owner approval."
   }
 }

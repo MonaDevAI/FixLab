@@ -31,10 +31,13 @@ review loop.
 - The versioned contracts under `specs/v1/` define autofix behavior and
   evidence requirements, while the repository policy checker keeps local
   branch-protection intent aligned with CI and rollback controls.
-- The active `main` ruleset uses the repository's explicit solo-maintainer
-  model: it does not require an impossible independent self-approval, but still
-  requires resolved review threads plus passing `test` and `analyze` checks.
-  Linear history, deletion protection, and force-push protection remain active.
+- The active `main` ruleset requires one code-owner approval for non-admin
+  contributors. The repository owner has an administrator bypass for their own
+  changes, and repository policy permits using it only after `test` and
+  `analyze` pass. GitHub's administrator bypass can technically skip ruleset
+  controls, so owner merges rely on that documented maintainer discipline;
+  non-bypassed merges enforce approval, review-thread resolution, linear
+  history, deletion protection, and force-push protection.
 - The scheduled `agentic-rule-review` workflow reviews independent run
   evidence and may open a bounded candidate-rule issue; promotion remains a
   human-reviewed pull-request change.

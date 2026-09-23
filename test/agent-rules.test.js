@@ -134,36 +134,55 @@ test("repository policy matches enforced CI and rollback controls", () => {
   assert.deepEqual(checkPolicy(root), []);
 });
 
-test("branch policy supports a protected solo-maintainer workflow", () => {
+test("branch policy requires contributor review while allowing owner bypass", () => {
   const policy = {
     targetBranch: "main",
-    maintainerModel: "solo",
+    maintainerModel: "owner-bypass",
     requiredStatusChecks: ["test", "analyze"],
     pullRequest: {
-      requiredApprovingReviews: 0,
+      requiredApprovingReviews: 1,
       dismissStaleApprovals: true,
-      requireCodeOwnerReview: false,
+      requireCodeOwnerReview: true,
       requireReviewThreadResolution: true
     },
     history: {
       requireLinearHistory: true,
       blockDeletion: true,
       blockForcePush: true
+    },
+    bypass: {
+      repositoryRole: "admin"
     }
   };
 
   assert.deepEqual(checkBranchPolicy(policy), []);
+  for (const invalidCount of [0, 2, "1", true, 1.5, Infinity]) {
+    policy.pullRequest.requiredApprovingReviews = invalidCount;
+    assert.ok(
+      checkBranchPolicy(policy).includes(
+        "branch policy must require exactly one contributor approval"
+      )
+    );
+  }
   policy.pullRequest.requiredApprovingReviews = 1;
+  policy.pullRequest.requireCodeOwnerReview = false;
   assert.ok(
     checkBranchPolicy(policy).includes(
-      "solo branch policy must not require an impossible independent approval"
+      "branch policy must require code-owner review"
     )
   );
-  policy.pullRequest.requiredApprovingReviews = 0;
   policy.pullRequest.requireCodeOwnerReview = true;
+  policy.bypass.repositoryRole = "maintain";
   assert.ok(
     checkBranchPolicy(policy).includes(
-      "solo branch policy must not require approval from its only code owner"
+      "branch policy must reserve owner bypass for repository administrators"
+    )
+  );
+  policy.bypass.repositoryRole = "admin";
+  policy.maintainerModel = "solo";
+  assert.ok(
+    checkBranchPolicy(policy).includes(
+      "branch policy must declare the owner-bypass maintainer model"
     )
   );
 });
