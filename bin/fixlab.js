@@ -11,6 +11,7 @@ import {
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  buildAgencyInvocation,
   buildCopilotInvocation,
   configuredValidationEnvironments,
   createDashboardServer,
@@ -676,20 +677,26 @@ function launch(repository, request, runtime, targetEnvironment = "") {
           prompt,
           sessionId: randomUUID()
         })
+      : prompt
+        ? buildAgencyInvocation({
+            packageRoot,
+            prompt,
+            sessionId: randomUUID()
+          })
       : {
           args: [
             "copilot",
             "--plugin-dir",
             packageRoot,
             "--agent",
-            "fixlab:fixlab",
-            ...(prompt ? ["--interactive", prompt] : [])
+            "fixlab:fixlab"
           ]
         };
+  const forwardsPrompt = typeof invocation.input === "string";
   const result = spawnSync(runtime, invocation.args, {
     cwd: repository,
-    stdio: prompt && runtime === "copilot" ? ["pipe", "inherit", "inherit"] : "inherit",
-    input: runtime === "copilot" ? invocation.input : undefined,
+    stdio: forwardsPrompt ? ["pipe", "inherit", "inherit"] : "inherit",
+    input: forwardsPrompt ? invocation.input : undefined,
     shell: process.platform === "win32"
   });
   return result.status ?? 1;

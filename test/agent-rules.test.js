@@ -40,14 +40,17 @@ test("agent rule governance accepts a bounded lifecycle corpus", () => {
 
 test("cross-runtime validation guidance stays aligned", () => {
   const root = join(import.meta.dirname, "..");
-  const entryPoints = [
+  const runtimeEntryPoints = [
     "dashboard/server.js",
-    "bin/fixlab.js",
+    "bin/fixlab.js"
+  ];
+  const agentEntryPoints = [
     "agents/fixlab.md",
     "com.github.copilot/agents/fixlab.agent.md",
     "templates/fixlab-autofix.agent.md",
     ".github/agents/fixlab-autofix.agent.md"
   ];
+  const entryPoints = [...runtimeEntryPoints, ...agentEntryPoints];
 
   for (const entryPoint of entryPoints) {
     const content = readFileSync(join(root, entryPoint), "utf8");
@@ -95,6 +98,20 @@ test("cross-runtime validation guidance stays aligned", () => {
       content,
       /\*\.auth\.spec\.ts/,
       `${entryPoint} must preserve authenticated-test persistence guidance`
+    );
+  }
+
+  for (const entryPoint of agentEntryPoints) {
+    const content = readFileSync(join(root, entryPoint), "utf8");
+    assert.match(
+      content,
+      /profile selects `non-production-read-only`[\s\S]{0,160}selects any profile-approved non-production environment[\s\S]{0,220}primary business-data source/,
+      `${entryPoint} must condition backend-first guidance on both profile source and environment selection`
+    );
+    assert.match(
+      content,
+      /Fall back to `synthetic-intercepted` only when[\s\S]{0,180}(?:unreachable|access fails)[\s\S]{0,180}no safe records/,
+      `${entryPoint} must condition synthetic fallback on access or safe-record failure`
     );
   }
 

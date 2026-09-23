@@ -9,6 +9,9 @@ All notable changes to FixLab are documented in this file.
   entry points.
 - Promote a scoped learned rule and regression gate for cross-runtime
   behavioral guidance parity.
+- Forward CLI requests to Agency over standard input and verify that
+  backend-first guidance appears only when both an approved environment and
+  non-production read-only data are selected.
 
 ## 0.6.1 - 2026-09-21
 
