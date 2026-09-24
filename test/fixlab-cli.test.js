@@ -219,6 +219,7 @@ test("doctor and prepare block a broken frontend package manager", () => {
       prepareResult.stderr,
       /stopped before dependency restore/
     );
+    assert.match(prepareResult.stderr, /docs\/troubleshooting\.md/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -278,6 +279,9 @@ test("doctor blocks until required browser authentication is complete", () => {
     assert.match(result.stdout, /FAIL  Live-test profile/);
     assert.match(result.stdout, /browserAutomation authentication is not ready/);
     assert.match(result.stdout, /e2e\/\.auth\/user\.json/);
+    assert.match(result.stderr, /Next action: run "npm run test:e2e:auth"/);
+    assert.match(result.stderr, /complete interactive sign-in/);
+    assert.match(result.stderr, /docs\/troubleshooting\.md/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
