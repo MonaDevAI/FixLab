@@ -193,6 +193,7 @@ copilot --plugin-dir . --agent fixlab:fixlab
 | Guide | Purpose |
 | --- | --- |
 | [Installation](docs/installation.md) | Runtime prerequisites, installation, updates, and uninstall |
+| [Troubleshooting](docs/troubleshooting.md) | CLI, package manager, private feed, Playwright, and runtime errors |
 | [Getting started](docs/getting-started.md) | First validation workflow and dashboard use |
 | [Architecture](docs/architecture.md) | Dashboard, queue, runtime, cache, metrics, runner, and evidence design |
 | [Repository onboarding](docs/repository-onboarding.md) | Adopt FixLab in a React/.NET repository |
