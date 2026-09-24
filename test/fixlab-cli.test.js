@@ -449,6 +449,21 @@ test("validate requires a numeric pull request", () => {
   assert.match(result.stderr, /only digits/);
 });
 
+test("repository commands reject pull request URLs", () => {
+  const result = run(
+    [
+      "doctor",
+      "https://example.test/project/_git/application/pullrequest/123"
+    ],
+    process.cwd()
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /must be a local directory, not a URL/);
+  assert.match(result.stderr, /fixlab validate --pr <number>/);
+  assert.doesNotMatch(result.stderr, /https:\\/);
+});
+
 test("dashboard rejects invalid ports before starting", () => {
   const result = run(["dashboard", "--port", "70000"], process.cwd());
 
