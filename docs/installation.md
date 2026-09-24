@@ -154,9 +154,119 @@ Edit:
 .github\fixlab\repository-profile.json
 ```
 
-Replace the template paths, commands, ports, health URLs, environments, and
-pull request settings with values owned by that repository. Never add
-credentials or sensitive test data to the profile.
+Open the file in the developer's normal editor. For example:
+
+```powershell
+code .github\fixlab\repository-profile.json
+```
+
+If Visual Studio Code is unavailable:
+
+```powershell
+notepad .github\fixlab\repository-profile.json
+```
+
+Replace the template values with paths and commands owned by the application
+repository. A React and .NET profile normally defines:
+
+```json
+{
+  "version": 1,
+  "name": "Application React and .NET",
+  "architecture": "React frontend backed by an ASP.NET API.",
+  "components": [
+    {
+      "name": "React frontend",
+      "paths": ["frontend/src", "frontend/e2e"],
+      "testPatterns": [
+        "frontend/src/**/*.test.ts",
+        "frontend/src/**/*.test.tsx",
+        "frontend/e2e/**/*.spec.ts"
+      ]
+    },
+    {
+      "name": ".NET API",
+      "paths": ["backend/src"],
+      "testPatterns": ["backend/tests/**/*.cs"]
+    }
+  ],
+  "validation": {
+    "commands": {
+      "frontendRestore": "npm ci",
+      "frontendTest": "npm test -- --runInBand",
+      "frontendTypeCheck": "npm run type-check",
+      "frontendBuild": "npm run build",
+      "backendRestore": "dotnet restore Application.sln",
+      "backendTest": "dotnet test Application.sln",
+      "backendBuild": "dotnet build Application.sln"
+    },
+    "productionBuildTimeoutMinutes": 20,
+    "blockerPolicy": "continue-on-owned-process-timeout"
+  },
+  "applications": {
+    "frontend": {
+      "workingDirectory": "frontend",
+      "command": "npm start",
+      "port": 3000,
+      "healthUrl": "http://127.0.0.1:3000"
+    },
+    "backend": {
+      "workingDirectory": "backend",
+      "command": "",
+      "port": 0,
+      "healthUrl": "",
+      "requiredForLiveTest": false
+    }
+  },
+  "browserAutomation": {
+    "workingDirectory": "frontend",
+    "package": "@playwright/test",
+    "browser": "chromium",
+    "testCommand": "npm run test:e2e",
+    "testSynthesis": {
+      "enabled": true,
+      "defaultDataSource": "synthetic-intercepted",
+      "mutationMode": "intercepted",
+      "requireScenarioEvidence": true
+    },
+    "authentication": {
+      "required": false,
+      "command": "",
+      "statusPaths": []
+    },
+    "dataSafety": {
+      "policy": "Use local test data and intercept every mutating request.",
+      "productionAllowed": false
+    }
+  },
+  "environments": ["local", "dev", "sit"],
+  "pullRequests": {
+    "defaultTargetBranch": "main",
+    "requireConfirmation": true,
+    "branchNaming": {
+      "userId": "developer-alias",
+      "prefixTemplate": "users/{userId}"
+    }
+  }
+}
+```
+
+Use repository-relative paths and commands that run non-interactively. Replace
+the example solution, directories, startup command, test command, environments,
+target branch, and developer alias. If browser authentication is required, set
+`authentication.required` to `true` and configure the repository-owned login
+command and status paths as described below.
+
+Save the file, then validate both the machine and profile with the selected
+runtime:
+
+```powershell
+fixlab doctor --runtime agency
+```
+
+Resolve every `FAIL` before running a job. Never add credentials, tokens,
+cookies, browser-state contents, private endpoints, customer records, or
+sensitive test data to the profile.
 
 ### Upgrade an existing repository profile
 
