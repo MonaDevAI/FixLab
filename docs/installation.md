@@ -4,6 +4,9 @@ FixLab supports Agency Copilot and direct GitHub Copilot CLI execution. Install
 and authenticate the runtime selected for the local runner before installing
 FixLab.
 
+For known CLI, package-manager, private-feed, Playwright, authentication, and
+runtime failures, see [Troubleshooting](troubleshooting.md).
+
 ## Prerequisites
 
 The machine running FixLab needs:
