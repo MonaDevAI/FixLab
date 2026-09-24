@@ -40,6 +40,8 @@ const promptNames = [
   "fixlab.pr.prompt.md"
 ];
 const vscodeAgentName = "fixlab-autofix.agent.md";
+const troubleshootingUrl =
+  "https://github.com/MonaDevAI/FixLab/blob/main/docs/troubleshooting.md";
 
 function printUsage() {
   console.log(`FixLab CLI
@@ -69,7 +71,10 @@ Runtime:
   copilot   Use GitHub Copilot CLI directly.
 
 Set FIXLAB_RUNTIME or pass --runtime to select the runtime.
-Run with --environment to select an allowed non-production environment from the repository profile.`);
+Run with --environment to select an allowed non-production environment from the repository profile.
+
+Troubleshooting:
+  ${troubleshootingUrl}`);
 }
 
 function resolveRepository(value) {
@@ -510,6 +515,29 @@ function doctor(repository, runtime) {
   const failed = checks.filter((check) => !check.ok);
   if (failed.length > 0) {
     console.error(`FixLab doctor found ${failed.length} blocking check(s).`);
+    if (
+      !liveTestProfile.ok &&
+      liveTestProfile.detail.includes("authentication is not ready") &&
+      profile?.browserAutomation?.authentication?.command
+    ) {
+      const authenticationDirectory = resolve(
+        repository,
+        profile.browserAutomation.workingDirectory
+      );
+      console.error(
+        `Next action: run "${profile.browserAutomation.authentication.command}" from "${authenticationDirectory}", complete interactive sign-in, then rerun Doctor.`
+      );
+      if (
+        Object.keys(
+          profile.browserAutomation.authentication.environment ?? {}
+        ).length > 0
+      ) {
+        console.error(
+          "Set the browserAutomation.authentication.environment values from the repository profile before running the authentication command."
+        );
+      }
+    }
+    console.error(`Troubleshooting: ${troubleshootingUrl}`);
     return 1;
   }
 
@@ -588,6 +616,7 @@ function prepare(repository, approved) {
       console.error(
         "Repository preparation stopped before dependency restore because the configured package manager is not runnable."
       );
+      console.error(`Troubleshooting: ${troubleshootingUrl}`);
       return 1;
     }
   }
@@ -603,6 +632,7 @@ function prepare(repository, approved) {
       console.error(
         `${step.application} restore failed: ${step.command}`
       );
+      console.error(`Troubleshooting: ${troubleshootingUrl}`);
       return result.status ?? 1;
     }
     console.log(`PASS  ${step.application} restore (${step.command})`);
