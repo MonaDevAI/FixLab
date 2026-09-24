@@ -736,7 +736,7 @@ test("dashboard exposes explicit pull-request approval when validation is comple
         id: "17032997",
         title: "Validated bug",
         outcome: "fixed",
-        owner: "FMDM",
+        owner: "application",
         summary: "Focused fix passed."
       }
     ],
