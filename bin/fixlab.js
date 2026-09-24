@@ -140,6 +140,73 @@ function checkDotnetSdk(repository) {
   };
 }
 
+function checkPackageManager(command, workingDirectory) {
+  const match = command?.match(
+    /^\s*(npm(?:\.cmd)?|pnpm(?:\.cmd)?|yarn(?:\.cmd)?)\b/i
+  );
+  if (!match) {
+    return null;
+  }
+
+  const manager = match[1];
+  const result = spawnSync(`${manager} --version`, {
+    cwd: workingDirectory,
+    encoding: "utf8",
+    shell: true,
+    timeout: 15000,
+    windowsHide: true
+  });
+  const version = result.stdout?.trim();
+  let failure =
+    result.error?.message ??
+    result.stderr?.trim().split(/\r?\n/, 1)[0] ??
+    `${manager} --version failed`;
+  if (result.status === 0 && version) {
+    if (/^npm(?:\.cmd)?$/i.test(manager)) {
+      const integrityResult = spawnSync(
+        `${manager} pack --dry-run --ignore-scripts --json`,
+        {
+          cwd: packageRoot,
+          encoding: "utf8",
+          shell: true,
+          timeout: 15000,
+          windowsHide: true
+        }
+      );
+      const integrityOutput = [
+        integrityResult.stdout,
+        integrityResult.stderr
+      ].filter(Boolean).join("\n");
+      const internalFailure = integrityOutput.match(
+        /(?:Class extends value undefined|(?:TypeError|ReferenceError|SyntaxError):)[^\r\n]*/i
+      );
+      if (!integrityResult.error && !internalFailure) {
+        return {
+          name: "Frontend package manager",
+          ok: true,
+          detail: `${manager} ${version}`
+        };
+      }
+      failure =
+        integrityResult.error?.message ??
+        internalFailure?.[0]?.replace(/[",]+$/, "") ??
+        "npm dependency graph probe failed internally";
+    } else {
+      return {
+        name: "Frontend package manager",
+        ok: true,
+        detail: `${manager} ${version}`
+      };
+    }
+  }
+
+  return {
+    name: "Frontend package manager",
+    ok: false,
+    detail: `${failure}. Run "${manager} --version" and "${manager} pack --dry-run --ignore-scripts --json" in this shell, then align the active Node.js and ${manager} installation before retrying`
+  };
+}
+
 function loadProfile(repository) {
   const profilePath = join(repository, profileRelativePath);
   if (!existsSync(profilePath)) {
@@ -404,6 +471,17 @@ function doctor(repository, runtime) {
     ok: Boolean(profile),
     detail: error ?? profilePath
   });
+  const frontendWorkingDirectory = resolve(
+    repository,
+    profile?.applications?.frontend?.workingDirectory ?? "."
+  );
+  const packageManager = checkPackageManager(
+    profile?.validation?.commands?.frontendRestore,
+    existsSync(frontendWorkingDirectory) ? frontendWorkingDirectory : repository
+  );
+  if (packageManager) {
+    checks.push(packageManager);
+  }
   const liveTestProfile = profile
     ? validateLiveTestProfile(profile, repository)
     : { ok: false, detail: "not checked because the repository profile is unavailable" };
@@ -486,6 +564,27 @@ function prepare(repository, approved) {
       "No commands executed. Review the plan and rerun with --yes to prepare the repository."
     );
     return 0;
+  }
+
+  const checkedPackageManagers = new Set();
+  for (const step of steps) {
+    const packageManager = checkPackageManager(
+      step.command,
+      step.workingDirectory
+    );
+    if (!packageManager || checkedPackageManagers.has(packageManager.detail)) {
+      continue;
+    }
+    checkedPackageManagers.add(packageManager.detail);
+    console.log(
+      `${packageManager.ok ? "PASS" : "FAIL"}  ${packageManager.name} (${packageManager.detail})`
+    );
+    if (!packageManager.ok) {
+      console.error(
+        "Repository preparation stopped before dependency restore because the configured package manager is not runnable."
+      );
+      return 1;
+    }
   }
 
   for (const step of steps) {

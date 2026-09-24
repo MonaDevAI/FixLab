@@ -171,6 +171,59 @@ test("doctor blocks when Playwright is unavailable", () => {
   }
 });
 
+test("doctor and prepare block a broken frontend package manager", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const executableDirectory = join(repository, "bin");
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    mkdirSync(join(repository, "frontend"), { recursive: true });
+    mkdirSync(join(repository, "backend", "src"), { recursive: true });
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? "npm.cmd" : "npm"
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? "@echo off\r\nif \"%1\"==\"--version\" (\r\n  echo 11.17.0\r\n  exit /b 0\r\n)\r\necho TypeError: Class extends value undefined is not a constructor or null 1>&2\r\nexit /b 1\r\n"
+        : "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  printf '%s\\n' '11.17.0'\n  exit 0\nfi\nprintf '%s\\n' 'TypeError: Class extends value undefined is not a constructor or null' >&2\nexit 1\n"
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+    const path = [
+      executableDirectory,
+      process.env.PATH
+    ].filter(Boolean).join(process.platform === "win32" ? ";" : ":");
+
+    const doctorResult = run(["doctor", repository], repository, {
+      PATH: path
+    });
+    assert.equal(doctorResult.status, 1);
+    assert.match(doctorResult.stdout, /FAIL  Frontend package manager/);
+    assert.match(
+      doctorResult.stdout,
+      /align the active Node\.js and npm installation/
+    );
+
+    const prepareResult = run(
+      ["prepare", repository, "--yes"],
+      repository,
+      { PATH: path }
+    );
+    assert.equal(prepareResult.status, 1);
+    assert.match(prepareResult.stdout, /FAIL  Frontend package manager/);
+    assert.match(
+      prepareResult.stderr,
+      /stopped before dependency restore/
+    );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("doctor and dashboard block an incomplete live-test profile", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 

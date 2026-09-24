@@ -315,6 +315,8 @@ The command checks:
 
 - Git
 - Node.js
+- The frontend package manager configured by `frontendRestore`, including a
+  successful `npm`, `pnpm`, or Yarn version check
 - The .NET SDK selected by the target repository, including any
   `global.json` requirement
 - PowerShell
@@ -328,6 +330,29 @@ Resolve every failed prerequisite before starting a FixLab session.
 The .NET check runs `dotnet --version` from the target repository so the normal
 SDK resolver validates `global.json`, rather than accepting an unrelated SDK
 installed elsewhere on the machine.
+
+If Doctor reports that the frontend package manager cannot start, run the
+reported version command in the same shell:
+
+```powershell
+node --version
+npm --version
+npm pack --dry-run --ignore-scripts --json
+where.exe node
+where.exe npm
+```
+
+`npm --version` alone is insufficient because a damaged npm installation can
+print its version while operational commands fail internally. Node.js and npm
+must resolve from one compatible, internally consistent installation. NVM
+users should activate the intended version before retrying. FixLab also repeats
+this preflight immediately before an approved `fixlab prepare --yes` and stops
+before dependency restoration when the package manager is broken.
+
+A package manager that starts successfully can still fail restore with `E401`
+or `E403` when the repository uses a private feed. Authenticate with the
+repository owner's supported credential provider, then rerun preparation.
+FixLab does not create, copy, or persist private-feed credentials.
 
 For a long local batch, run `/keep-alive` in GitHub Copilot CLI before starting
 the job. Locking the screen does not stop ordinary commands, but system sleep,
