@@ -126,8 +126,19 @@ before starting a FixLab job.
 ## Browser authentication is not ready
 
 Doctor lists the missing status paths from
-`browserAutomation.authentication.statusPaths`. Run the repository-owned
-authentication command from its configured working directory. For example:
+`browserAutomation.authentication.statusPaths`. From any directory, point the
+globally installed FixLab CLI at the local repository:
+
+```powershell
+fixlab authenticate C:\path\to\repository
+fixlab authenticate C:\path\to\repository --yes
+```
+
+The first command prints a redacted plan. The second runs the repository-owned
+authentication command from its configured working directory, applies the
+profile-defined environment, and verifies the required status paths. To run
+the repository command directly instead, change to the configured working
+directory and execute it. For example:
 
 ```powershell
 $env:E2E_START = "npm start"

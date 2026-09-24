@@ -31,6 +31,7 @@ test("help lists supported commands", () => {
   assert.equal(result.status, 0);
   assert.match(result.stdout, /fixlab init/);
   assert.match(result.stdout, /fixlab prepare/);
+  assert.match(result.stdout, /fixlab authenticate/);
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
   assert.match(result.stdout, /--runtime <agency\|copilot>/);
@@ -315,6 +316,72 @@ test("doctor redacts secrets from authentication command guidance", () => {
     assert.match(result.stderr, /--password \[REDACTED\]/);
     assert.match(result.stderr, /https:\/\/user:\[REDACTED\]@example\.test/);
     assert.doesNotMatch(result.stderr, /super-secret|hunter2|user:pass/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("authenticate runs the repository-owned command from the configured directory", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const frontendDirectory = join(repository, "frontend");
+    mkdirSync(frontendDirectory);
+    writeFileSync(
+      join(frontendDirectory, "authenticate-fixture.js"),
+      [
+        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'mkdirSync("e2e/.auth", { recursive: true });',
+        'writeFileSync("e2e/.auth/user.json", process.env.E2E_START ?? "missing");'
+      ].join("\n")
+    );
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.browserAutomation.workingDirectory = "frontend";
+    profile.browserAutomation.authentication = {
+      required: true,
+      command: "node authenticate-fixture.js --token super-secret",
+      environment: {
+        E2E_START: "npm run start:test"
+      },
+      statusPaths: ["e2e/.auth/user.json"]
+    };
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const planned = run(["authenticate", repository], repository);
+    assert.equal(planned.status, 0);
+    assert.match(planned.stdout, /Browser authentication plan/);
+    assert.match(planned.stdout, /--token \[REDACTED\]/);
+    assert.match(planned.stdout, /working directory: .*frontend/);
+    assert.match(planned.stdout, /environment: E2E_START/);
+    assert.doesNotMatch(planned.stdout, /super-secret|npm run start:test/);
+    assert.equal(
+      existsSync(join(frontendDirectory, "e2e", ".auth", "user.json")),
+      false
+    );
+
+    const executed = run(
+      ["authenticate", repository, "--yes"],
+      repository
+    );
+    assert.equal(executed.status, 0);
+    assert.match(
+      executed.stdout,
+      /Browser authentication completed and required state is ready/
+    );
+    assert.equal(
+      readFileSync(
+        join(frontendDirectory, "e2e", ".auth", "user.json"),
+        "utf8"
+      ),
+      "npm run start:test"
+    );
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

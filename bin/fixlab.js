@@ -68,6 +68,7 @@ Usage:
   fixlab prepare [repository] [--yes]
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
+  fixlab authenticate [repository] [--yes]
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
   fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
@@ -79,6 +80,8 @@ Commands:
   doctor    Check required tools and repository configuration.
   setup-playwright
             Plan or install the repository-local Playwright package and browser.
+  authenticate
+            Plan or run the repository-owned browser authentication command.
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
   dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
@@ -778,6 +781,89 @@ function setupPlaywright(repository, approved) {
   return 0;
 }
 
+function authenticate(repository, approved) {
+  const { profile, error } = loadProfile(repository);
+  if (error) {
+    console.error(
+      `Cannot authenticate because ${error}. Run "fixlab init ${repository}" first.`
+    );
+    printTroubleshooting();
+    return 1;
+  }
+
+  const browserAutomation = profile.browserAutomation ?? {};
+  const authentication = browserAutomation.authentication ?? {};
+  if (
+    authentication.required !== true ||
+    typeof authentication.command !== "string" ||
+    !authentication.command.trim()
+  ) {
+    console.error(
+      "Repository profile does not define a required browser authentication command."
+    );
+    printTroubleshooting();
+    return 1;
+  }
+
+  const workingDirectory = resolve(
+    repository,
+    browserAutomation.workingDirectory ??
+      profile.applications?.frontend?.workingDirectory ??
+      "."
+  );
+  if (!existsSync(workingDirectory)) {
+    console.error(
+      `Browser authentication working directory is missing: ${workingDirectory}`
+    );
+    printTroubleshooting();
+    return 1;
+  }
+
+  const command = authentication.command.trim();
+  const authenticationEnvironment = authentication.environment ?? {};
+  console.log("Browser authentication plan:");
+  console.log(`  command: ${redactCommandForDisplay(command)}`);
+  console.log(`  working directory: ${workingDirectory}`);
+  const environmentNames = Object.keys(authenticationEnvironment);
+  if (environmentNames.length > 0) {
+    console.log(`  environment: ${environmentNames.join(", ")}`);
+  }
+
+  if (!approved) {
+    console.log(
+      "No command executed. Review the plan and rerun with --yes to start interactive authentication."
+    );
+    return 0;
+  }
+
+  const result = spawnSync(command, {
+    cwd: workingDirectory,
+    env: { ...process.env, ...authenticationEnvironment },
+    stdio: "inherit",
+    shell: true,
+    windowsHide: true
+  });
+  if (result.status !== 0) {
+    console.error(`Browser authentication failed with exit code ${result.status ?? 1}.`);
+    printTroubleshooting();
+    return result.status ?? 1;
+  }
+
+  const missingStatusPaths = (authentication.statusPaths ?? [])
+    .map((statusPath) => resolve(workingDirectory, statusPath))
+    .filter((statusPath) => !existsSync(statusPath));
+  if (missingStatusPaths.length > 0) {
+    console.error(
+      `Browser authentication command completed, but required state is missing: ${missingStatusPaths.join(", ")}`
+    );
+    printTroubleshooting();
+    return 1;
+  }
+
+  console.log("Browser authentication completed and required state is ready.");
+  return 0;
+}
+
 function launch(repository, request, runtime, targetEnvironment = "") {
   const { profile, error } = loadProfile(repository);
   if (error) {
@@ -1046,6 +1132,14 @@ async function main(args) {
   if (command === "setup-playwright") {
     const repositoryArgument = rest.find((value) => !value.startsWith("-"));
     return setupPlaywright(
+      resolveRepository(repositoryArgument),
+      rest.includes("--yes")
+    );
+  }
+
+  if (command === "authenticate") {
+    const repositoryArgument = rest.find((value) => !value.startsWith("-"));
+    return authenticate(
       resolveRepository(repositoryArgument),
       rest.includes("--yes")
     );

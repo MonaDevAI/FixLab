@@ -71,6 +71,7 @@ pull request:
 ```shell
 fixlab prepare
 fixlab setup-playwright
+fixlab authenticate
 fixlab validate --pr 123
 ```
 
