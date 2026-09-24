@@ -31,6 +31,7 @@
     "plugin.json",
     "prompts",
     "README.md",
+    "scripts/install-fixlab.ps1",
     "specs",
     "templates"
   ],

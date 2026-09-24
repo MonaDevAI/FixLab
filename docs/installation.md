@@ -51,6 +51,46 @@ npm install --global github:MonaDevAI/FixLab
 fixlab --help
 ```
 
+### Intelligent Windows bootstrap
+
+An npm-based installer cannot recover when the shell resolves a damaged or
+mismatched Node/npm pair. From a FixLab clone, use the plan-first PowerShell
+bootstrap to locate NVM for Windows and select a coherent runtime:
+
+```powershell
+pwsh -File scripts/install-fixlab.ps1 -Repository C:\path\to\application
+pwsh -File scripts/install-fixlab.ps1 -Repository C:\path\to\application -Yes
+```
+
+The bootstrap:
+
+- Discovers NVM through `NVM_HOME`, the standard roaming/local directories,
+  and NVM's `settings.txt`.
+- Reads an exact Node version from `-NodeVersion`, `.nvmrc`,
+  `.node-version`, exact `package.json` `engines.node`, or the repository
+  profile's optional `toolchain.nodeVersion`.
+- Requires `node.exe` and `npm.cmd` from the same NVM version directory.
+- Runs an offline `npm pack --dry-run` probe before selecting a runtime.
+- Uses the selected `npm.cmd` by absolute path instead of changing the
+  machine's permanent `PATH`.
+- Verifies the installed `fixlab.cmd`.
+
+The default command only prints the plan. `-Yes` approves the global FixLab
+installation. If the exact Node version is absent, add `-InstallNode` to
+approve `nvm install`; the bootstrap verifies the runtime files afterward and
+fails if NVM reports success without installing them.
+
+```powershell
+pwsh -File scripts/install-fixlab.ps1 `
+  -Repository C:\path\to\application `
+  -NodeVersion 22.23.3 `
+  -InstallNode `
+  -Yes
+```
+
+The bootstrap never uninstalls or repairs NVM, silently replaces Node, or
+modifies the system `PATH`.
+
 This installs the CLI, dashboard assets, and packaged FixLab plugin. The
 selected runtime remains a separate prerequisite.
 

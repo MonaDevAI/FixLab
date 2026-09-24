@@ -54,6 +54,18 @@ fixlab doctor
 fixlab dashboard
 ```
 
+On Windows, when Node/npm command resolution may be inconsistent, use the
+plan-first bootstrap from a FixLab clone:
+
+```powershell
+pwsh -File scripts/install-fixlab.ps1 -Repository C:\path\to\application
+pwsh -File scripts/install-fixlab.ps1 -Repository C:\path\to\application -Yes
+```
+
+The bootstrap discovers NVM for Windows, honors an exact repository Node pin,
+tests a real npm operation, and invokes the selected `npm.cmd` by absolute
+path. It never installs Node unless `-InstallNode` is also supplied.
+
 `fixlab init` adds the repository profile, packaged prompt commands, and the
 `fixlab-autofix` Visual Studio Code agent without overwriting existing files.
 `fixlab dashboard` starts the local loopback dashboard and opens it in the
