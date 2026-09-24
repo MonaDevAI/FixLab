@@ -73,6 +73,11 @@ Run with --environment to select an allowed non-production environment from the 
 }
 
 function resolveRepository(value) {
+  if (typeof value === "string" && /^https?:\/\//i.test(value.trim())) {
+    throw new Error(
+      'Repository argument must be a local directory, not a URL. Run FixLab from the local clone; to validate a pull request, use "fixlab validate --pr <number> --runtime agency".'
+    );
+  }
   return resolve(value && !value.startsWith("-") ? value : process.cwd());
 }
 
@@ -1054,4 +1059,9 @@ async function main(args) {
   return 1;
 }
 
-process.exitCode = await main(process.argv.slice(2));
+try {
+  process.exitCode = await main(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
