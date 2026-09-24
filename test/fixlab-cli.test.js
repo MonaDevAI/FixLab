@@ -41,6 +41,23 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /docs\/troubleshooting\.md/);
 });
 
+test("Windows bootstrap keeps NVM and Node changes explicit", () => {
+  const installer = readFileSync(
+    fileURLToPath(new URL("../scripts/install-fixlab.ps1", import.meta.url)),
+    "utf8"
+  );
+
+  assert.match(installer, /\[switch\]\$InstallNode/);
+  assert.match(installer, /\[switch\]\$Yes/);
+  assert.match(installer, /NVM_HOME/);
+  assert.match(installer, /settings\.txt/);
+  assert.match(installer, /npm\.cmd/);
+  assert.match(installer, /pack --dry-run --ignore-scripts --json/);
+  assert.match(installer, /NVM reported success but did not create a coherent/);
+  assert.match(installer, /No changes made.*rerun with -Yes/s);
+  assert.doesNotMatch(installer, /nvm\s+uninstall|setx\s+PATH/i);
+});
+
 test("init creates a parseable repository profile", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 
