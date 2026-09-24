@@ -37,6 +37,7 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /--environment <name>/);
   assert.match(result.stdout, /FIXLAB_RUNTIME/);
   assert.match(result.stdout, /127\.0\.0\.1:4317/);
+  assert.match(result.stdout, /docs\/troubleshooting\.md/);
 });
 
 test("init creates a parseable repository profile", () => {
@@ -287,6 +288,38 @@ test("doctor blocks until required browser authentication is complete", () => {
   }
 });
 
+test("doctor redacts secrets from authentication command guidance", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.browserAutomation.authentication = {
+      required: true,
+      command:
+        "cross-env TOKEN=super-secret npm run auth --password hunter2 --url https://user:pass@example.test",
+      statusPaths: ["e2e/.auth/user.json"]
+    };
+    writeFileSync(profilePath, JSON.stringify(profile));
+
+    const result = run(["doctor", repository], repository);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /TOKEN=\[REDACTED\]/);
+    assert.match(result.stderr, /--password \[REDACTED\]/);
+    assert.match(result.stderr, /https:\/\/user:\[REDACTED\]@example\.test/);
+    assert.doesNotMatch(result.stderr, /super-secret|hunter2|user:pass/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("doctor blocks when the repository-pinned .NET SDK cannot resolve", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
   const executableDirectory = join(repository, "bin");
@@ -419,6 +452,34 @@ test("prepare plans and runs repository-owned restore commands", () => {
       readFileSync(join(repository, "backend", "src", "prepared.txt"), "utf8"),
       "ready"
     );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("prepare restore failures include troubleshooting guidance", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.validation.commands.frontendRestore =
+      'node -e "process.exit(7)"';
+    delete profile.validation.commands.backendRestore;
+    writeFileSync(profilePath, JSON.stringify(profile));
+    mkdirSync(join(repository, "frontend"), { recursive: true });
+
+    const result = run(["prepare", repository, "--yes"], repository);
+
+    assert.equal(result.status, 7);
+    assert.match(result.stderr, /frontend restore failed/);
+    assert.match(result.stderr, /docs\/troubleshooting\.md/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
