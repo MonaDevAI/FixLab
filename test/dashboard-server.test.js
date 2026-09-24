@@ -451,7 +451,7 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     receivedPrompt = prompt;
     onOutput(
       "stdout",
-      "FIXLAB_BUG|71|external|MDG|MDG owns the rejected request; no repository change is required.\n"
+      "FIXLAB_BUG|71|external|upstream-system|The upstream system owns the rejected request; no repository change is required.\n"
     );
     for (const stage of FIXLAB_STAGES) {
       onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
@@ -571,7 +571,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     for (const id of ["101", "202"]) {
       onOutput(
         "stdout",
-        `FIXLAB_BUG|${id}|no-change|FMDM|No repository change is required.\n`
+        `FIXLAB_BUG|${id}|no-change|application|No repository change is required.\n`
       );
     }
     for (const stage of FIXLAB_STAGES) {
@@ -697,11 +697,11 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     receivedPrompt = prompt;
     onOutput(
       "stdout",
-      "FIXLAB_BUG|17037209|external|MDG|MDG rejected parent validation and FMDM surfaced the returned error.\n"
+      "FIXLAB_BUG|17037209|external|upstream-system|The upstream system rejected parent validation and the application surfaced the returned error.\n"
     );
     onOutput(
       "stdout",
-      "FIXLAB_BUG|17032997|fixed|FMDM|Generation status displays the generated object type.\n"
+      "FIXLAB_BUG|17032997|fixed|application|Generation status displays the generated object type.\n"
     );
     onOutput(
       "stdout",
@@ -751,16 +751,16 @@ test("dashboard parses complete stage markers and passes a job", async () => {
         title: "Remap failed",
         url: "https://dev.azure.com/example/project/_workitems/edit/17037209",
         outcome: "external",
-        owner: "MDG",
+        owner: "upstream-system",
         summary:
-          "MDG rejected parent validation and FMDM surfaced the returned error."
+          "The upstream system rejected parent validation and the application surfaced the returned error."
       },
       {
         id: "17032997",
         title: "Generic generation status",
         url: "",
         outcome: "fixed",
-        owner: "FMDM",
+        owner: "application",
         summary: "Generation status displays the generated object type."
       }
     ]);
@@ -832,7 +832,7 @@ test("dashboard parses complete stage markers and passes a job", async () => {
       receivedPrompt,
       /Do not call task_complete or return the final response/
     );
-    assert.match(receivedPrompt, /external with owner MDG/);
+    assert.match(receivedPrompt, /external with owner upstream-system/);
     assert.match(receivedPrompt, /Do not create an empty pull request/);
   } finally {
     await dashboard.close();
@@ -1562,7 +1562,7 @@ test("dashboard restores private job summaries and PR readiness after restart", 
   const executor = ({ onOutput }) => {
     onOutput(
       "stdout",
-      "FIXLAB_BUG|17032997|fixed|FMDM|The focused source correction is complete.\n"
+      "FIXLAB_BUG|17032997|fixed|application|The focused source correction is complete.\n"
     );
     for (const stage of FIXLAB_STAGES.slice(0, -1)) {
       onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|completed\n`);

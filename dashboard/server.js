@@ -793,8 +793,8 @@ ${testDataGuidance}
   FIXLAB_BUG|id|outcome|owner|summary
 - These bug lines are required machine-readable output, not optional narrative. Emit each line as soon as its diagnosis is final and before the terminal pr stage.
 - outcome must be one of: ${[...bugOutcomeStatuses].join(", ")}.
-- owner must identify the responsible boundary, such as FMDM, MDG, data, deployment, or unknown.
-- Use outcome external with owner MDG when FMDM correctly surfaces an error returned by MDG and no FMDM code correction is required.
+- owner must identify the responsible boundary, such as application, upstream-system, data, deployment, or unknown.
+- Use outcome external with owner upstream-system when the application correctly surfaces an error returned by an upstream system and no repository code correction is required.
 - Do not create an empty pull request. When every bug is external, no-change, expected, duplicate, or already-fixed, explicitly skip the fix and pr stages and explain the per-bug outcomes.
 - The expected bug IDs for this request are: ${bugResults.length > 0 ? bugResults.map((bug) => bug.id).join(", ") : "none detected; no FIXLAB_BUG marker is required"}.
 - Emit exactly one or more progress lines in this format:

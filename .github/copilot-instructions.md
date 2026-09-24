@@ -1,8 +1,8 @@
 # Copilot instructions for FixLab
 
 FixLab is a product-neutral Agency Copilot plugin and CLI for evidence-backed
-defect validation across React frontends and .NET backends. FMDM is an example
-consumer, not a dependency or hard-coded product boundary.
+defect validation across React frontends and .NET backends. Consumer-specific
+product names and boundaries must remain outside the reusable product.
 
 Before editing, read `AGENTS.md`, the nearest module-level `AGENTS.md`,
 `docs/architecture.md`, and the affected tests. Preserve unrelated worktree

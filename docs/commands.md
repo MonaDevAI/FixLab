@@ -25,8 +25,8 @@ onboarded repository in Visual Studio Code, open Copilot Chat, select
 `fixlab-autofix` from the agent picker, and provide one bug description. You
 can also run `/fixlab.bugfix` to start the same focused workflow.
 
-The agent is the reusable form of the FMDM bugfix workflow: it reads the target
-repository's profile instead of hard-coding FMDM components. It classifies the
+The agent provides a reusable bugfix workflow: it reads the target
+repository's profile instead of hard-coding product components. It classifies the
 smallest allowed component, reproduces the defect, traces React or .NET data
 flow, makes a surgical fix, adds focused regression coverage, runs configured
 validation, and reports evidence for developer review.

@@ -15,8 +15,7 @@ journeys, and review evidence in one visible workflow.
 
 FixLab is designed for applications with a **React frontend and .NET backend**.
 Application-specific commands, paths, environments, and browser journeys stay
-in a small repository-owned profile, so FixLab remains product-neutral. FMDM
-is the pilot implementation, not a product dependency.
+in a small repository-owned profile, so FixLab remains product-neutral.
 
 FixLab runs through **Agency Copilot** or directly through
 **GitHub Copilot CLI**. It does not bundle or fork either runtime.

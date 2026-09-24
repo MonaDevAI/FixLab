@@ -165,9 +165,10 @@ IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,
 shows the selected list before submission, and creates one bounded request
 with a result row for every bug. Outcomes distinguish repository fixes from
 already-fixed, expected, duplicate, no-change, blocked, and external causes.
-An external MDG result is highlighted with MDG as the owner. FixLab creates a
-combined pull request only when at least one proven repository code change is
-needed; it does not create an empty pull request for external-only outcomes.
+An external-system result identifies that system as the responsible boundary.
+FixLab creates a combined pull request only when at least one proven repository
+code change is needed; it does not create an empty pull request for
+external-only outcomes.
 While a job is running, the submit action changes to **Add to queue**. Up to 20
 pending jobs are shown by position. A passed job starts the next automatically;
 a blocked or failed job pauses the queue so its action-needed state remains
