@@ -43,6 +43,23 @@ const vscodeAgentName = "fixlab-autofix.agent.md";
 const troubleshootingUrl =
   "https://github.com/MonaDevAI/FixLab/blob/main/docs/troubleshooting.md";
 
+function printTroubleshooting() {
+  console.error(`Troubleshooting: ${troubleshootingUrl}`);
+}
+
+function redactCommandForDisplay(command) {
+  return String(command)
+    .replace(
+      /((?:password|passwd|secret|token|authorization|bearer|cookie|client[-_]?secret|api[-_]?key)\s*(?:=|:)\s*)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
+      "$1[REDACTED]"
+    )
+    .replace(
+      /(--(?:password|passwd|secret|token|authorization|bearer|cookie|client-secret|api-key)\s+)(?:"[^"]*"|'[^']*'|[^\s]+)/gi,
+      "$1[REDACTED]"
+    )
+    .replace(/(https?:\/\/[^:\s/]+:)[^@\s]+@/gi, "$1[REDACTED]@");
+}
+
 function printUsage() {
   console.log(`FixLab CLI
 
@@ -524,8 +541,11 @@ function doctor(repository, runtime) {
         repository,
         profile.browserAutomation.workingDirectory
       );
+      const authenticationCommand = redactCommandForDisplay(
+        profile.browserAutomation.authentication.command
+      );
       console.error(
-        `Next action: run "${profile.browserAutomation.authentication.command}" from "${authenticationDirectory}", complete interactive sign-in, then rerun Doctor.`
+        `Next action: run "${authenticationCommand}" from "${authenticationDirectory}", complete interactive sign-in, then rerun Doctor.`
       );
       if (
         Object.keys(
@@ -537,7 +557,7 @@ function doctor(repository, runtime) {
         );
       }
     }
-    console.error(`Troubleshooting: ${troubleshootingUrl}`);
+    printTroubleshooting();
     return 1;
   }
 
@@ -551,6 +571,7 @@ function prepare(repository, approved) {
     console.error(
       `Cannot prepare repository because ${error}. Run "fixlab init ${repository}" first.`
     );
+    printTroubleshooting();
     return 1;
   }
 
@@ -573,6 +594,7 @@ function prepare(repository, approved) {
     console.error(
       "Repository profile has no frontendRestore or backendRestore command."
     );
+    printTroubleshooting();
     return 1;
   }
 
@@ -581,6 +603,7 @@ function prepare(repository, approved) {
       console.error(
         `${step.application} restore directory is missing: ${step.workingDirectory}`
       );
+      printTroubleshooting();
       return 1;
     }
   }
@@ -616,7 +639,7 @@ function prepare(repository, approved) {
       console.error(
         "Repository preparation stopped before dependency restore because the configured package manager is not runnable."
       );
-      console.error(`Troubleshooting: ${troubleshootingUrl}`);
+      printTroubleshooting();
       return 1;
     }
   }
@@ -632,7 +655,7 @@ function prepare(repository, approved) {
       console.error(
         `${step.application} restore failed: ${step.command}`
       );
-      console.error(`Troubleshooting: ${troubleshootingUrl}`);
+      printTroubleshooting();
       return result.status ?? 1;
     }
     console.log(`PASS  ${step.application} restore (${step.command})`);
