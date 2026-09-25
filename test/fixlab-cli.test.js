@@ -76,6 +76,29 @@ test("Windows bootstrap keeps NVM and Node changes explicit", () => {
   assert.doesNotMatch(installer, /nvm\s+uninstall|setx\s+PATH/i);
 });
 
+test("portable Node repair is plan-first and checksum verified", () => {
+  const repair = readFileSync(
+    fileURLToPath(
+      new URL("../scripts/repair-node-runtime.ps1", import.meta.url)
+    ),
+    "utf8"
+  );
+
+  assert.match(repair, /\[switch\]\$Yes/);
+  assert.match(repair, /https:\/\/nodejs\.org\/dist\//);
+  assert.match(repair, /SHASUMS256\.txt/);
+  assert.match(repair, /Get-FileHash/);
+  assert.match(repair, /-Algorithm SHA256/);
+  assert.match(repair, /checksum mismatch/);
+  assert.match(repair, /system PATH changes: none/);
+  assert.match(repair, /NVM changes: none/);
+  assert.match(repair, /\.fixlab-runtime-root/);
+  assert.match(repair, /not marked as FixLab-owned/);
+  assert.match(repair, /if \(-not \$Yes\)/);
+  assert.match(repair, /No changes made/);
+  assert.doesNotMatch(repair, /nvm\s+(?:install|uninstall)|setx\s+PATH/i);
+});
+
 test("init creates a parseable repository profile", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 
@@ -366,7 +389,7 @@ test("authenticate runs the repository-owned command from the configured directo
     writeFileSync(
       join(frontendDirectory, "authenticate-fixture.js"),
       [
-        'import { mkdirSync, writeFileSync } from "node:fs";',
+        'const { mkdirSync, writeFileSync } = require("node:fs");',
         'mkdirSync("e2e/.auth", { recursive: true });',
         'writeFileSync("e2e/.auth/user.json", process.env.E2E_START ?? "missing");'
       ].join("\n")

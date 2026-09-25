@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { checkAgentRules } from "../scripts/ci/check-agent-rules.mjs";
 import {
   checkBranchPolicy,
   checkPolicy
 } from "../scripts/ci/check-policy.mjs";
+
+const testDirectory = dirname(fileURLToPath(import.meta.url));
 
 test("agent rule governance accepts a bounded lifecycle corpus", () => {
   const root = mkdtempSync(join(tmpdir(), "fixlab-agent-rules-"));
@@ -39,7 +42,7 @@ test("agent rule governance accepts a bounded lifecycle corpus", () => {
 });
 
 test("cross-runtime validation guidance stays aligned", () => {
-  const root = join(import.meta.dirname, "..");
+  const root = join(testDirectory, "..");
   const runtimeEntryPoints = [
     "dashboard/server.js",
     "bin/fixlab.js"
@@ -129,7 +132,7 @@ test("cross-runtime validation guidance stays aligned", () => {
 });
 
 test("repository policy matches enforced CI and rollback controls", () => {
-  const root = join(import.meta.dirname, "..");
+  const root = join(testDirectory, "..");
 
   assert.deepEqual(checkPolicy(root), []);
 });
