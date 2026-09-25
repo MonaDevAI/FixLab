@@ -9,6 +9,8 @@ All notable changes to FixLab are documented in this file.
   machine-specific helper script.
 - Add a plan-first, checksum-verified portable Node.js repair for incoherent
   NVM installations without changing NVM or the permanent system `PATH`.
+- Refuse to execute unowned portable runtimes, verify `npm.cmd` with a real
+  operation, and keep portable-repair fallback commands directly runnable.
 - Keep the Node 18 compatibility test suite runnable on the declared minimum
   runtime while using a newer supported runtime for development Playwright.
 - Keep backend-first validation and transient synthesized-Playwright cleanup

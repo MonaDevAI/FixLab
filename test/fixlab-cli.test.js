@@ -135,6 +135,9 @@ test("Windows bootstrap keeps NVM and Node changes explicit", () => {
   assert.match(installer, /npm\.cmd/);
   assert.match(installer, /pack --dry-run --ignore-scripts --json/);
   assert.match(installer, /NVM reported success but did not create a coherent/);
+  assert.match(installer, /Get-PortableRepairCommand/);
+  assert.match(installer, /Portable alternative: \$repairCommand/);
+  assert.match(installer, /if \(\$Version\)/);
   assert.match(installer, /Get-SafeSourceDisplay/);
   assert.match(installer, /\[REDACTED\]/);
   assert.doesNotMatch(installer, /Write-Output "FixLab source: \$Source"/);
@@ -175,8 +178,18 @@ test("portable Node repair is plan-first and checksum verified", () => {
   assert.match(repair, /NVM changes: none/);
   assert.match(repair, /\.fixlab-runtime-root/);
   assert.match(repair, /not marked as FixLab-owned/);
+  assert.match(repair, /npm\.cmd/);
+  assert.match(repair, /pack --dry-run --ignore-scripts --json/);
   assert.match(repair, /if \(-not \$Yes\)/);
   assert.match(repair, /No changes made/);
+  const ownershipCheck = repair.indexOf(
+    "if (-not (Test-Path -LiteralPath $ownershipMarker -PathType Leaf))"
+  );
+  const existingRuntimeProbe = repair.indexOf(
+    "$current = Test-PortableRuntime"
+  );
+  assert.ok(ownershipCheck >= 0);
+  assert.ok(existingRuntimeProbe > ownershipCheck);
   assert.doesNotMatch(repair, /nvm\s+(?:install|uninstall)|setx\s+PATH/i);
 });
 

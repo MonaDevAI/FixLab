@@ -110,9 +110,11 @@ function Test-PortableRuntime {
     )
 
     $nodePath = Join-Path $Directory "node.exe"
+    $npmPath = Join-Path $Directory "npm.cmd"
     $npmCliPath = Join-Path $Directory "node_modules\npm\bin\npm-cli.js"
     if (
         -not (Test-Path -LiteralPath $nodePath -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $npmPath -PathType Leaf) -or
         -not (Test-Path -LiteralPath $npmCliPath -PathType Leaf)
     ) {
         return $null
@@ -126,13 +128,48 @@ function Test-PortableRuntime {
         return $null
     }
 
-    $npmOutput = (& $nodePath $npmCliPath --version 2>&1 | Out-String).Trim()
+    $npmOutput = (& $npmPath --version 2>&1 | Out-String).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $npmOutput) {
         return $null
     }
 
+    $probeDirectory = Join-Path (
+        [System.IO.Path]::GetTempPath()
+    ) "fixlab-portable-npm-probe-$([guid]::NewGuid())"
+    New-Item -ItemType Directory -Path $probeDirectory | Out-Null
+    try {
+        Set-Content `
+            -LiteralPath (Join-Path $probeDirectory "package.json") `
+            -Value '{"name":"fixlab-portable-npm-probe","version":"1.0.0"}'
+        Push-Location $probeDirectory
+        try {
+            $probeOutput = (
+                & $npmPath pack --dry-run --ignore-scripts --json 2>&1 |
+                    Out-String
+            )
+            $probeStatus = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+        }
+        if (
+            $probeStatus -ne 0 -or
+            $probeOutput -match 'Class extends value undefined|(?:TypeError|ReferenceError|SyntaxError):'
+        ) {
+            return $null
+        }
+    }
+    finally {
+        Remove-Item `
+            -LiteralPath $probeDirectory `
+            -Recurse `
+            -Force `
+            -ErrorAction SilentlyContinue
+    }
+
     return [pscustomobject]@{
         Node = $nodePath
+        Npm = $npmPath
         NpmCli = $npmCliPath
         NodeVersion = $RequiredVersion
         NpmVersion = $npmOutput
@@ -194,13 +231,19 @@ Write-Output "  checksum manifest: $checksumsUrl"
 Write-Output "  system PATH changes: none"
 Write-Output "  NVM changes: none"
 
-$current = Test-PortableRuntime `
-    -Directory $runtimePath `
-    -RequiredVersion $requestedVersion
+$current = $null
+if (Test-Path -LiteralPath $runtimePath) {
+    if (-not (Test-Path -LiteralPath $ownershipMarker -PathType Leaf)) {
+        throw "Refusing to inspect an existing runtime because DestinationRoot is not marked as FixLab-owned: $destinationRootFull"
+    }
+    $current = Test-PortableRuntime `
+        -Directory $runtimePath `
+        -RequiredVersion $requestedVersion
+}
 if ($current) {
     Write-Output "Portable runtime is already ready:"
     Write-Output "  Node.js: $($current.NodeVersion) ($($current.Node))"
-    Write-Output "  npm: $($current.NpmVersion) ($($current.NpmCli))"
+    Write-Output "  npm: $($current.NpmVersion) ($($current.Npm))"
     exit 0
 }
 
@@ -284,6 +327,6 @@ if (-not $runtime) {
 
 Write-Output "Portable runtime repaired and verified:"
 Write-Output "  Node.js: $($runtime.NodeVersion) ($($runtime.Node))"
-Write-Output "  npm: $($runtime.NpmVersion) ($($runtime.NpmCli))"
+Write-Output "  npm: $($runtime.NpmVersion) ($($runtime.Npm))"
 Write-Output "Use it in the current PowerShell session without changing the permanent PATH:"
 Write-Output "  `$env:PATH = `"$runtimePath;`$env:PATH`""
