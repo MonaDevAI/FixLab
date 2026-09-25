@@ -20,6 +20,26 @@ Install only the tools required by the repository profile.
 
 ## Onboard a repository
 
+Run the packaged plan-first workflow from any directory:
+
+```powershell
+fixlab onboard C:\path\to\application --runtime copilot
+```
+
+The first run creates the profile and stops for repository-specific
+configuration. After reviewing the profile, rerun the same command to inspect
+the restore and Playwright plans. Approve the complete setup explicitly:
+
+```powershell
+fixlab onboard C:\path\to\application `
+  --yes `
+  --authenticate `
+  --start-dashboard `
+  --runtime copilot
+```
+
+The equivalent manual steps are:
+
 1. Run `fixlab init` to create
    `.github/fixlab/repository-profile.json` and the FixLab prompt commands
    under `.github/prompts`.

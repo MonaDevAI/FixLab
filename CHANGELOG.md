@@ -4,6 +4,9 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Add a packaged, plan-first `fixlab onboard` command so users can initialize,
+  review, prepare, authenticate, verify, and start a repository without a
+  machine-specific helper script.
 - Add a plan-first, checksum-verified portable Node.js repair for incoherent
   NVM installations without changing NVM or the permanent system `PATH`.
 - Keep the Node 18 compatibility test suite runnable on the declared minimum
