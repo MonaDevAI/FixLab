@@ -400,6 +400,51 @@ test("dashboard reports readiness and serves only known static assets", async ()
   }
 });
 
+test("dashboard stop control requires its instance token", async () => {
+  const repository = createRepository();
+  let resolveShutdown;
+  const shutdownRequested = new Promise((resolve) => {
+    resolveShutdown = resolve;
+  });
+  const { dashboard, url } = await startDashboard(
+    repository,
+    () => {
+      throw new Error("executor should not run");
+    },
+    undefined,
+    {
+      shutdownToken: "11111111-1111-4111-8111-111111111111",
+      onShutdown: resolveShutdown
+    }
+  );
+
+  try {
+    const rejected = await jsonRequest(url, "/api/control/stop", {
+      method: "POST",
+      headers: {
+        "X-FixLab-Shutdown-Token":
+          "22222222-2222-4222-8222-222222222222"
+      }
+    });
+    assert.equal(rejected.response.status, 403);
+    assert.equal(rejected.body.error, "dashboard stop was not authorized");
+
+    const accepted = await jsonRequest(url, "/api/control/stop", {
+      method: "POST",
+      headers: {
+        "X-FixLab-Shutdown-Token":
+          "11111111-1111-4111-8111-111111111111"
+      }
+    });
+    assert.equal(accepted.response.status, 202);
+    assert.equal(accepted.body.stopping, true);
+    await shutdownRequested;
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("loads Azure DevOps intake and passes local screenshots without caching them", async () => {
   const repository = createGitRepository();
   const profilePath = join(

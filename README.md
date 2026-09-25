@@ -84,7 +84,8 @@ pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application -Y
 `fixlab init` adds the repository profile, packaged prompt commands, and the
 `fixlab-autofix` Visual Studio Code agent without overwriting existing files.
 `fixlab dashboard` starts the local loopback dashboard and opens it in the
-system browser.
+system browser. Run `fixlab dashboard --stop` from the same repository to stop
+that FixLab-owned dashboard without terminating unrelated Node.js processes.
 
 FixLab is not yet published to the public npm registry or merged into the
 official GitHub Copilot plugin marketplace. Until marketplace review is
