@@ -39,10 +39,13 @@ function Assert-NoReparsePoints {
         [System.StringSplitOptions]::RemoveEmptyEntries
     )) {
         $current = Join-Path $current $segment
-        if (-not (Test-Path -LiteralPath $current)) {
+        $item = Get-Item `
+            -LiteralPath $current `
+            -Force `
+            -ErrorAction SilentlyContinue
+        if (-not $item) {
             continue
         }
-        $item = Get-Item -LiteralPath $current -Force
         if (
             $item.Attributes -band
             [System.IO.FileAttributes]::ReparsePoint
@@ -73,15 +76,21 @@ function Assert-NoReparsePoints {
 function Test-FixLabOwnershipMarker {
     param([string]$Path)
 
-    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+    $item = Get-Item `
+        -LiteralPath $Path `
+        -Force `
+        -ErrorAction SilentlyContinue
+    if (-not $item) {
         return $false
     }
-    $item = Get-Item -LiteralPath $Path -Force
     if (
         $item.Attributes -band
         [System.IO.FileAttributes]::ReparsePoint
     ) {
         throw "Refusing to trust a reparse-point ownership marker: $Path"
+    }
+    if ($item.PSIsContainer) {
+        throw "Refusing to trust a non-file ownership marker: $Path"
     }
     return (Get-Content -LiteralPath $Path -Raw).Trim() -eq (
         "FixLab portable runtime root"
@@ -283,6 +292,7 @@ if (
 ) {
     throw "Runtime destination must remain inside DestinationRoot."
 }
+$runtimePath = Assert-NoReparsePoints -Path $runtimePath
 
 $archiveName = "$runtimeName.zip"
 $downloadBase = "https://nodejs.org/dist/v$requestedVersion"

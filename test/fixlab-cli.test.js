@@ -188,6 +188,7 @@ test("portable Node repair is plan-first and checksum verified", () => {
   assert.match(repair, /not marked as FixLab-owned/);
   assert.match(repair, /Assert-NoReparsePoints/);
   assert.match(repair, /FileAttributes\]::ReparsePoint/);
+  assert.match(repair, /Get-Item[\s\S]*-ErrorAction SilentlyContinue/);
   assert.match(repair, /InspectDescendants/);
   assert.match(repair, /Test-FixLabOwnershipMarker/);
   assert.match(repair, /npm\.cmd/);
