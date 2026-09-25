@@ -42,7 +42,9 @@ function Get-PortableRepairCommand {
     )
 
     $repairScript = Join-Path $PSScriptRoot "repair-node-runtime.ps1"
-    $command = "pwsh -File `"$repairScript`" -Repository `"$Root`""
+    $scriptLiteral = "'" + $repairScript.Replace("'", "''") + "'"
+    $rootLiteral = "'" + $Root.Replace("'", "''") + "'"
+    $command = "pwsh -File $scriptLiteral -Repository $rootLiteral"
     if ($Version) {
         $command += " -NodeVersion $Version"
     }
@@ -332,10 +334,13 @@ if (-not $runtime -and $requestedVersion) {
 }
 
 if (-not $runtime) {
-    $repairCommand = Get-PortableRepairCommand `
-        -Root $repositoryRoot `
-        -Version $requestedVersion
-    throw "No coherent NVM Node.js/npm installation was found. Repair NVM or run: $repairCommand"
+    if ($requestedVersion) {
+        $repairCommand = Get-PortableRepairCommand `
+            -Root $repositoryRoot `
+            -Version $requestedVersion
+        throw "No coherent NVM Node.js/npm installation was found. Repair NVM or run: $repairCommand"
+    }
+    throw "No coherent NVM Node.js/npm installation was found, and the repository has no exact Node.js pin. Set toolchain.nodeVersion, .nvmrc, .node-version, or an exact package.json engines.node value, then retry; alternatively pass an exact major.minor.patch value to repair-node-runtime.ps1 with -NodeVersion."
 }
 
 Write-Output "Selected runtime:"

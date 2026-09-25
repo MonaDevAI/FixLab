@@ -60,6 +60,7 @@ read credentials, or make network requests.
 
 ```text
 fixlab dashboard [repository] [--port <number>] [--no-open]
+fixlab dashboard [repository] --stop
 ```
 
 The command starts the packaged local UI on `127.0.0.1:4317` by default and
@@ -67,6 +68,11 @@ opens the system browser unless `--no-open` is supplied. It does not run during
 installation or `fixlab init`. The UI starts one selected-runtime job at a time
 and displays the intake, diagnosis, reproduce, fix, review, local-stack,
 live-test, and pull-request stages with polled logs.
+
+Use `fixlab dashboard [repository] --stop` from another terminal to request a
+graceful shutdown. FixLab stores an instance-specific local control token and
+will stop only the dashboard that created that record; it does not terminate
+unrelated Node.js processes.
 
 The user supplies only the bug or required enhancement. The agent loads
 validation context from the repository profile and autonomously owns contract

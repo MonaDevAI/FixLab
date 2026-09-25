@@ -35,6 +35,7 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /fixlab authenticate/);
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
+  assert.match(result.stdout, /--stop/);
   assert.match(result.stdout, /--runtime <agency\|copilot>/);
   assert.match(result.stdout, /--environment <name>/);
   assert.match(result.stdout, /FIXLAB_RUNTIME/);
@@ -138,6 +139,10 @@ test("Windows bootstrap keeps NVM and Node changes explicit", () => {
   assert.match(installer, /Get-PortableRepairCommand/);
   assert.match(installer, /Portable alternative: \$repairCommand/);
   assert.match(installer, /if \(\$Version\)/);
+  assert.match(installer, /\$repairScript\.Replace\("'", "''"\)/);
+  assert.match(installer, /\$Root\.Replace\("'", "''"\)/);
+  assert.match(installer, /repository has no exact Node\.js pin/);
+  assert.match(installer, /pass an exact major\.minor\.patch value/);
   assert.match(installer, /Get-SafeSourceDisplay/);
   assert.match(installer, /\[REDACTED\]/);
   assert.doesNotMatch(installer, /Write-Output "FixLab source: \$Source"/);
@@ -768,6 +773,19 @@ test("dashboard rejects a missing repository before starting", () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /repository does not exist/);
+});
+
+test("dashboard stop succeeds when no owned dashboard is registered", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    const result = run(["dashboard", repository, "--stop"], repository);
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /No running FixLab dashboard is registered/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 test("run launches the Agency-resolved FixLab agent", () => {

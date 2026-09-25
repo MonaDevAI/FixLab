@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readFileSync
+  readFileSync,
+  rmSync,
+  writeFileSync
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -72,7 +75,7 @@ Usage:
   fixlab authenticate [repository] [--yes]
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
-  fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
+  fixlab dashboard [repository] [--port <number>] [--no-open] [--stop] [--runtime <agency|copilot>]
   fixlab --help
 
 Commands:
@@ -86,7 +89,7 @@ Commands:
             Plan or run the repository-owned browser authentication command.
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
-  dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
+  dashboard Start or stop the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
 
 Runtime:
   agency    Use Agency Copilot (default).
@@ -1006,8 +1009,13 @@ function parseDashboardArguments(args) {
   let repositoryArgument;
   let port = DEFAULT_DASHBOARD_PORT;
   let open = true;
+  let stop = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    if (argument === "--stop") {
+      stop = true;
+      continue;
+    }
     if (argument === "--no-open") {
       open = false;
       continue;
@@ -1035,8 +1043,106 @@ function parseDashboardArguments(args) {
   return {
     repository: resolveRepository(repositoryArgument),
     port,
-    open
+    open,
+    stop
   };
+}
+
+function dashboardControlPath(repository) {
+  const identity = createHash("sha256")
+    .update(resolve(repository))
+    .digest("hex")
+    .slice(0, 20);
+  return join(
+    tmpdir(),
+    "fixlab-dashboard-control",
+    identity,
+    "dashboard.json"
+  );
+}
+
+function writeDashboardControl(repository, port, token) {
+  const controlPath = dashboardControlPath(repository);
+  mkdirSync(dirname(controlPath), { recursive: true });
+  writeFileSync(
+    controlPath,
+    JSON.stringify({
+      version: 1,
+      repository: resolve(repository),
+      host: "127.0.0.1",
+      port,
+      pid: process.pid,
+      token
+    }),
+    { mode: 0o600 }
+  );
+  return controlPath;
+}
+
+function removeDashboardControl(controlPath, token) {
+  try {
+    const record = JSON.parse(readFileSync(controlPath, "utf8"));
+    if (record.token === token) {
+      rmSync(controlPath, { force: true });
+    }
+  } catch {
+    // A missing or replaced record does not belong to this dashboard instance.
+  }
+}
+
+async function stopDashboard(repository) {
+  const controlPath = dashboardControlPath(repository);
+  if (!existsSync(controlPath)) {
+    console.log(`No running FixLab dashboard is registered for ${repository}.`);
+    return 0;
+  }
+
+  let record;
+  try {
+    record = JSON.parse(readFileSync(controlPath, "utf8"));
+  } catch {
+    console.error(`FixLab dashboard control record is invalid: ${controlPath}`);
+    return 1;
+  }
+  if (
+    record.version !== 1 ||
+    record.repository !== resolve(repository) ||
+    record.host !== "127.0.0.1" ||
+    !Number.isSafeInteger(record.port) ||
+    record.port < 1 ||
+    record.port > 65535 ||
+    typeof record.token !== "string" ||
+    !/^[0-9a-f-]{36}$/iu.test(record.token)
+  ) {
+    console.error(`FixLab dashboard control record is invalid: ${controlPath}`);
+    return 1;
+  }
+
+  try {
+    const response = await fetch(
+      `http://127.0.0.1:${record.port}/api/control/stop`,
+      {
+        method: "POST",
+        headers: { "X-FixLab-Shutdown-Token": record.token },
+        signal: AbortSignal.timeout(5000)
+      }
+    );
+    if (response.status !== 202) {
+      console.error(
+        `FixLab dashboard refused the stop request (HTTP ${response.status}).`
+      );
+      return 1;
+    }
+  } catch {
+    rmSync(controlPath, { force: true });
+    console.log(
+      `No running FixLab dashboard was found; removed stale control record for ${repository}.`
+    );
+    return 0;
+  }
+
+  console.log(`Stopping FixLab dashboard for ${repository}.`);
+  return 0;
 }
 
 function parseOnboardArguments(args) {
@@ -1195,10 +1301,14 @@ async function dashboard(repository, port, shouldOpen, runtime) {
     console.error(`Cannot start FixLab dashboard: ${readiness.error}`);
     return 1;
   }
+  const shutdownToken = randomUUID();
+  let close;
   const dashboardServer = createDashboardServer({
     repository,
     packageRoot,
-    runtime
+    runtime,
+    shutdownToken,
+    onShutdown: () => close?.()
   });
   let address;
   try {
@@ -1211,21 +1321,37 @@ async function dashboard(repository, port, shouldOpen, runtime) {
   console.log(`FixLab dashboard: ${address.url}`);
   console.log(`Repository: ${repository}`);
   console.log(`Runtime: ${runtime}`);
-  console.log("Press Ctrl+C to stop the local dashboard.");
+  console.log(
+    'Press Ctrl+C or run "fixlab dashboard --stop" from the repository directory to stop the local dashboard.'
+  );
+  let controlPath;
+  try {
+    controlPath = writeDashboardControl(repository, address.port, shutdownToken);
+  } catch (error) {
+    await dashboardServer.close();
+    console.error(
+      `Cannot register FixLab dashboard stop control: ${error.message}`
+    );
+    return 1;
+  }
   if (shouldOpen) {
     openBrowser(address.url);
   }
 
   let closing = false;
-  const close = async () => {
+  close = async () => {
     if (closing) {
       return;
     }
     closing = true;
-    await dashboardServer.close();
+    try {
+      await dashboardServer.close();
+    } finally {
+      removeDashboardControl(controlPath, shutdownToken);
+    }
   };
-  process.once("SIGINT", close);
-  process.once("SIGTERM", close);
+  process.once("SIGINT", () => void close());
+  process.once("SIGTERM", () => void close());
   return 0;
 }
 
@@ -1329,6 +1455,9 @@ async function main(args) {
     if (parsed.error) {
       console.error(parsed.error);
       return 1;
+    }
+    if (parsed.stop) {
+      return stopDashboard(parsed.repository);
     }
     return dashboard(
       parsed.repository,

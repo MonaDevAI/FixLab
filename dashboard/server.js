@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   createReadStream,
   existsSync,
@@ -2114,7 +2114,9 @@ export function createDashboardServer({
   publicDirectory = join(packageRoot, "dashboard", "public"),
   executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader(),
-  executionIdleTimeoutMs
+  executionIdleTimeoutMs,
+  shutdownToken = "",
+  onShutdown
 }) {
   const resolvedRepository = resolve(repository);
   let currentJob = null;
@@ -2344,6 +2346,30 @@ export function createDashboardServer({
       request.url,
       `http://${request.headers.host ?? DASHBOARD_HOST}`
     );
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/control/stop" &&
+      shutdownToken
+    ) {
+      const suppliedToken = String(
+        request.headers["x-fixlab-shutdown-token"] ?? ""
+      );
+      const expected = Buffer.from(shutdownToken);
+      const supplied = Buffer.from(suppliedToken);
+      if (
+        supplied.length !== expected.length ||
+        !timingSafeEqual(supplied, expected)
+      ) {
+        sendJson(response, 403, { error: "dashboard stop was not authorized" });
+        return;
+      }
+      sendJson(response, 202, { stopping: true });
+      response.once("finish", () => {
+        setImmediate(() => onShutdown?.());
+      });
+      return;
+    }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
       persistDashboardState();
