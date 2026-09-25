@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -7,9 +8,11 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync
 } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
@@ -788,6 +791,37 @@ test("dashboard stop succeeds when no owned dashboard is registered", () => {
     assert.equal(result.status, 0);
     assert.match(result.stdout, /No running FixLab dashboard is registered/);
   } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard stop rejects a substituted control directory", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  const target = mkdtempSync(join(tmpdir(), "fixlab-control-target-"));
+  const identity = createHash("sha256")
+    .update(resolve(repository))
+    .digest("hex")
+    .slice(0, 20);
+  const controlRoot = join(tmpdir(), "fixlab-dashboard-control");
+  const controlDirectory = join(controlRoot, identity);
+
+  try {
+    mkdirSync(controlRoot, { recursive: true });
+    symlinkSync(
+      target,
+      controlDirectory,
+      process.platform === "win32" ? "junction" : "dir"
+    );
+
+    const result = run(["dashboard", repository, "--stop"], repository);
+
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /not a trusted local directory/);
+  } finally {
+    if (existsSync(controlDirectory)) {
+      unlinkSync(controlDirectory);
+    }
+    rmSync(target, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
   }
 });

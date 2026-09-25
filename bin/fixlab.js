@@ -5,9 +5,10 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
-  rmSync,
+  unlinkSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -1061,9 +1062,44 @@ function dashboardControlPath(repository) {
   );
 }
 
-function writeDashboardControl(repository, port, token) {
+function dashboardControlDirectory(repository, create) {
   const controlPath = dashboardControlPath(repository);
-  mkdirSync(dirname(controlPath), { recursive: true });
+  const root = dirname(dirname(controlPath));
+  const directory = dirname(controlPath);
+  for (const candidate of [root, directory]) {
+    if (!existsSync(candidate)) {
+      if (!create) {
+        return { controlPath, directoryExists: false };
+      }
+      try {
+        mkdirSync(candidate, { mode: 0o700 });
+      } catch (error) {
+        if (error.code !== "EEXIST") {
+          throw error;
+        }
+      }
+    }
+    const status = lstatSync(candidate);
+    if (status.isSymbolicLink() || !status.isDirectory()) {
+      throw new Error(
+        `dashboard control directory is not a trusted local directory: ${candidate}`
+      );
+    }
+  }
+  return { controlPath, directoryExists: true };
+}
+
+function assertDashboardControlFile(controlPath) {
+  const status = lstatSync(controlPath);
+  if (status.isSymbolicLink() || !status.isFile()) {
+    throw new Error(
+      `dashboard control record is not a trusted local file: ${controlPath}`
+    );
+  }
+}
+
+function writeDashboardControl(repository, port, token) {
+  const { controlPath } = dashboardControlDirectory(repository, true);
   writeFileSync(
     controlPath,
     JSON.stringify({
@@ -1074,34 +1110,51 @@ function writeDashboardControl(repository, port, token) {
       pid: process.pid,
       token
     }),
-    { mode: 0o600 }
+    { flag: "wx", mode: 0o600 }
   );
+  assertDashboardControlFile(controlPath);
   return controlPath;
 }
 
 function removeDashboardControl(controlPath, token) {
   try {
+    assertDashboardControlFile(controlPath);
     const record = JSON.parse(readFileSync(controlPath, "utf8"));
     if (record.token === token) {
-      rmSync(controlPath, { force: true });
+      unlinkSync(controlPath);
+      return true;
     }
   } catch {
     // A missing or replaced record does not belong to this dashboard instance.
   }
+  return false;
 }
 
 async function stopDashboard(repository) {
-  const controlPath = dashboardControlPath(repository);
-  if (!existsSync(controlPath)) {
+  let controlPath;
+  let directoryExists;
+  try {
+    ({ controlPath, directoryExists } = dashboardControlDirectory(
+      repository,
+      false
+    ));
+  } catch (error) {
+    console.error(`Cannot use FixLab dashboard stop control: ${error.message}`);
+    return 1;
+  }
+  if (!directoryExists || !existsSync(controlPath)) {
     console.log(`No running FixLab dashboard is registered for ${repository}.`);
     return 0;
   }
 
   let record;
   try {
+    assertDashboardControlFile(controlPath);
     record = JSON.parse(readFileSync(controlPath, "utf8"));
-  } catch {
-    console.error(`FixLab dashboard control record is invalid: ${controlPath}`);
+  } catch (error) {
+    console.error(
+      `FixLab dashboard control record is invalid: ${controlPath} (${error.message})`
+    );
     return 1;
   }
   if (
@@ -1134,11 +1187,16 @@ async function stopDashboard(repository) {
       return 1;
     }
   } catch {
-    rmSync(controlPath, { force: true });
-    console.log(
-      `No running FixLab dashboard was found; removed stale control record for ${repository}.`
+    if (removeDashboardControl(controlPath, record.token)) {
+      console.log(
+        `No running FixLab dashboard was found; removed stale control record for ${repository}.`
+      );
+      return 0;
+    }
+    console.error(
+      `No running FixLab dashboard was found, but its control record could not be removed: ${controlPath}`
     );
-    return 0;
+    return 1;
   }
 
   console.log(`Stopping FixLab dashboard for ${repository}.`);

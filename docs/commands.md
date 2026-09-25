@@ -72,7 +72,9 @@ live-test, and pull-request stages with polled logs.
 Use `fixlab dashboard [repository] --stop` from another terminal to request a
 graceful shutdown. FixLab stores an instance-specific local control token and
 will stop only the dashboard that created that record; it does not terminate
-unrelated Node.js processes.
+unrelated Node.js processes. Control directories and records must be regular
+local filesystem entries; FixLab rejects symbolic-link or junction
+substitution instead of following it.
 
 The user supplies only the bug or required enhancement. The agent loads
 validation context from the repository profile and autonomously owns contract
