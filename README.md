@@ -49,9 +49,16 @@ For direct mode, install and authenticate GitHub Copilot CLI, then use
 
 ```shell
 npm install --global github:MonaDevAI/FixLab
-fixlab init
-fixlab doctor
-fixlab dashboard
+fixlab onboard C:\path\to\application
+```
+
+The first onboarding run creates the repository-owned profile and stops for
+review. After configuring that profile, rerun to inspect the setup plan, then
+approve dependency restoration, Playwright setup, browser authentication, and
+dashboard startup explicitly:
+
+```powershell
+fixlab onboard C:\path\to\application --yes --authenticate --start-dashboard --runtime copilot
 ```
 
 On Windows, when Node/npm command resolution may be inconsistent, use the

@@ -29,6 +29,7 @@ test("help lists supported commands", () => {
   const result = run(["--help"], process.cwd());
 
   assert.equal(result.status, 0);
+  assert.match(result.stdout, /fixlab onboard/);
   assert.match(result.stdout, /fixlab init/);
   assert.match(result.stdout, /fixlab prepare/);
   assert.match(result.stdout, /fixlab authenticate/);
@@ -39,6 +40,86 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /FIXLAB_RUNTIME/);
   assert.match(result.stdout, /127\.0\.0\.1:4317/);
   assert.match(result.stdout, /docs\/troubleshooting\.md/);
+});
+
+test("onboard creates a new profile and stops before placeholder setup", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    const result = run(
+      ["onboard", repository, "--runtime", "copilot"],
+      repository
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /FixLab onboarding/);
+    assert.match(result.stdout, /created a new example profile/i);
+    assert.match(result.stdout, /Then rerun fixlab onboard/);
+    assert.doesNotMatch(result.stderr, /restore directory is missing/);
+    assert.equal(
+      existsSync(
+        join(
+          repository,
+          ".github",
+          "fixlab",
+          "repository-profile.json"
+        )
+      ),
+      true
+    );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("onboard plans existing repository setup without making changes", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(
+      repository,
+      ".github",
+      "fixlab",
+      "repository-profile.json"
+    );
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.validation.commands.frontendRestore = "node prepare.js";
+    profile.validation.commands.backendRestore = "node prepare.js";
+    writeFileSync(profilePath, JSON.stringify(profile));
+    for (const directory of ["frontend", "backend/src"]) {
+      const workingDirectory = join(repository, directory);
+      mkdirSync(workingDirectory, { recursive: true });
+      writeFileSync(
+        join(workingDirectory, "prepare.js"),
+        'require("node:fs").writeFileSync("prepared.txt", "ready");'
+      );
+    }
+    writeFileSync(join(repository, "frontend", "package-lock.json"), "{}");
+
+    const result = run(
+      ["onboard", repository, "--runtime", "copilot"],
+      repository
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Repository preparation plan/);
+    assert.match(result.stdout, /Playwright setup directory/);
+    assert.match(
+      result.stdout,
+      /No restore or Playwright installation commands were executed/
+    );
+    assert.equal(
+      existsSync(join(repository, "frontend", "prepared.txt")),
+      false
+    );
+    assert.equal(
+      existsSync(join(repository, "backend", "src", "prepared.txt")),
+      false
+    );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 test("Windows bootstrap keeps NVM and Node changes explicit", () => {

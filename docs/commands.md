@@ -1,5 +1,17 @@
 # FixLab commands
 
+## Repository onboarding
+
+```text
+fixlab onboard [repository] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>]
+```
+
+The first run creates the repository profile and stops before using generic
+placeholder paths. After the profile is configured, a plan-only run prints the
+repository-owned restore and Playwright commands. `--yes` approves those
+commands, `--authenticate` runs the repository-owned interactive browser login,
+and `--start-dashboard` starts the dashboard only after Doctor passes.
+
 `fixlab init` installs these prompt files under `.github/prompts` without
 overwriting repository-owned versions.
 

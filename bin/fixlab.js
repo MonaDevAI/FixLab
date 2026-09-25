@@ -64,6 +64,7 @@ function printUsage() {
   console.log(`FixLab CLI
 
 Usage:
+  fixlab onboard [repository] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>]
   fixlab init [repository]
   fixlab prepare [repository] [--yes]
   fixlab doctor [repository] [--runtime <agency|copilot>]
@@ -75,6 +76,7 @@ Usage:
   fixlab --help
 
 Commands:
+  onboard   Run the plan-first repository onboarding workflow.
   init      Add the FixLab repository profile template.
   prepare   Plan or run repository-owned frontend and backend restore commands.
   doctor    Check required tools and repository configuration.
@@ -1037,6 +1039,132 @@ function parseDashboardArguments(args) {
   };
 }
 
+function parseOnboardArguments(args) {
+  const runtimeArguments = parseRuntimeArguments(args);
+  if (runtimeArguments.error) {
+    return runtimeArguments;
+  }
+
+  let repositoryArgument;
+  let approved = false;
+  let authenticateBrowser = false;
+  let startDashboard = false;
+  for (const argument of runtimeArguments.args) {
+    if (argument === "--yes") {
+      approved = true;
+      continue;
+    }
+    if (argument === "--authenticate") {
+      authenticateBrowser = true;
+      continue;
+    }
+    if (argument === "--start-dashboard") {
+      startDashboard = true;
+      continue;
+    }
+    if (argument.startsWith("-")) {
+      return { error: `unknown onboard option: ${argument}` };
+    }
+    if (repositoryArgument) {
+      return { error: "onboard accepts at most one repository path" };
+    }
+    repositoryArgument = argument;
+  }
+
+  return {
+    repository: resolveRepository(repositoryArgument),
+    runtime: runtimeArguments.runtime,
+    approved,
+    authenticateBrowser,
+    startDashboard
+  };
+}
+
+async function onboard({
+  repository,
+  runtime,
+  approved,
+  authenticateBrowser,
+  startDashboard
+}) {
+  const profilePath = join(repository, profileRelativePath);
+  const profileExisted = existsSync(profilePath);
+
+  console.log("FixLab onboarding");
+  console.log(`  repository: ${repository}`);
+  console.log(`  runtime: ${runtime}`);
+
+  const initResult = init(repository);
+  if (initResult !== 0) {
+    return initResult;
+  }
+
+  console.log("");
+  console.log("Review this repository-owned profile before approving setup:");
+  console.log(`  ${profilePath}`);
+  console.log("");
+
+  if (!profileExisted) {
+    console.log("FixLab created a new example profile.");
+    console.log(
+      "Update its frontend/backend paths, commands, ports, environments, and authentication settings."
+    );
+    console.log("Then rerun fixlab onboard for this repository.");
+    return 0;
+  }
+
+  const preparationPlan = prepare(repository, false);
+  if (preparationPlan !== 0) {
+    return preparationPlan;
+  }
+  const playwrightPlan = setupPlaywright(repository, false);
+  if (playwrightPlan !== 0) {
+    return playwrightPlan;
+  }
+
+  if (!approved) {
+    console.log("");
+    console.log("No restore or Playwright installation commands were executed.");
+    console.log("After reviewing the profile and plans, rerun with --yes.");
+    console.log(
+      "Add --authenticate to perform repository-owned browser sign-in."
+    );
+    console.log(
+      "Add --start-dashboard to start the dashboard after Doctor passes."
+    );
+    return 0;
+  }
+
+  const preparationResult = prepare(repository, true);
+  if (preparationResult !== 0) {
+    return preparationResult;
+  }
+  const playwrightResult = setupPlaywright(repository, true);
+  if (playwrightResult !== 0) {
+    return playwrightResult;
+  }
+  if (authenticateBrowser) {
+    const authenticationResult = authenticate(repository, true);
+    if (authenticationResult !== 0) {
+      return authenticationResult;
+    }
+  }
+
+  const doctorResult = doctor(repository, runtime);
+  if (doctorResult !== 0) {
+    return doctorResult;
+  }
+  if (startDashboard) {
+    return dashboard(repository, DEFAULT_DASHBOARD_PORT, true, runtime);
+  }
+
+  console.log("");
+  console.log("FixLab onboarding is ready.");
+  console.log("Start the dashboard with:");
+  console.log(`  fixlab dashboard "${repository}" --runtime ${runtime}`);
+  return 0;
+}
+
 function openBrowser(url) {
   let command;
   let args;
@@ -1106,6 +1234,15 @@ async function main(args) {
   if (!command || command === "--help" || command === "-h") {
     printUsage();
     return 0;
+  }
+
+  if (command === "onboard") {
+    const parsed = parseOnboardArguments(rest);
+    if (parsed.error) {
+      console.error(parsed.error);
+      return 1;
+    }
+    return onboard(parsed);
   }
 
   if (command === "init") {
