@@ -183,12 +183,16 @@ test("portable Node repair is plan-first and checksum verified", () => {
   assert.match(repair, /NVM changes: none/);
   assert.match(repair, /\.fixlab-runtime-root/);
   assert.match(repair, /not marked as FixLab-owned/);
+  assert.match(repair, /Assert-NoReparsePoints/);
+  assert.match(repair, /FileAttributes\]::ReparsePoint/);
+  assert.match(repair, /InspectDescendants/);
+  assert.match(repair, /Test-FixLabOwnershipMarker/);
   assert.match(repair, /npm\.cmd/);
   assert.match(repair, /pack --dry-run --ignore-scripts --json/);
   assert.match(repair, /if \(-not \$Yes\)/);
   assert.match(repair, /No changes made/);
   const ownershipCheck = repair.indexOf(
-    "if (-not (Test-Path -LiteralPath $ownershipMarker -PathType Leaf))"
+    "if (-not (Test-FixLabOwnershipMarker -Path $ownershipMarker))"
   );
   const existingRuntimeProbe = repair.indexOf(
     "$current = Test-PortableRuntime"

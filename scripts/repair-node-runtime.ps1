@@ -22,6 +22,72 @@ function Get-ExactVersion {
     return ""
 }
 
+function Assert-NoReparsePoints {
+    param(
+        [string]$Path,
+        [switch]$InspectDescendants
+    )
+
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $current = [System.IO.Path]::GetPathRoot($fullPath)
+    $relative = $fullPath.Substring($current.Length)
+    foreach ($segment in $relative.Split(
+        [char[]]@(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar
+        ),
+        [System.StringSplitOptions]::RemoveEmptyEntries
+    )) {
+        $current = Join-Path $current $segment
+        if (-not (Test-Path -LiteralPath $current)) {
+            continue
+        }
+        $item = Get-Item -LiteralPath $current -Force
+        if (
+            $item.Attributes -band
+            [System.IO.FileAttributes]::ReparsePoint
+        ) {
+            throw "Refusing to use a path containing a reparse point: $current"
+        }
+    }
+
+    if (
+        $InspectDescendants -and
+        (Test-Path -LiteralPath $fullPath -PathType Container)
+    ) {
+        $reparsePoint = Get-ChildItem `
+            -LiteralPath $fullPath `
+            -Force `
+            -Recurse `
+            -Attributes ReparsePoint `
+            -ErrorAction Stop |
+                Select-Object -First 1
+        if ($reparsePoint) {
+            throw "Refusing to use a directory containing a reparse point: $($reparsePoint.FullName)"
+        }
+    }
+
+    return $fullPath
+}
+
+function Test-FixLabOwnershipMarker {
+    param([string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) {
+        return $false
+    }
+    $item = Get-Item -LiteralPath $Path -Force
+    if (
+        $item.Attributes -band
+        [System.IO.FileAttributes]::ReparsePoint
+    ) {
+        throw "Refusing to trust a reparse-point ownership marker: $Path"
+    }
+    return (Get-Content -LiteralPath $Path -Raw).Trim() -eq (
+        "FixLab portable runtime root"
+    )
+}
+
 function Get-RepositoryNodeVersion {
     param([string]$Root)
 
@@ -199,6 +265,7 @@ if (-not $requestedVersion) {
 }
 
 $destinationRootFull = [System.IO.Path]::GetFullPath($DestinationRoot)
+$destinationRootFull = Assert-NoReparsePoints -Path $destinationRootFull
 $ownershipMarker = Join-Path $destinationRootFull ".fixlab-runtime-root"
 $runtimeName = "node-v$requestedVersion-win-$Architecture"
 $runtimePath = [System.IO.Path]::GetFullPath(
@@ -233,9 +300,12 @@ Write-Output "  NVM changes: none"
 
 $current = $null
 if (Test-Path -LiteralPath $runtimePath) {
-    if (-not (Test-Path -LiteralPath $ownershipMarker -PathType Leaf)) {
+    if (-not (Test-FixLabOwnershipMarker -Path $ownershipMarker)) {
         throw "Refusing to inspect an existing runtime because DestinationRoot is not marked as FixLab-owned: $destinationRootFull"
     }
+    Assert-NoReparsePoints `
+        -Path $runtimePath `
+        -InspectDescendants | Out-Null
     $current = Test-PortableRuntime `
         -Directory $runtimePath `
         -RequiredVersion $requestedVersion
@@ -253,19 +323,27 @@ if (-not $Yes) {
 }
 
 New-Item -ItemType Directory -Path $destinationRootFull -Force | Out-Null
+$destinationRootFull = Assert-NoReparsePoints -Path $destinationRootFull
 if (
     (Test-Path -LiteralPath $runtimePath) -and
-    -not (Test-Path -LiteralPath $ownershipMarker -PathType Leaf)
+    -not (Test-FixLabOwnershipMarker -Path $ownershipMarker)
 ) {
     throw "Refusing to replace an existing runtime because DestinationRoot is not marked as FixLab-owned: $destinationRootFull"
 }
-if (-not (Test-Path -LiteralPath $ownershipMarker -PathType Leaf)) {
+if (-not (Test-FixLabOwnershipMarker -Path $ownershipMarker)) {
     Set-Content `
         -LiteralPath $ownershipMarker `
         -Value "FixLab portable runtime root"
 }
-$downloadRoot = Join-Path $destinationRootFull (
-    ".downloads\repair-$([guid]::NewGuid())"
+$downloadsContainer = Join-Path $destinationRootFull ".downloads"
+$downloadsContainer = Assert-NoReparsePoints -Path $downloadsContainer
+New-Item `
+    -ItemType Directory `
+    -Path $downloadsContainer `
+    -Force | Out-Null
+$downloadsContainer = Assert-NoReparsePoints -Path $downloadsContainer
+$downloadRoot = Join-Path $downloadsContainer (
+    "repair-$([guid]::NewGuid())"
 )
 $archivePath = Join-Path $downloadRoot $archiveName
 $checksumsPath = Join-Path $downloadRoot "SHASUMS256.txt"
@@ -297,6 +375,9 @@ try {
     New-Item -ItemType Directory -Path $extractPath | Out-Null
     Expand-Archive -LiteralPath $archivePath -DestinationPath $extractPath
     $extractedRuntime = Join-Path $extractPath $runtimeName
+    Assert-NoReparsePoints `
+        -Path $extractedRuntime `
+        -InspectDescendants | Out-Null
     $verified = Test-PortableRuntime `
         -Directory $extractedRuntime `
         -RequiredVersion $requestedVersion
@@ -306,8 +387,11 @@ try {
 
     if (
         (Test-Path -LiteralPath $runtimePath) -and
-        (Test-Path -LiteralPath $ownershipMarker -PathType Leaf)
+        (Test-FixLabOwnershipMarker -Path $ownershipMarker)
     ) {
+        Assert-NoReparsePoints `
+            -Path $runtimePath `
+            -InspectDescendants | Out-Null
         Remove-Item -LiteralPath $runtimePath -Recurse -Force
     }
     Move-Item -LiteralPath $extractedRuntime -Destination $runtimePath
@@ -318,6 +402,9 @@ finally {
     }
 }
 
+$runtimePath = Assert-NoReparsePoints `
+    -Path $runtimePath `
+    -InspectDescendants
 $runtime = Test-PortableRuntime `
     -Directory $runtimePath `
     -RequiredVersion $requestedVersion

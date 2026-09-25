@@ -117,6 +117,8 @@ The repair script:
   operation before accepting the runtime.
 - Marks the portable root as FixLab-owned and refuses to execute, inspect, or
   replace an existing runtime in an unowned directory.
+- Rejects reparse points, junctions, and symbolic links in the destination
+  path, ownership marker, runtime tree, and temporary download workspace.
 - Replaces only the exact FixLab-owned portable runtime directory after
   checksum and runtime validation.
 - Does not uninstall NVM, change the permanent `PATH`, or modify the system

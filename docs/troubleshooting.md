@@ -73,7 +73,8 @@ pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application -Y
 The script verifies the official Node.js SHA-256 checksum, requires a real npm
 operation to succeed, and does not alter NVM or the permanent system `PATH`.
 It refuses to execute an existing portable runtime unless its destination root
-is already marked as FixLab-owned.
+is already marked as FixLab-owned, and rejects junctions, symbolic links, or
+other reparse points before runtime execution or recursive cleanup.
 
 ## Dependency restore returns `E401` or `E403`
 
