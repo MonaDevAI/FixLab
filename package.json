@@ -32,6 +32,7 @@
     "prompts",
     "README.md",
     "scripts/install-fixlab.ps1",
+    "scripts/repair-node-runtime.ps1",
     "specs",
     "templates"
   ],

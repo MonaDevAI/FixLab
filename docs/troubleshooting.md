@@ -62,6 +62,17 @@ fixlab prepare --yes
 Doctor and Prepare preflight the configured frontend package manager. Prepare
 stops before dependency restoration when npm, pnpm, or Yarn cannot run.
 
+If an NVM version directory contains the wrong `node.exe`, or lacks a coherent
+npm CLI after reinstalling, use FixLab's plan-first portable repair:
+
+```powershell
+pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application
+pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application -Yes
+```
+
+The script verifies the official Node.js SHA-256 checksum and does not alter
+NVM or the permanent system `PATH`.
+
 ## Dependency restore returns `E401` or `E403`
 
 The package manager is working, but the developer or runner is not

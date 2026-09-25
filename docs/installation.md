@@ -91,6 +91,39 @@ pwsh -File scripts/install-fixlab.ps1 `
 The bootstrap never uninstalls or repairs NVM, silently replaces Node, or
 modifies the system `PATH`.
 
+### Repair an incoherent Node runtime
+
+If NVM reports an exact version but the version directory launches another
+Node release, or npm is absent or internally inconsistent, use the plan-first
+portable repair:
+
+```powershell
+pwsh -File scripts/repair-node-runtime.ps1 `
+  -Repository C:\path\to\application
+
+pwsh -File scripts/repair-node-runtime.ps1 `
+  -Repository C:\path\to\application `
+  -Yes
+```
+
+The repair script:
+
+- Reads the exact Node version from the repository profile, `.nvmrc`,
+  `.node-version`, or exact `package.json` `engines.node`.
+- Downloads the official Windows archive and `SHASUMS256.txt` only from
+  `nodejs.org`.
+- Verifies the archive SHA-256 checksum before extraction.
+- Validates the extracted `node.exe` version and npm CLI.
+- Marks the portable root as FixLab-owned and refuses to replace an existing
+  runtime in an unowned directory.
+- Replaces only the exact FixLab-owned portable runtime directory after
+  checksum and runtime validation.
+- Does not uninstall NVM, change the permanent `PATH`, or modify the system
+  Node installation.
+
+Use the printed temporary `PATH` command in the current PowerShell session,
+then rerun `fixlab doctor`, `fixlab prepare`, or `fixlab authenticate`.
+
 This installs the CLI, dashboard assets, and packaged FixLab plugin. The
 selected runtime remains a separate prerequisite.
 

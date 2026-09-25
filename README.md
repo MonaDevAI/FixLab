@@ -66,6 +66,14 @@ The bootstrap discovers NVM for Windows, honors an exact repository Node pin,
 tests a real npm operation, and invokes the selected `npm.cmd` by absolute
 path. It never installs Node unless `-InstallNode` is also supplied.
 
+If NVM repeatedly produces an incoherent runtime, install a checksum-verified
+portable Node runtime without changing the system `PATH`:
+
+```powershell
+pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application
+pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application -Yes
+```
+
 `fixlab init` adds the repository profile, packaged prompt commands, and the
 `fixlab-autofix` Visual Studio Code agent without overwriting existing files.
 `fixlab dashboard` starts the local loopback dashboard and opens it in the

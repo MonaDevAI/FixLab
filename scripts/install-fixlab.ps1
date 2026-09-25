@@ -314,7 +314,8 @@ if (-not $runtime -and $requestedVersion) {
 }
 
 if (-not $runtime) {
-    throw "No coherent NVM Node.js/npm installation was found. Install an exact repository-supported Node.js version and retry."
+    $repairScript = Join-Path $PSScriptRoot "repair-node-runtime.ps1"
+    throw "No coherent NVM Node.js/npm installation was found. Repair NVM or run: pwsh -File `"$repairScript`" -Repository `"$repositoryRoot`" -NodeVersion $requestedVersion -Yes"
 }
 
 Write-Output "Selected runtime:"
