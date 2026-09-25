@@ -75,9 +75,9 @@ The bootstrap:
   machine's permanent `PATH`.
 - Verifies the installed `fixlab.cmd`.
 
-The default command only prints the plan. `-Yes` approves the global FixLab
-installation. If the exact Node version is absent, add `-InstallNode` to
-approve `nvm install`; the bootstrap verifies the runtime files afterward and
+The default command only prints the plan. `-Yes` approves changes. If the exact
+Node version is absent, both `-InstallNode` and `-Yes` are required before the
+bootstrap invokes `nvm install`; it verifies the runtime files afterward and
 fails if NVM reports success without installing them.
 
 ```powershell

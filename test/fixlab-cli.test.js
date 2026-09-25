@@ -54,6 +54,24 @@ test("Windows bootstrap keeps NVM and Node changes explicit", () => {
   assert.match(installer, /npm\.cmd/);
   assert.match(installer, /pack --dry-run --ignore-scripts --json/);
   assert.match(installer, /NVM reported success but did not create a coherent/);
+  assert.match(installer, /Get-SafeSourceDisplay/);
+  assert.match(installer, /\[REDACTED\]/);
+  assert.doesNotMatch(installer, /Write-Output "FixLab source: \$Source"/);
+  const missingRuntimeBranch = installer.indexOf(
+    "if (-not $runtime -and $requestedVersion)"
+  );
+  const nodeApprovalGate = installer.indexOf(
+    "if (-not $Yes)",
+    missingRuntimeBranch
+  );
+  const nvmInstall = installer.indexOf("& $nvmExecutable install");
+  assert.ok(missingRuntimeBranch >= 0);
+  assert.ok(nodeApprovalGate > missingRuntimeBranch);
+  assert.ok(nvmInstall > nodeApprovalGate);
+  assert.match(
+    installer,
+    /Rerun with -InstallNode -Yes to approve the Node\.js installation/
+  );
   assert.match(installer, /No changes made.*rerun with -Yes/s);
   assert.doesNotMatch(installer, /nvm\s+uninstall|setx\s+PATH/i);
 });

@@ -20,6 +20,21 @@ function Get-ExactVersion {
     return ""
 }
 
+function Get-SafeSourceDisplay {
+    param([string]$Value)
+
+    $display = [regex]::Replace(
+        $Value,
+        '(?i)(https?://)[^/@\s]+@',
+        '$1[REDACTED]@'
+    )
+    return [regex]::Replace(
+        $display,
+        '(?i)([?&](?:access_token|api_key|apikey|auth|password|secret|token)=)[^&\s]+',
+        '$1[REDACTED]'
+    )
+}
+
 function Get-RepositoryNodeVersion {
     param([string]$Root)
 
@@ -281,6 +296,11 @@ if (-not $runtime -and $requestedVersion) {
         Write-Output "Rerun this installer with -InstallNode to approve that installation."
         exit 2
     }
+    if (-not $Yes) {
+        Write-Output "Node.js $requestedVersion requires installation with $nvmExecutable."
+        Write-Output "No changes made. Rerun with -InstallNode -Yes to approve the Node.js installation."
+        exit 0
+    }
 
     Write-Output "Installing Node.js $requestedVersion with $nvmExecutable..."
     & $nvmExecutable install $requestedVersion
@@ -300,7 +320,7 @@ if (-not $runtime) {
 Write-Output "Selected runtime:"
 Write-Output "  Node.js: $($runtime.Version) ($($runtime.Node))"
 Write-Output "  npm: $($runtime.NpmVersion) ($($runtime.Npm))"
-Write-Output "FixLab source: $Source"
+Write-Output "FixLab source: $(Get-SafeSourceDisplay -Value $Source)"
 
 if (-not $Yes) {
     Write-Output "No changes made. Review the plan and rerun with -Yes to install FixLab."
