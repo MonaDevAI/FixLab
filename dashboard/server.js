@@ -45,6 +45,7 @@ export const MAX_QUEUED_JOBS = 20;
 export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
 export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
+export const DEFAULT_EXECUTION_HEARTBEAT_MS = 2 * 60 * 1000;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
 export const FIXLAB_STAGES = [
   "intake",
@@ -2118,7 +2119,8 @@ export function createDashboardServer({
   publicDirectory = join(packageRoot, "dashboard", "public"),
   executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader(),
-  executionIdleTimeoutMs
+  executionIdleTimeoutMs,
+  executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
   const resolvedRepository = resolve(repository);
   let currentJob = null;
@@ -2226,6 +2228,7 @@ export function createDashboardServer({
         ? profileIdleTimeoutMinutes * 60 * 1000
         : DEFAULT_EXECUTION_IDLE_TIMEOUT_MS);
     let idleTimer = null;
+    let heartbeatTimer = null;
     let resolveIdleCompletion;
     let handle;
     const idleCompletion = new Promise((resolveCompletion) => {
@@ -2259,6 +2262,30 @@ export function createDashboardServer({
       }, idleTimeoutMs);
       idleTimer.unref?.();
     };
+    const emitHeartbeat = () => {
+      if (job.status !== "running" || !job.lastActivityAt) {
+        return;
+      }
+      const quietMs = Date.now() - Date.parse(job.lastActivityAt);
+      if (quietMs < executionHeartbeatMs) {
+        return;
+      }
+      const stage =
+        FIXLAB_STAGES.find(
+          (candidate) => job.stages[candidate].status === "running"
+        ) ?? "intake";
+      const quietMinutes = Math.max(1, Math.round(quietMs / 60000));
+      const timeoutMinutes = Math.max(1, Math.round(idleTimeoutMs / 60000));
+      pushActivity(job, {
+        timestamp: new Date().toISOString(),
+        stage,
+        message:
+          `This ${stage.replaceAll("-", " ")} step is still running after ` +
+          `${quietMinutes} minute(s) without new output. Long-running builds ` +
+          `and tests can remain quiet; FixLab will keep waiting and will stop ` +
+          `the executor as resumable after ${timeoutMinutes} idle minute(s).`
+      });
+    };
 
     job.lastActivityAt = new Date().toISOString();
     handle = executor({
@@ -2274,6 +2301,8 @@ export function createDashboardServer({
     });
     activeHandle = handle;
     armIdleWatchdog();
+    heartbeatTimer = setInterval(emitHeartbeat, executionHeartbeatMs);
+    heartbeatTimer.unref?.();
     Promise.race([Promise.resolve(handle.completion), idleCompletion])
       .then((result) => {
         finishJob(job, result);
@@ -2285,6 +2314,7 @@ export function createDashboardServer({
       })
       .finally(() => {
         clearTimeout(idleTimer);
+        clearInterval(heartbeatTimer);
         if (activeHandle === handle) {
           activeHandle = null;
         }

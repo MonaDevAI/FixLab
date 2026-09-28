@@ -1787,6 +1787,66 @@ test("dashboard stops an executor that exceeds the output idle timeout", async (
   }
 });
 
+test("dashboard reports quiet long-running steps without resetting the idle timeout", async () => {
+  const repository = createRepository();
+  let resolveCompletion;
+  const executor = ({ onOutput }) => {
+    onOutput(
+      "stdout",
+      "FIXLAB_STAGE|review|running|Running the production build.\n"
+    );
+    return {
+      completion: new Promise((resolve) => {
+        resolveCompletion = resolve;
+      }),
+      terminate() {}
+    };
+  };
+  const { dashboard, url } = await startDashboard(
+    repository,
+    executor,
+    null,
+    {
+      executionHeartbeatMs: 20,
+      executionIdleTimeoutMs: 500
+    }
+  );
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Show progress while a quiet build runs.",
+        requestType: "small-enhancement",
+        mode: "fix-and-validate"
+      })
+    });
+    const lastActivityAt = started.body.job.lastActivityAt;
+
+    let status;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      status = await jsonRequest(url, "/api/status");
+      if (status.body.job.activity.length > 0) {
+        break;
+      }
+    }
+
+    assert.equal(status.body.job.status, "running");
+    assert.equal(status.body.job.lastActivityAt, lastActivityAt);
+    assert.equal(status.body.job.activity[0].stage, "review");
+    assert.match(
+      status.body.job.activity[0].message,
+      /still running.*without new output/i
+    );
+    resolveCompletion({ code: 0 });
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard shutdown terminates only its active executor handle", async () => {
   const repository = createRepository();
   let terminated = 0;

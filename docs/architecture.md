@@ -180,8 +180,12 @@ During execution, the agent can emit bounded `FIXLAB_ACTIVITY` evidence and
 decision summaries. The dashboard shows these summaries in a separate Agent
 analysis panel so users can follow what was checked, what the evidence means,
 and what happens next without exposing hidden model reasoning, credentials, or
-raw private context. Activity is retained only in the active in-memory job and
-is excluded from persisted dashboard history.
+raw private context. When executor output is quiet during a long-running build,
+test, or browser step, the dashboard adds periodic heartbeat comments to this
+panel so expected command latency is distinguishable from a stalled session.
+Heartbeats do not count as executor output and do not reset the profile-defined
+idle watchdog. Activity is retained only in the active in-memory job and is
+excluded from persisted dashboard history.
 The dashboard job list is read-only selectable. Selecting an active, queued,
 or recently completed job changes only the displayed roadmap and evidence; it
 does not reorder, start, stop, or resume execution. The local server retains
