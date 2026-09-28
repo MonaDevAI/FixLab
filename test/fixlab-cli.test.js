@@ -25,6 +25,29 @@ function run(args, cwd, environment = {}, input = undefined) {
   });
 }
 
+function createPackageManagerShims(repository) {
+  const executableDirectory = join(repository, "bin");
+  mkdirSync(executableDirectory, { recursive: true });
+  for (const command of ["npm", "npx"]) {
+    const executable = join(
+      executableDirectory,
+      process.platform === "win32" ? `${command}.cmd` : command
+    );
+    writeFileSync(
+      executable,
+      process.platform === "win32"
+        ? '@echo off\r\nif "%1"=="--version" (echo 10.0.0) else (echo [])\r\n'
+        : '#!/bin/sh\nif [ "$1" = "--version" ]; then echo 10.0.0; else echo "[]"; fi\n'
+    );
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+  }
+  return {
+    PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+  };
+}
+
 test("help lists supported commands", () => {
   const result = run(["--help"], process.cwd());
 
@@ -35,6 +58,8 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /fixlab authenticate/);
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
+  assert.match(result.stdout, /fixlab chat/);
+  assert.match(result.stdout, /fixlab <repository>/);
   assert.match(result.stdout, /--runtime <agency\|copilot>/);
   assert.match(result.stdout, /--environment <name>/);
   assert.match(result.stdout, /FIXLAB_RUNTIME/);
@@ -48,7 +73,8 @@ test("onboard creates a new profile and stops before placeholder setup", () => {
   try {
     const result = run(
       ["onboard", repository, "--runtime", "copilot"],
-      repository
+      repository,
+      createPackageManagerShims(repository)
     );
 
     assert.equal(result.status, 0);
@@ -99,7 +125,8 @@ test("onboard plans existing repository setup without making changes", () => {
 
     const result = run(
       ["onboard", repository, "--runtime", "copilot"],
-      repository
+      repository,
+      createPackageManagerShims(repository)
     );
 
     assert.equal(result.status, 0);
@@ -700,7 +727,11 @@ test("setup-playwright plans approved repository-local commands without changing
     mkdirSync(frontend, { recursive: true });
     writeFileSync(join(frontend, "package-lock.json"), "{}");
 
-    const result = run(["setup-playwright", repository], repository);
+    const result = run(
+      ["setup-playwright", repository],
+      repository,
+      createPackageManagerShims(repository)
+    );
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /Detected package manager: npm/);
@@ -806,7 +837,10 @@ test("run launches the Agency-resolved FixLab agent", () => {
     );
 
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /ARGS:copilot --plugin-dir .*FixLab --agent fixlab:fixlab/);
+    assert.match(
+      result.stdout,
+      /ARGS:copilot --plugin-dir [^\r\n]+ --agent fixlab:fixlab/
+    );
     assert.doesNotMatch(result.stdout, /--interactive/);
     assert.match(result.stdout, /Use development as the user-selected validation environment/);
     assert.match(result.stdout, /Do not silently fall back/);
@@ -934,7 +968,10 @@ test("run launches the FixLab plugin directly through Copilot", () => {
     );
 
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
+    assert.match(
+      result.stdout,
+      /--plugin-dir [^\r\n]+ --agent fixlab:fixlab/
+    );
     assert.match(result.stdout, /--autopilot/);
     assert.match(result.stdout, /transient validation artifacts/);
     assert.match(result.stdout, /\*\.auth\.spec\.ts/);
@@ -976,9 +1013,29 @@ test("run without a request preserves interactive Agency mode", () => {
     );
 
     assert.equal(result.status, 0);
-    assert.match(result.stdout, /--plugin-dir .*FixLab --agent fixlab:fixlab/);
+    assert.match(
+      result.stdout,
+      /--plugin-dir [^\r\n]+ --agent fixlab:fixlab/
+    );
     assert.doesNotMatch(result.stdout, /--interactive/);
     assert.match(result.stdout, /interactive input/);
+
+    const directResult = run(
+      [repository],
+      repository,
+      {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      },
+      "direct interactive input\n"
+    );
+
+    assert.equal(directResult.status, 0);
+    assert.match(
+      directResult.stdout,
+      /--plugin-dir [^\r\n]+ --agent fixlab:fixlab/
+    );
+    assert.doesNotMatch(directResult.stdout, /--interactive/);
+    assert.match(directResult.stdout, /direct interactive input/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

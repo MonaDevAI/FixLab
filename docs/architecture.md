@@ -41,6 +41,15 @@ Collects defect details, screenshots, repository selection, validation mode,
 environment choice, and blocker policy. It displays stages, evidence, and
 required human actions.
 
+`fixlab <repository>` is the Agency-like conversational entry point. It opens
+the packaged FixLab agent directly in that repository so setup, diagnosis,
+implementation, and validation can proceed in one interactive runtime
+session. `fixlab chat` is a separate thin terminal client for an already
+running dashboard job. It polls only the loopback dashboard API, streams the
+bounded job output, and sends comments or resume actions back to the same
+dashboard-owned runtime session. Exiting the terminal leaves the job running;
+an explicit stop request terminates only the executor owned by that job.
+
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the
 packaged Agency plugin, and retains one active job plus a bounded 20-job

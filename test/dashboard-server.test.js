@@ -12,7 +12,9 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { Readable, Writable } from "node:stream";
 import test from "node:test";
+import { runChat } from "../dashboard/chat.js";
 import {
   buildAgencyInvocation,
   buildCopilotInvocation,
@@ -1845,6 +1847,108 @@ test("dashboard reports quiet long-running steps without resetting the idle time
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+test("dashboard stops only the active executor when chat requests it", async () => {
+  const repository = createRepository();
+  let resolveCompletion;
+  let terminated = 0;
+  const executor = () => ({
+    completion: new Promise((resolve) => {
+      resolveCompletion = resolve;
+    }),
+    terminate() {
+      terminated += 1;
+      resolveCompletion({ code: null, signal: "SIGTERM" });
+    }
+  });
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Stop this job from terminal chat.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    const stopped = await jsonRequest(url, "/api/job/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}"
+    });
+
+    assert.equal(stopped.response.status, 202);
+    assert.equal(stopped.body.stopping, true);
+    assert.equal(terminated, 1);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("terminal chat sends free text to the active dashboard session", async () => {
+  const requests = [];
+  const job = {
+    id: "job-1",
+    status: "running",
+    request: "Repair the defect",
+    durationMs: 1000,
+    pullRequestReadiness: { message: "Validation is running." },
+    stages: {
+      intake: { status: "running", message: "Inspecting the request." },
+      pr: { status: "pending", message: "" }
+    },
+    logs: []
+  };
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url, options });
+    if (url.endsWith("/api/status")) {
+      return new Response(JSON.stringify({ job }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/api/job/input")) {
+      return new Response(JSON.stringify({ job, queued: true }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+
+  const exitCode = await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input: Readable.from(["Use my corporate account\n/exit\n"]),
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 10000
+  });
+
+  const submitted = requests.find(({ url }) =>
+    url.endsWith("/api/job/input")
+  );
+  assert.equal(exitCode, 0);
+  assert.deepEqual(JSON.parse(submitted.options.body), {
+    action: "comment",
+    details: "Use my corporate account"
+  });
+  assert.match(output, /FixLab chat is connected/);
+  assert.match(output, /Guidance queued for the same session/);
 });
 
 test("dashboard shutdown terminates only its active executor handle", async () => {

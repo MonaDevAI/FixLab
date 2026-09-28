@@ -4,6 +4,13 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Add an Agency-like `fixlab <repository>` interactive entry point for
+  conversational setup, diagnosis, repair, and validation.
+- Add `fixlab chat` as a terminal client for the active dashboard session,
+  including live output, status, evidence, PR, resume, retry, and owned-executor
+  stop commands.
+- Show periodic dashboard activity heartbeats while long-running builds,
+  tests, and browser validation are quiet without resetting the idle watchdog.
 - Add a packaged, plan-first `fixlab onboard` command so users can initialize,
   review, prepare, authenticate, verify, and start a repository without a
   machine-specific helper script.

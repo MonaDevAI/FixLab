@@ -1,5 +1,20 @@
 # FixLab commands
 
+## Interactive repository shell
+
+```text
+fixlab <repository> [--runtime <agency|copilot>]
+```
+
+This is the shortest Agency-like entry point. FixLab opens its interactive
+agent in the selected repository and retains conversational context while it
+inspects or helps onboard the repository, accepts a bug or enhancement,
+diagnoses the affected behavior, implements the smallest fix, validates it,
+and prepares the evidence-backed pull-request outcome.
+
+Use `fixlab run <repository> -- <request>` when the complete request is already
+known and should execute without first entering the interactive conversation.
+
 ## Repository onboarding
 
 ```text
@@ -76,6 +91,18 @@ application startup and live testing, evidence, and the gated pull-request
 outcome. It never hardcodes environment choices. Human interaction is reserved
 for authentication, unsafe-data approval, deployment or pull-request approval,
 and genuine blockers.
+
+Attach an interactive terminal to the active dashboard job with:
+
+```text
+fixlab chat [--port <number>]
+```
+
+Free text is sent to the same runtime session. `/status`, `/logs`,
+`/evidence`, and `/pr` inspect the current job; `/retry`, `/continue`, and
+`/skip` resume it with explicit guidance; `/stop` terminates only the
+FixLab-owned executor and leaves the job resumable; `/exit` closes the shell
+without stopping the job.
 
 Manual entry is the default intake path. The dashboard can also load a full
 Azure DevOps work-item URL or use a numeric ID with this optional profile

@@ -22,6 +22,7 @@ import {
   validateLiveTestProfile,
   validatePort
 } from "../dashboard/server.js";
+import { runChat } from "../dashboard/chat.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -64,6 +65,7 @@ function printUsage() {
   console.log(`FixLab CLI
 
 Usage:
+  fixlab <repository> [--runtime <agency|copilot>]
   fixlab onboard [repository] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>]
   fixlab init [repository]
   fixlab prepare [repository] [--yes]
@@ -73,9 +75,12 @@ Usage:
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
   fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
+  fixlab chat [--port <number>]
   fixlab --help
 
 Commands:
+  <repository>
+            Open an interactive FixLab shell for setup, fixes, and validation.
   onboard   Run the plan-first repository onboarding workflow.
   init      Add the FixLab repository profile template.
   prepare   Plan or run repository-owned frontend and backend restore commands.
@@ -87,6 +92,7 @@ Commands:
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
   dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
+  chat      Chat with the active dashboard job in the same FixLab session.
 
 Runtime:
   agency    Use Agency Copilot (default).
@@ -94,6 +100,7 @@ Runtime:
 
 Set FIXLAB_RUNTIME or pass --runtime to select the runtime.
 Run with --environment to select an allowed non-production environment from the repository profile.
+For the Agency-like interactive experience, run FixLab with only the repository path.
 
 Troubleshooting:
   ${troubleshootingUrl}`);
@@ -1039,6 +1046,27 @@ function parseDashboardArguments(args) {
   };
 }
 
+function parseChatArguments(args) {
+  let port = DEFAULT_DASHBOARD_PORT;
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--port") {
+      if (!args[index + 1]) {
+        return { error: "chat requires a value after --port" };
+      }
+      try {
+        port = validatePort(args[index + 1]);
+      } catch (error) {
+        return { error: error.message };
+      }
+      index += 1;
+      continue;
+    }
+    return { error: `unknown chat option: ${argument}` };
+  }
+  return { port };
+}
+
 function parseOnboardArguments(args) {
   const runtimeArguments = parseRuntimeArguments(args);
   if (runtimeArguments.error) {
@@ -1335,6 +1363,36 @@ async function main(args) {
       parsed.port,
       parsed.open,
       runtimeArguments.runtime
+    );
+  }
+
+  if (command === "chat") {
+    const parsed = parseChatArguments(rest);
+    if (parsed.error) {
+      console.error(parsed.error);
+      return 1;
+    }
+    return runChat({
+      baseUrl: `http://127.0.0.1:${parsed.port}`
+    });
+  }
+
+  if (!command.startsWith("-")) {
+    const parsed = parseRuntimeArguments(args);
+    if (parsed.error) {
+      console.error(parsed.error);
+      return 1;
+    }
+    if (parsed.args.length !== 1) {
+      console.error(
+        "interactive FixLab accepts one repository path and an optional --runtime"
+      );
+      return 1;
+    }
+    return launch(
+      resolveRepository(parsed.args[0]),
+      "",
+      parsed.runtime
     );
   }
 

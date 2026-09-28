@@ -2717,6 +2717,52 @@ export function createDashboardServer({
       return;
     }
 
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/job/stop"
+    ) {
+      if (
+        !currentJob ||
+        currentJob.status !== "running" ||
+        !activeHandle?.terminate
+      ) {
+        sendJson(response, 409, {
+          error: "no running FixLab-owned executor is available to stop"
+        });
+        return;
+      }
+      if (
+        !request.headers["content-type"]
+          ?.toLowerCase()
+          .startsWith("application/json")
+      ) {
+        sendJson(response, 400, {
+          error: "Content-Type must be application/json"
+        });
+        return;
+      }
+      pushLog(currentJob, {
+        index: currentJob.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message:
+          "Stop requested from FixLab chat; stopping only the owned executor."
+      });
+      try {
+        activeHandle.terminate();
+      } catch (error) {
+        sendJson(response, 500, {
+          error: `could not stop the FixLab-owned executor: ${error.message}`
+        });
+        return;
+      }
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        stopping: true
+      });
+      return;
+    }
+
     if (request.method === "POST" && requestUrl.pathname === "/api/jobs") {
       let shouldQueue =
         Boolean(activeHandle) ||

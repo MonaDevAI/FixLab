@@ -20,7 +20,18 @@ Install only the tools required by the repository profile.
 
 ## Onboard a repository
 
-Run the packaged plan-first workflow from any directory:
+For an Agency-like conversation that can help with setup and then accept the
+bug, start FixLab with only the repository path:
+
+```powershell
+fixlab C:\path\to\application
+```
+
+The interactive agent keeps the same repository context while it checks
+readiness, explains required onboarding or authentication, diagnoses the
+reported behavior, makes the approved fix, and runs validation.
+
+For the explicit plan-first workflow, run:
 
 ```powershell
 fixlab onboard C:\path\to\application --runtime copilot
@@ -149,6 +160,15 @@ Start the local dashboard explicitly:
 ```powershell
 fixlab dashboard
 ```
+
+While the dashboard is running, a second terminal can join its active job:
+
+```powershell
+fixlab chat
+```
+
+This terminal chat and the browser dashboard share the job, runtime session,
+branch, evidence, and pull-request state. Closing chat does not stop the job.
 
 Installation and `fixlab init` do not start it automatically. The dashboard
 shows profile readiness, accepts `bug-fix` or `small-enhancement` requests, and

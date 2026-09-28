@@ -49,6 +49,18 @@ For direct mode, install and authenticate GitHub Copilot CLI, then use
 
 ```shell
 npm install --global github:MonaDevAI/FixLab
+fixlab C:\path\to\application
+```
+
+The repository-path form opens the Agency-like interactive FixLab shell. The
+agent inspects repository readiness, helps complete onboarding and
+authentication, accepts the bug or enhancement conversationally, and retains
+the same context while it diagnoses, fixes, validates, and prepares the pull
+request.
+
+For explicit plan-first onboarding without entering the interactive shell:
+
+```shell
 fixlab onboard C:\path\to\application
 ```
 
@@ -84,7 +96,9 @@ pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application -Y
 `fixlab init` adds the repository profile, packaged prompt commands, and the
 `fixlab-autofix` Visual Studio Code agent without overwriting existing files.
 `fixlab dashboard` starts the local loopback dashboard and opens it in the
-system browser.
+system browser. `fixlab chat` attaches a terminal chat to that dashboard's
+active job so terminal and browser interactions share one session and evidence
+record.
 
 FixLab is not yet published to the public npm registry or merged into the
 official GitHub Copilot plugin marketplace. Until marketplace review is
