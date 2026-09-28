@@ -136,6 +136,8 @@ visible risk. FixLab never reports a skipped or timed-out gate as successful.
   child processes.
 - **Focused validation** through repository-defined lint, test, type-check,
   build, API, and browser commands.
+- **Early draft pull requests** that become visible after focused regression
+  checks while independent builds and browser validation continue.
 - **Playwright evidence** including measurable assertions, screenshots,
   traces, failures, and explicit data-source behavior.
 - **Resumable workflows** for authentication, genuine blockers, manual

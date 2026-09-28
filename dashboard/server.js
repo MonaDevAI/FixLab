@@ -675,9 +675,9 @@ export function buildJobPrompt({
     ? "- Pull-request strategy is informational in read-only mode; do not create or update pull requests."
     : pullRequestStrategy === "per-bug"
       ? `- Process each selected bug as an isolated delivery unit. Keep its code changes, focused validation, browser evidence, commit, and pull-request outcome separate from every other bug.
-- Complete and validate one bug before preparing its PR, then continue to the next bug. Never combine unrelated bug changes in one PR.`
-      : `- Treat all selected bugs as one common-PR batch. Diagnose and implement every required fix before starting the final validation phase.
-- After all fixes are complete, run shared tests, builds, application startup, and browser scenarios once against the combined effective diff, then prepare one common PR.`;
+- After one bug's scoped fix and smallest focused regression pass, remove transient validation artifacts, self-review its diff, and create or update its authorized draft PR before running remaining independent validation. Keep that PR draft until every required gate for that bug is terminal. Never combine unrelated bug changes in one PR.`
+      : `- Treat all selected bugs as one common-PR batch. Diagnose and implement every required fix, then run the smallest focused regression checks that protect the combined change.
+- After those focused checks pass, remove transient validation artifacts, self-review the combined diff, and create or update one authorized draft PR. Continue shared tests, builds, application startup, and browser scenarios while that draft is open.`;
   const uiScenarioGuidance = runAllUiScenarios
     ? `- After implementation and non-browser validation are complete, run every repository-defined Playwright/UI scenario at the end, not only the focused defect journey.
 - Start the required applications once when safe, preserve each scenario result, and attach non-sensitive screenshot evidence for the complete UI run.`
@@ -704,7 +704,7 @@ export function buildJobPrompt({
   const manualLiveTestGuidance = holdForManualLiveTest
     ? `- After automated Playwright finishes successfully, keep the FixLab-owned frontend running at ${manualLiveTestUrl || "the profile-defined local health URL"} for manual local-mode testing.
 - The user explicitly requested this hold, so the owned frontend process may remain running after the agent turn. Record its process identity and never stop an unrelated process.
-- Emit live-test blocked with the successful Playwright result and local URL, emit pr skipped because manual confirmation is pending, then exit without creating or updating a PR.
+- Emit live-test blocked with the successful Playwright result and local URL. If an authorized draft PR already exists, update it with the pending manual gate and keep it draft; otherwise emit pr skipped because manual confirmation is pending.
 - When the dashboard resumes this session with the user's manual result, mark live-test passed or failed accordingly, stop only the retained FixLab-owned frontend process, and continue to the gated PR outcome.`
     : "- Stop FixLab-owned applications after automated browser validation unless another explicit workflow requirement needs them.";
   const branchNamingGuidance = branchNaming
@@ -773,6 +773,10 @@ ${branchNamingGuidance}
 - Do not add a newly generated authenticated test such as \`*.auth.spec.ts\` to the product change unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.
 - Existing repository-owned Playwright tests may be changed only when the reported product behavior directly requires that regression update; do not broaden the pull request to repair unrelated or stale browser journeys.
 ${testDataGuidance}
+- Once the scoped production change and its smallest focused regression checks pass, remove transient validation artifacts and self-review the effective diff. When pull-request publication is already authorized, commit and push that reviewed checkpoint and create or update a draft pull request before remaining independent validation completes.
+- Start long-running independent validation commands in parallel when the runtime supports it. While those commands run, prepare or refresh the authorized draft PR description with the confirmed symptom, scoped change, checks already passed, checks still running, and known risks.
+- Push later reviewed checkpoints to the same branch only after their affected focused checks pass. Reuse the same draft PR and update its evidence instead of waiting to publish one large final update or creating duplicates.
+- Keep the pull request draft and clearly marked validation-in-progress while any required gate is pending, running, blocked, skipped with unaccepted risk, or failed. Never mark it ready for review or report the pr stage passed until all required gates pass or repository policy records an explicitly accepted outcome.
 - Emit one browser evidence line after the scenario is selected and again if the actual source or mutation behavior changes:
   FIXLAB_TEST|source|mutation-mode|scenario
 - source must be one of: ${[...testDataSources].join(", ")}.
@@ -780,7 +784,7 @@ ${testDataGuidance}
 - Start only the applications defined by the repository profile, then execute the repository-defined live test against the allowed required system or environment from that profile. Do not invent or hardcode environment choices.
 - For every Playwright live test, save at least one non-sensitive screenshot under the test's repository-owned test-results directory so the dashboard can display the browser evidence.
 - ${playwrightOnly ? "Collect evidence for required setup, authentication readiness, application startup, the focused Playwright result, skipped gates, blockers, and remaining risks." : "Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks."}
-- ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update the pull request only after all required gates pass, and include the collected evidence."}
+- ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update an authorized draft pull request after the reviewed focused checkpoint; finalize its evidence and readiness only after all required gates pass."}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
 - When one of those human actions is required, emit FIXLAB_STAGE|stage|blocked|exact action needed, emit blocked outcomes for affected bugs when applicable, mark later stages skipped because of the blocker, and exit. The dashboard will collect user input and resume this same session.
 - Emit concise, user-visible analysis updates when evidence changes the diagnosis, validation status, blocker, or next action:

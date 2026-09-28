@@ -74,6 +74,16 @@ only for information that cannot be established safely from the repository.
    skipped or blocked checks, and remaining risk. Do not commit, push, deploy,
    or create a pull request unless the developer explicitly requests it.
 
+When the developer authorizes pull-request publication, do not wait for every
+independent validation command to finish before creating review visibility.
+After the scoped production change and its smallest focused regression checks
+pass, remove transient validation artifacts, review the effective diff, commit
+and push that checkpoint, and create or update a draft pull request. Run
+remaining independent builds and browser journeys while the draft is open,
+push later reviewed checkpoints to the same branch, and never mark the PR ready
+until every required gate passes or the developer explicitly accepts the
+recorded outcome.
+
 ## Guardrails
 
 - Handle one bug at a time; do not bundle unrelated fixes or refactors.

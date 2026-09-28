@@ -3,8 +3,11 @@ mode: agent
 description: Prepare an evidence-backed pull-request or no-change outcome.
 ---
 
-Confirm that required validation and live-test gates are complete. Reuse an
-existing pull request when one was supplied. Summarize the symptom, confirmed
-root cause, focused change, tests, browser evidence, skipped gates, and
-remaining risks. Create or update a pull request only when authorized and when
-a real repository change is required.
+Reuse an existing pull request when one was supplied. When publication is
+authorized and a real repository change exists, create or refresh a draft PR
+after the scoped change and smallest focused regression checks pass; remaining
+independent validation may continue while that draft is open. Keep the PR
+description current with the symptom, confirmed root cause, focused change,
+completed and running checks, browser evidence, skipped gates, and remaining
+risks. Never mark the PR ready or complete the PR stage until every required
+gate passes or repository policy records an explicitly accepted outcome.

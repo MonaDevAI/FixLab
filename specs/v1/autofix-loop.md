@@ -31,6 +31,12 @@ and pull-request policy.
 7. It MUST run every profile-defined gate affected by the change.
 8. It MUST report passed, failed, skipped, timed-out, and blocked checks
    separately.
+9. When pull-request publication is authorized, it MAY create or update a draft
+   pull request after the scoped change and smallest focused regression checks
+   pass, while independent required validation continues. It MUST reuse the
+   same branch and draft, keep pending or failed gates visible, and MUST NOT
+   mark the pull request ready or the PR stage passed before the required gates
+   reach an accepted terminal outcome.
 
 ## Safety
 

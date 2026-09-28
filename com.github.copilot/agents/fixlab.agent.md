@@ -50,6 +50,17 @@ instructions provide authoritative commands.
 9. Stop only processes owned by the current FixLab job.
 10. Present evidence, skipped gates, and remaining risks.
 
+When pull-request publication is already authorized, do not wait for every
+independent validation command to finish before creating review visibility.
+After the scoped production change and its smallest focused regression checks
+pass, remove transient validation artifacts, self-review the effective diff,
+commit and push that checkpoint, and create or update a draft pull request.
+Run remaining independent builds, application checks, and browser journeys
+while the draft is open. Push later reviewed checkpoints to the same branch,
+keep validation status and risks current in the PR, and never mark it ready for
+review until every required gate passes or repository policy records an
+explicitly accepted outcome.
+
 Runtime-synthesized Playwright scenarios are transient validation artifacts by
 default. Remove their source files and validation-only configuration edits
 before review, commit, push, or pull-request creation. Do not add newly

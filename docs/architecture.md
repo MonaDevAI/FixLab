@@ -199,6 +199,16 @@ Unchanged files, completed diagnosis, available dependencies, and broad checks
 are not repeated without new risk evidence. Tests and validation are focused
 and risk-scaled.
 
+For fix-and-validate jobs with pull-request publication already authorized,
+FixLab uses an early-draft pipeline. After the scoped production change and
+smallest focused regression checks pass, it removes transient validation
+artifacts, reviews the effective diff, pushes the checkpoint, and creates or
+updates a draft pull request. Independent builds, application startup, and
+browser journeys continue while the draft is visible. Later reviewed
+checkpoints update the same branch and PR. The PR remains explicitly
+validation-in-progress and cannot be marked ready until every required gate
+passes or repository policy records an accepted outcome.
+
 Stage summaries remain structured independently of raw output. The dashboard
 retains a bounded local log window and reports how many older entries were
 omitted; it does not feed unbounded logs back into prompts.

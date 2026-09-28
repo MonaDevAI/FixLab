@@ -113,6 +113,21 @@ test("cross-runtime validation guidance stays aligned", () => {
     );
     assert.match(
       content,
+      /draft pull request/,
+      `${entryPoint} must support early draft pull-request visibility`
+    );
+    assert.match(
+      content,
+      /smallest focused regression checks\s+pass/,
+      `${entryPoint} must gate an early draft on focused regression evidence`
+    );
+    assert.match(
+      content,
+      /never mark (?:it|the PR) ready|never mark the PR ready/i,
+      `${entryPoint} must preserve final readiness gating`
+    );
+    assert.match(
+      content,
       /Fall back to `synthetic-intercepted` only when[\s\S]{0,180}(?:unreachable|access fails)[\s\S]{0,180}no safe records/,
       `${entryPoint} must condition synthetic fallback on access or safe-record failure`
     );

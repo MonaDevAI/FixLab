@@ -814,7 +814,22 @@ test("dashboard parses complete stage markers and passes a job", async () => {
       /do not broaden the pull request to repair unrelated or stale browser journeys/
     );
     assert.match(receivedPrompt, /Do not invent or hardcode environment choices/i);
-    assert.match(receivedPrompt, /Create or update the pull request only after all required gates pass/i);
+    assert.match(
+      receivedPrompt,
+      /create or update a draft pull request before remaining independent validation completes/i
+    );
+    assert.match(
+      receivedPrompt,
+      /Start long-running independent validation commands in parallel/i
+    );
+    assert.match(
+      receivedPrompt,
+      /Keep the pull request draft and clearly marked validation-in-progress/i
+    );
+    assert.match(
+      receivedPrompt,
+      /Never mark it ready for review or report the pr stage passed until all required gates pass/i
+    );
     assert.match(receivedPrompt, /authentication, unsafe-data approval/i);
     assert.match(receivedPrompt, /git status and effective diff/i);
     assert.match(receivedPrompt, /task-relevant symbols and files/i);
