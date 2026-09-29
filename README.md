@@ -121,7 +121,9 @@ then connects. Streaming activity clears and redraws the `fixlab>` line so
 partially typed input remains usable while validation continues. At startup,
 chat displays the connected repository and lets the user keep it or enter
 another path; a different repository starts on the next available loopback
-port.
+port. Common operational requests also work as plain English, including
+`start dashboard`, `show status`, `show logs`, `show pull request`,
+`show evidence`, and `switch repository`.
 
 FixLab is not yet published to the public npm registry or merged into the
 official GitHub Copilot plugin marketplace. Until marketplace review is

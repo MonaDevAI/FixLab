@@ -117,6 +117,12 @@ repository before attaching. Press Enter to keep it or enter another local
 repository path. FixLab starts the alternate repository on the next available
 loopback port and connects to that dashboard instead.
 
+Common operations do not require slash syntax. Natural phrases such as
+`start dashboard`, `show status`, `show logs 50`, `show pull request`,
+`show evidence`, and `switch repository to C:\source\application` execute
+immediately. Other free text remains guidance for the active FixLab agent and
+is queued after its current turn when the job is already running.
+
 Manual entry is the default intake path. The dashboard can also load a full
 Azure DevOps work-item URL or use a numeric ID with this optional profile
 section:

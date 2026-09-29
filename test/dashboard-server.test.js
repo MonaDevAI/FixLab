@@ -14,7 +14,10 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import test from "node:test";
-import { runChat } from "../dashboard/chat.js";
+import {
+  parseNaturalChatCommand,
+  runChat
+} from "../dashboard/chat.js";
 import {
   buildAgencyInvocation,
   buildCopilotInvocation,
@@ -2102,6 +2105,72 @@ test("terminal chat confirms and switches the connected repository", async () =>
   assert.equal(exitCode, 0);
   assert.ok(requests.some((url) => url.startsWith("http://127.0.0.1:4318")));
   assert.match(output, /FixLab repository: C:\\repos\\admin-ui/);
+});
+
+test("terminal chat recognizes natural operational commands", () => {
+  assert.deepEqual(parseNaturalChatCommand("start dashboard"), {
+    command: "/dashboard",
+    details: ""
+  });
+  assert.deepEqual(parseNaturalChatCommand("show logs 50"), {
+    command: "/logs",
+    details: "50"
+  });
+  assert.deepEqual(parseNaturalChatCommand("show pull request"), {
+    command: "/pr",
+    details: ""
+  });
+  assert.deepEqual(
+    parseNaturalChatCommand("switch repository to C:\\repos\\admin-ui"),
+    {
+      command: "/repository",
+      details: "C:\\repos\\admin-ui"
+    }
+  );
+  assert.equal(
+    parseNaturalChatCommand("Fix the hierarchy template bug"),
+    null
+  );
+});
+
+test("terminal chat opens the dashboard from natural language", async () => {
+  let openedUrl;
+  const input = Readable.from(["start dashboard\n/exit\n"]);
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+  const fetchImpl = async () =>
+    new Response(JSON.stringify({
+      readiness: {
+        repository: "C:\\repos\\fmdm",
+        repositoryReady: true,
+        profileReady: true
+      },
+      job: null
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+
+  const exitCode = await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input,
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 10000,
+    openDashboard: async ({ baseUrl }) => {
+      openedUrl = baseUrl;
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(openedUrl, "http://127.0.0.1:4317");
+  assert.match(output, /Opened FixLab dashboard/);
 });
 
 test("dashboard shutdown terminates only its active executor handle", async () => {

@@ -15,6 +15,9 @@ All notable changes to FixLab are documented in this file.
   text while dashboard activity and logs stream.
 - Confirm the connected repository when chat starts and allow an alternate
   repository to launch automatically on the next available loopback port.
+- Recognize common chat operations in plain English so dashboard, status, logs,
+  evidence, pull-request, help, and repository switching do not require slash
+  syntax.
 - Document the simplified chat-first installation, onboarding, UI-bug, API-bug,
   end-to-end validation, recovery, and pull-request workflow.
 - Show periodic dashboard activity heartbeats while long-running builds,

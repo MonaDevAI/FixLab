@@ -1556,6 +1556,35 @@ async function main(args) {
       return 1;
     }
     const baseUrl = `http://127.0.0.1:${parsed.port}`;
+    const switchRepository = async ({
+      baseUrl: currentBaseUrl = baseUrl,
+      readiness,
+      repository: requestedRepository
+    }) => {
+      const connectedRepository = readiness?.repository;
+      let repositoryArgument = requestedRepository;
+      if (!repositoryArgument) {
+        repositoryArgument = await promptForChatRepository();
+      }
+      const repository = resolveRepository(repositoryArgument);
+      if (
+        connectedRepository &&
+        repository.toLowerCase() ===
+          resolve(connectedRepository).toLowerCase()
+      ) {
+        return currentBaseUrl;
+      }
+      const alternatePort = await findAvailableDashboardPort(
+        parsed.port + 1
+      );
+      const alternateUrl = `http://127.0.0.1:${alternatePort}`;
+      return startDashboardForChat({
+        repositoryArgument: repository,
+        port: alternatePort,
+        runtime: runtimeArguments.runtime,
+        baseUrl: alternateUrl
+      });
+    };
     return runChat({
       baseUrl,
       recoverConnection: () =>
@@ -1584,25 +1613,15 @@ async function main(args) {
         if (!requestedRepository) {
           return baseUrl;
         }
-        const repository = resolveRepository(requestedRepository);
-        if (
-          connectedRepository &&
-          repository.toLowerCase() ===
-            resolve(connectedRepository).toLowerCase()
-        ) {
-          return baseUrl;
-        }
-        const alternatePort = await findAvailableDashboardPort(
-          parsed.port + 1
-        );
-        const alternateUrl = `http://127.0.0.1:${alternatePort}`;
-        return startDashboardForChat({
-          repositoryArgument: repository,
-          port: alternatePort,
-          runtime: runtimeArguments.runtime,
-          baseUrl: alternateUrl
+        return switchRepository({
+          baseUrl,
+          readiness,
+          repository: requestedRepository
         });
-      }
+      },
+      switchRepository,
+      openDashboard: ({ baseUrl: dashboardUrl }) =>
+        openBrowser(dashboardUrl)
     });
   }
 

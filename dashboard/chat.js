@@ -32,6 +32,48 @@ Any other text is sent to the same FixLab session as a comment while it is
 running, or as continue guidance while it is blocked, failed, or completed.`;
 }
 
+export function parseNaturalChatCommand(line) {
+  const normalized = line.trim();
+  const lower = normalized.toLowerCase();
+  if (/^(?:open|show|start)(?: the)? dashboard$/u.test(lower)) {
+    return { command: "/dashboard", details: "" };
+  }
+  if (/^(?:show|check|get)(?: the)? status$/u.test(lower)) {
+    return { command: "/status", details: "" };
+  }
+  const logs = lower.match(
+    /^(?:show|view|tail)(?: the)? logs(?:\s+(\d+))?$/u
+  );
+  if (logs) {
+    return { command: "/logs", details: logs[1] ?? "" };
+  }
+  if (
+    /^(?:show|open|check)(?: the)? (?:pr|pull request)$/u.test(lower)
+  ) {
+    return { command: "/pr", details: "" };
+  }
+  if (
+    /^(?:show|list|open)(?: the)? (?:evidence|screenshots|playwright evidence)$/u.test(
+      lower
+    )
+  ) {
+    return { command: "/evidence", details: "" };
+  }
+  const repository = normalized.match(
+    /^(?:switch|change)(?: the)? repo(?:sitory)?(?:\s+to)?(?:\s+(.+))?$/iu
+  );
+  if (repository) {
+    return {
+      command: "/repository",
+      details: repository[1]?.trim() ?? ""
+    };
+  }
+  if (/^(?:help|show help|what can i do)\??$/u.test(lower)) {
+    return { command: "/help", details: "" };
+  }
+  return null;
+}
+
 export function formatJobStatus(job) {
   if (!job) {
     return "No FixLab job is available.";
@@ -97,7 +139,9 @@ export async function runChat({
   fetchImpl = globalThis.fetch,
   pollIntervalMs = 1000,
   recoverConnection,
-  selectRepository
+  selectRepository,
+  switchRepository,
+  openDashboard
 }) {
   let dashboardUrl = baseUrl;
   let currentJob = null;
@@ -251,8 +295,11 @@ export async function runChat({
     if (!line) {
       return;
     }
-    const [command, ...remainder] = line.split(/\s+/);
-    const details = remainder.join(" ").trim();
+    const naturalCommand = parseNaturalChatCommand(line);
+    const [typedCommand, ...remainder] = line.split(/\s+/);
+    const command = naturalCommand?.command ?? typedCommand;
+    const details =
+      naturalCommand?.details ?? remainder.join(" ").trim();
     if (command === "/help") {
       write(formatChatHelp());
       return;
@@ -263,6 +310,39 @@ export async function runChat({
     }
     if (command === "/status") {
       await loadStatus({ announce: true });
+      return;
+    }
+    if (command === "/dashboard") {
+      if (openDashboard) {
+        await openDashboard({ baseUrl: dashboardUrl });
+        write(`Opened FixLab dashboard: ${dashboardUrl}`);
+      } else {
+        write(`FixLab dashboard: ${dashboardUrl}`);
+      }
+      return;
+    }
+    if (command === "/repository") {
+      if (!switchRepository) {
+        write("Repository switching is unavailable in this FixLab chat.");
+        return;
+      }
+      const selectedUrl = await switchRepository({
+        baseUrl: dashboardUrl,
+        readiness: currentReadiness,
+        repository: details
+      });
+      if (selectedUrl && selectedUrl !== dashboardUrl) {
+        dashboardUrl = selectedUrl;
+        currentJob = null;
+        currentReadiness = null;
+        lastJobId = null;
+        lastLogIndex = -1;
+        lastStatus = "";
+        await loadStatus();
+      }
+      if (currentReadiness?.repository) {
+        write(`FixLab repository: ${currentReadiness.repository}`);
+      }
       return;
     }
     if (command === "/logs") {
