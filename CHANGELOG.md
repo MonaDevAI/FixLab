@@ -11,6 +11,10 @@ All notable changes to FixLab are documented in this file.
   stop commands.
 - Let `fixlab chat` select the repository and start the loopback dashboard
   automatically when no dashboard is already running.
+- Keep the interactive `fixlab>` input visible and preserve partially typed
+  text while dashboard activity and logs stream.
+- Confirm the connected repository when chat starts and allow an alternate
+  repository to launch automatically on the next available loopback port.
 - Document the simplified chat-first installation, onboarding, UI-bug, API-bug,
   end-to-end validation, recovery, and pull-request workflow.
 - Show periodic dashboard activity heartbeats while long-running builds,

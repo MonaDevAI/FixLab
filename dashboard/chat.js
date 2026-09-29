@@ -1,4 +1,4 @@
-import { createInterface } from "node:readline";
+import { clearLine, createInterface, cursorTo } from "node:readline";
 
 const DEFAULT_LOG_COUNT = 20;
 const MAX_LOG_COUNT = 100;
@@ -96,21 +96,37 @@ export async function runChat({
   errorOutput = process.stderr,
   fetchImpl = globalThis.fetch,
   pollIntervalMs = 1000,
-  recoverConnection
+  recoverConnection,
+  selectRepository
 }) {
   let dashboardUrl = baseUrl;
   let currentJob = null;
+  let currentReadiness = null;
   let lastJobId = null;
   let lastLogIndex = -1;
   let lastStatus = "";
   let closed = false;
   let polling = false;
-  const write = (message = "") => output.write(`${message}\n`);
-  const writeError = (message) => errorOutput.write(`${message}\n`);
+  let interactive = false;
+  let handlingLine = false;
+  let readline;
+  const writeMessage = (stream, message = "") => {
+    if (interactive && readline && !handlingLine && !closed) {
+      clearLine(output, 0);
+      cursorTo(output, 0);
+      stream.write(`${message}\n`);
+      readline.prompt(true);
+      return;
+    }
+    stream.write(`${message}\n`);
+  };
+  const write = (message = "") => writeMessage(output, message);
+  const writeError = (message) => writeMessage(errorOutput, message);
 
   const loadStatus = async ({ announce = false } = {}) => {
     const body = await requestJson(fetchImpl, `${dashboardUrl}/api/status`);
     currentJob = body.job;
+    currentReadiness = body.readiness ?? null;
     if (!currentJob) {
       if (announce) {
         write("No FixLab job is available. Start one in the dashboard first.");
@@ -181,9 +197,33 @@ export async function runChat({
     }
   }
 
+  if (selectRepository) {
+    try {
+      const selectedUrl = await selectRepository({
+        baseUrl: dashboardUrl,
+        readiness: currentReadiness
+      });
+      if (selectedUrl && selectedUrl !== dashboardUrl) {
+        dashboardUrl = selectedUrl;
+        currentJob = null;
+        currentReadiness = null;
+        lastJobId = null;
+        lastLogIndex = -1;
+        lastStatus = "";
+        await loadStatus();
+      }
+    } catch (error) {
+      writeError(`Cannot select the FixLab repository: ${error.message}`);
+      return 1;
+    }
+  }
+
+  if (currentReadiness?.repository) {
+    write(`FixLab repository: ${currentReadiness.repository}`);
+  }
   write("FixLab chat is connected. Type /help for commands.");
-  const interactive = Boolean(input.isTTY && output.isTTY);
-  const readline = createInterface({
+  interactive = Boolean(input.isTTY && output.isTTY);
+  readline = createInterface({
     input,
     output: interactive ? output : undefined,
     terminal: interactive,
@@ -191,7 +231,7 @@ export async function runChat({
   });
 
   const poll = async () => {
-    if (closed || polling) {
+    if (closed || polling || handlingLine) {
       return;
     }
     polling = true;
@@ -243,7 +283,7 @@ export async function runChat({
       }
       const body = await requestJson(
         fetchImpl,
-        `${baseUrl}/api/playwright/artifacts?jobId=${encodeURIComponent(
+        `${dashboardUrl}/api/playwright/artifacts?jobId=${encodeURIComponent(
           currentJob.id
         )}`
       );
@@ -287,7 +327,14 @@ export async function runChat({
   let lineQueue = Promise.resolve();
   readline.on("line", (line) => {
     lineQueue = lineQueue
-      .then(() => handleLine(line))
+      .then(async () => {
+        handlingLine = true;
+        try {
+          await handleLine(line);
+        } finally {
+          handlingLine = false;
+        }
+      })
       .catch((error) => writeError(error.message))
       .finally(() => {
         if (!closed && interactive) {

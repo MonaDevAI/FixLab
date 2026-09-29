@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
+import { createServer as createNetServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import {
   buildAgencyInvocation,
@@ -1288,6 +1289,54 @@ async function promptForChatRepository() {
   }
 }
 
+async function promptForRepositoryConfirmation(repository) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return "";
+  }
+  const readline = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  try {
+    return (
+      await readline.question(
+        `Connected repository: ${repository}\nPress Enter to continue, or enter another repository path: `
+      )
+    ).trim();
+  } finally {
+    readline.close();
+  }
+}
+
+async function canListenOnPort(port) {
+  return new Promise((resolvePort) => {
+    const server = createNetServer();
+    server.unref();
+    server.once("error", () => resolvePort(false));
+    server.listen({ host: "127.0.0.1", port }, () => {
+      server.close(() => resolvePort(true));
+    });
+  });
+}
+
+async function findAvailableDashboardPort(startPort) {
+  for (
+    let candidate = startPort;
+    candidate <= Math.min(65535, startPort + 20);
+    candidate += 1
+  ) {
+    if (await canListenOnPort(candidate)) {
+      return candidate;
+    }
+  }
+  throw new Error(
+    `no available FixLab dashboard port was found from ${startPort} through ${Math.min(
+      65535,
+      startPort + 20
+    )}`
+  );
+}
+
 async function waitForDashboard(baseUrl, child) {
   const deadline = Date.now() + 15000;
   let lastError;
@@ -1515,7 +1564,45 @@ async function main(args) {
           port: parsed.port,
           runtime: runtimeArguments.runtime,
           baseUrl
-        })
+        }),
+      selectRepository: async ({ readiness }) => {
+        const connectedRepository = readiness?.repository;
+        let requestedRepository = parsed.repositoryArgument;
+        if (
+          requestedRepository &&
+          connectedRepository &&
+          resolve(requestedRepository).toLowerCase() ===
+            resolve(connectedRepository).toLowerCase()
+        ) {
+          return baseUrl;
+        }
+        if (!requestedRepository) {
+          requestedRepository = await promptForRepositoryConfirmation(
+            connectedRepository ?? "unknown"
+          );
+        }
+        if (!requestedRepository) {
+          return baseUrl;
+        }
+        const repository = resolveRepository(requestedRepository);
+        if (
+          connectedRepository &&
+          repository.toLowerCase() ===
+            resolve(connectedRepository).toLowerCase()
+        ) {
+          return baseUrl;
+        }
+        const alternatePort = await findAvailableDashboardPort(
+          parsed.port + 1
+        );
+        const alternateUrl = `http://127.0.0.1:${alternatePort}`;
+        return startDashboardForChat({
+          repositoryArgument: repository,
+          port: alternatePort,
+          runtime: runtimeArguments.runtime,
+          baseUrl: alternateUrl
+        });
+      }
     });
   }
 

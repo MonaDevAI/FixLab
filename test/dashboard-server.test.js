@@ -12,7 +12,7 @@ import {
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Readable, Writable } from "node:stream";
+import { PassThrough, Readable, Writable } from "node:stream";
 import test from "node:test";
 import { runChat } from "../dashboard/chat.js";
 import {
@@ -2004,6 +2004,104 @@ test("terminal chat can recover by starting a dashboard connection", async () =>
   assert.equal(dashboardStarted, true);
   assert.match(output, /Job job-recovered: passed/);
   assert.match(output, /FixLab chat is connected/);
+});
+
+test("terminal chat redraws the prompt while job logs stream", async () => {
+  let statusReads = 0;
+  const input = new PassThrough();
+  input.isTTY = true;
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+  outputStream.isTTY = true;
+  const fetchImpl = async (url) => {
+    if (!url.endsWith("/api/status")) {
+      return new Response(JSON.stringify({ error: "not found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    statusReads += 1;
+    return new Response(JSON.stringify({
+      job: {
+        id: "job-streaming",
+        status: "running",
+        request: "Stream progress",
+        durationMs: 1000,
+        pullRequestReadiness: { message: "Validation is running." },
+        stages: {},
+        logs: statusReads > 1
+          ? [{ index: 1, stream: "stdout", message: "Build is still running." }]
+          : []
+      }
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  const chat = runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input,
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 5
+  });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  input.end("/exit\n");
+
+  assert.equal(await chat, 0);
+  assert.match(output, /Build is still running/);
+  assert.ok(output.match(/fixlab> /g)?.length >= 2);
+});
+
+test("terminal chat confirms and switches the connected repository", async () => {
+  const input = Readable.from(["/exit\n"]);
+  const requests = [];
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+  const fetchImpl = async (url) => {
+    requests.push(url);
+    const alternate = url.startsWith("http://127.0.0.1:4318");
+    return new Response(JSON.stringify({
+      readiness: {
+        repository: alternate ? "C:\\repos\\admin-ui" : "C:\\repos\\fmdm",
+        repositoryReady: true,
+        profileReady: true
+      },
+      job: null
+    }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  const exitCode = await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input,
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 10000,
+    selectRepository: async ({ readiness }) => {
+      assert.equal(readiness.repository, "C:\\repos\\fmdm");
+      return "http://127.0.0.1:4318";
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.ok(requests.some((url) => url.startsWith("http://127.0.0.1:4318")));
+  assert.match(output, /FixLab repository: C:\\repos\\admin-ui/);
 });
 
 test("dashboard shutdown terminates only its active executor handle", async () => {

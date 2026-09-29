@@ -102,7 +102,8 @@ Free text is sent to the same runtime session. `/status`, `/logs`,
 `/evidence`, and `/pr` inspect the current job; `/retry`, `/continue`, and
 `/skip` resume it with explicit guidance; `/stop` terminates only the
 FixLab-owned executor and leaves the job resumable; `/exit` closes the shell
-without stopping the job.
+without stopping the job. Streamed activity redraws the `fixlab>` input line
+instead of overwriting partially typed text.
 
 If no dashboard is listening, chat uses the current directory when it contains
 a ready FixLab profile. Otherwise it asks for the local repository path and
@@ -110,6 +111,11 @@ opens the interactive onboarding agent. It initializes a missing profile,
 requires onboarding to finish with a ready profile, starts the loopback
 dashboard in the background, and connects automatically. The optional
 repository argument supports non-interactive path selection.
+
+When a dashboard is already listening, interactive chat displays its
+repository before attaching. Press Enter to keep it or enter another local
+repository path. FixLab starts the alternate repository on the next available
+loopback port and connects to that dashboard instead.
 
 Manual entry is the default intake path. The dashboard can also load a full
 Azure DevOps work-item URL or use a numeric ID with this optional profile
