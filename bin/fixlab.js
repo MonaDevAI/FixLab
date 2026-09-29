@@ -20,7 +20,9 @@ import {
   createDashboardServer,
   DEFAULT_DASHBOARD_PORT,
   FIXLAB_RUNTIMES,
+  HYDRAFUSION_MODEL,
   inspectRepository,
+  validateCopilotModel,
   validateTargetEnvironment,
   validateLiveTestProfile,
   validatePort
@@ -68,17 +70,17 @@ function printUsage() {
   console.log(`FixLab CLI
 
 Usage:
-  fixlab <repository> [--runtime <agency|copilot>]
-  fixlab onboard [repository] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>]
+  fixlab <repository> [--runtime <agency|copilot>] [--model <model>]
+  fixlab onboard [repository] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>] [--model <model>]
   fixlab init [repository]
   fixlab prepare [repository] [--yes]
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
   fixlab authenticate [repository] [--yes]
-  fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
-  fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
-  fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
-  fixlab chat [repository] [--port <number>] [--runtime <agency|copilot>]
+  fixlab run [repository] [--runtime <agency|copilot>] [--model <model>] [--environment <name>] [--] [request...]
+  fixlab validate [repository] --pr <number> [--runtime <agency|copilot>] [--model <model>]
+  fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>] [--model <model>]
+  fixlab chat [repository] [--port <number>] [--runtime <agency|copilot>] [--model <model>]
   fixlab --help
 
 Commands:
@@ -102,6 +104,8 @@ Runtime:
   copilot   Use GitHub Copilot CLI directly.
 
 Set FIXLAB_RUNTIME or pass --runtime to select the runtime.
+Set FIXLAB_MODEL or pass --model to select a GitHub Copilot CLI model.
+HydraFusion is available in direct mode with --runtime copilot --model ${HYDRAFUSION_MODEL}.
 Run with --environment to select an allowed non-production environment from the repository profile.
 For the Agency-like interactive experience, run FixLab with only the repository path.
 
@@ -460,6 +464,7 @@ function parseRuntimeArguments(args) {
   } catch (error) {
     return { error: `FIXLAB_RUNTIME ${error.message}` };
   }
+  let model = process.env.FIXLAB_MODEL ?? "";
   const remaining = [];
   let afterSeparator = false;
   for (let index = 0; index < args.length; index += 1) {
@@ -489,9 +494,29 @@ function parseRuntimeArguments(args) {
       }
       continue;
     }
+    if (!afterSeparator && argument === "--model") {
+      if (!args[index + 1]) {
+        return { error: "--model requires a model identifier" };
+      }
+      model = args[index + 1];
+      index += 1;
+      continue;
+    }
+    if (!afterSeparator && argument.startsWith("--model=")) {
+      model = argument.slice("--model=".length);
+      if (!model) {
+        return { error: "--model requires a model identifier" };
+      }
+      continue;
+    }
     remaining.push(argument);
   }
-  return { runtime, args: remaining };
+  try {
+    model = validateCopilotModel(model, runtime);
+  } catch (error) {
+    return { error: error.message };
+  }
+  return { runtime, model, args: remaining };
 }
 
 function doctor(repository, runtime) {
@@ -876,7 +901,13 @@ function authenticate(repository, approved) {
   return 0;
 }
 
-function launch(repository, request, runtime, targetEnvironment = "") {
+function launch(
+  repository,
+  request,
+  runtime,
+  model = "",
+  targetEnvironment = ""
+) {
   const { profile, error } = loadProfile(repository);
   if (error) {
     console.error(
@@ -930,7 +961,8 @@ function launch(repository, request, runtime, targetEnvironment = "") {
       ? buildCopilotInvocation({
           packageRoot,
           prompt,
-          sessionId: randomUUID()
+          sessionId: randomUUID(),
+          model
         })
       : buildAgencyInvocation({
           packageRoot,
@@ -944,6 +976,15 @@ function launch(repository, request, runtime, targetEnvironment = "") {
           packageRoot,
           "--agent",
           "fixlab:fixlab",
+          ...(runtime === "copilot" && model
+            ? [
+                ...(model.toLowerCase() === HYDRAFUSION_MODEL
+                  ? ["--experimental"]
+                  : []),
+                "--model",
+                model
+              ]
+            : []),
           ...(prompt ? ["--interactive", prompt] : [])
         ]
       };
@@ -1112,6 +1153,7 @@ function parseOnboardArguments(args) {
   return {
     repository: resolveRepository(repositoryArgument),
     runtime: runtimeArguments.runtime,
+    model: runtimeArguments.model,
     approved,
     authenticateBrowser,
     startDashboard
@@ -1121,6 +1163,7 @@ function parseOnboardArguments(args) {
 async function onboard({
   repository,
   runtime,
+  model,
   approved,
   authenticateBrowser,
   startDashboard
@@ -1131,6 +1174,9 @@ async function onboard({
   console.log("FixLab onboarding");
   console.log(`  repository: ${repository}`);
   console.log(`  runtime: ${runtime}`);
+  if (model) {
+    console.log(`  model: ${model}`);
+  }
 
   const initResult = init(repository);
   if (initResult !== 0) {
@@ -1193,13 +1239,23 @@ async function onboard({
     return doctorResult;
   }
   if (startDashboard) {
-    return dashboard(repository, DEFAULT_DASHBOARD_PORT, true, runtime);
+    return dashboard(
+      repository,
+      DEFAULT_DASHBOARD_PORT,
+      true,
+      runtime,
+      model
+    );
   }
 
   console.log("");
   console.log("FixLab onboarding is ready.");
   console.log("Start the dashboard with:");
-  console.log(`  fixlab dashboard "${repository}" --runtime ${runtime}`);
+  console.log(
+    `  fixlab dashboard "${repository}" --runtime ${runtime}${
+      model ? ` --model ${model}` : ""
+    }`
+  );
   return 0;
 }
 
@@ -1227,7 +1283,7 @@ function openBrowser(url) {
   child.unref();
 }
 
-async function dashboard(repository, port, shouldOpen, runtime) {
+async function dashboard(repository, port, shouldOpen, runtime, model = "") {
   const readiness = inspectRepository(repository);
   if (!readiness.repositoryReady) {
     console.error(`Cannot start FixLab dashboard: ${readiness.error}`);
@@ -1236,7 +1292,8 @@ async function dashboard(repository, port, shouldOpen, runtime) {
   const dashboardServer = createDashboardServer({
     repository,
     packageRoot,
-    runtime
+    runtime,
+    model
   });
   let address;
   try {
@@ -1249,6 +1306,9 @@ async function dashboard(repository, port, shouldOpen, runtime) {
   console.log(`FixLab dashboard: ${address.url}`);
   console.log(`Repository: ${repository}`);
   console.log(`Runtime: ${runtime}`);
+  if (model) {
+    console.log(`Model: ${model}`);
+  }
   console.log("Press Ctrl+C to stop the local dashboard.");
   if (shouldOpen) {
     openBrowser(address.url);
@@ -1370,6 +1430,7 @@ async function startDashboardForChat({
   repositoryArgument,
   port,
   runtime,
+  model,
   baseUrl
 }) {
   let repository;
@@ -1396,7 +1457,7 @@ async function startDashboardForChat({
     console.log(
       "The repository is not dashboard-ready. Opening the interactive FixLab onboarding session first."
     );
-    const onboardingResult = launch(repository, "", runtime);
+    const onboardingResult = launch(repository, "", runtime, model);
     if (onboardingResult !== 0) {
       throw new Error(
         `FixLab onboarding exited with code ${onboardingResult}`
@@ -1421,7 +1482,8 @@ async function startDashboardForChat({
       String(port),
       "--no-open",
       "--runtime",
-      runtime
+      runtime,
+      ...(model ? ["--model", model] : [])
     ],
     {
       detached: true,
@@ -1503,6 +1565,7 @@ async function main(args) {
       runArguments.repository,
       runArguments.request,
       parsed.runtime,
+      parsed.model,
       runArguments.targetEnvironment
     );
   }
@@ -1521,7 +1584,8 @@ async function main(args) {
     return launch(
       parsed.repository,
       `Validate pull request ${parsed.pullRequest} without modifying source code or the pull request.`,
-      runtimeArguments.runtime
+      runtimeArguments.runtime,
+      runtimeArguments.model
     );
   }
 
@@ -1540,7 +1604,8 @@ async function main(args) {
       parsed.repository,
       parsed.port,
       parsed.open,
-      runtimeArguments.runtime
+      runtimeArguments.runtime,
+      runtimeArguments.model
     );
   }
 
@@ -1582,16 +1647,19 @@ async function main(args) {
         repositoryArgument: repository,
         port: alternatePort,
         runtime: runtimeArguments.runtime,
+        model: runtimeArguments.model,
         baseUrl: alternateUrl
       });
     };
     return runChat({
       baseUrl,
+      model: runtimeArguments.model,
       recoverConnection: () =>
         startDashboardForChat({
           repositoryArgument: parsed.repositoryArgument,
           port: parsed.port,
           runtime: runtimeArguments.runtime,
+          model: runtimeArguments.model,
           baseUrl
         }),
       selectRepository: async ({ readiness }) => {
@@ -1633,14 +1701,15 @@ async function main(args) {
     }
     if (parsed.args.length !== 1) {
       console.error(
-        "interactive FixLab accepts one repository path and an optional --runtime"
+        "interactive FixLab accepts one repository path and optional --runtime and --model values"
       );
       return 1;
     }
     return launch(
       resolveRepository(parsed.args[0]),
       "",
-      parsed.runtime
+      parsed.runtime,
+      parsed.model
     );
   }
 

@@ -45,6 +45,17 @@ agency copilot
 For direct mode, install and authenticate GitHub Copilot CLI, then use
 `--runtime copilot` or set `FIXLAB_RUNTIME=copilot`.
 
+Direct mode can use any Copilot CLI model identifier with `--model` or
+`FIXLAB_MODEL`. HydraFusion is available as a research preview:
+
+```shell
+fixlab chat --runtime copilot --model hydrafusion
+```
+
+FixLab automatically passes `--experimental` for HydraFusion. Use it for
+substantial tasks that can be described completely in the first turn; model
+availability remains controlled by the installed Copilot CLI and account.
+
 ### 2. Install and initialize FixLab
 
 ```shell

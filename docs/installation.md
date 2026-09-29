@@ -37,6 +37,24 @@ For direct mode, install and authenticate GitHub Copilot CLI, then verify
 `copilot --help`. Select direct mode with `--runtime copilot` or
 `FIXLAB_RUNTIME=copilot`.
 
+Select a Copilot CLI model with `--model <model>` or `FIXLAB_MODEL=<model>`.
+Model selection is not available with the Agency runtime. HydraFusion is a
+research-preview orchestrator and requires Copilot experimental features;
+FixLab supplies that flag automatically:
+
+```powershell
+fixlab chat --runtime copilot --model hydrafusion
+$env:FIXLAB_RUNTIME = "copilot"
+$env:FIXLAB_MODEL = "hydrafusion"
+fixlab chat
+```
+
+The dashboard also provides a model field for each Copilot job, with
+HydraFusion as a preset. Leave it blank to use the Copilot CLI default. A
+selected model is retained when a queued or blocked job resumes. HydraFusion
+is best suited to substantial tasks whose full requirements are supplied in
+the first turn. Availability depends on the installed Copilot CLI and account.
+
 FixLab does not install either runtime or manage its authentication.
 Installing FixLab does not start a server or background service. Run
 `fixlab chat` after installation; if no dashboard is running, chat asks for
@@ -474,6 +492,7 @@ Start chat from an onboarded repository:
 ```powershell
 fixlab chat
 fixlab chat --runtime copilot
+fixlab chat --runtime copilot --model hydrafusion
 ```
 
 When the current directory is not an onboarded repository, chat asks for the
@@ -488,6 +507,7 @@ Use `fixlab dashboard` when the browser UI should be started explicitly:
 ```powershell
 fixlab dashboard
 fixlab dashboard --runtime copilot
+fixlab dashboard --runtime copilot --model hydrafusion
 ```
 
 It binds only to `127.0.0.1`, uses port `4317` by default, and opens the system
@@ -530,6 +550,10 @@ Direct mode launches:
 ```powershell
 copilot --plugin-dir <installed-fixlab-package> --agent fixlab:fixlab
 ```
+
+With HydraFusion selected, direct mode adds
+`--experimental --model hydrafusion`. Other model identifiers add only
+`--model <model>`.
 
 The dashboard uses the same plugin resolution and streams long prompts through
 standard input. Closing it terminates only its tracked runtime and Playwright

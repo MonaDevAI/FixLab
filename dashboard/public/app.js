@@ -42,6 +42,8 @@ const screenshotMessage = document.querySelector("#screenshot-message");
 const targetEnvironmentSelect = document.querySelector(
   "#target-environment"
 );
+const modelControl = document.querySelector("#model-control");
+const modelInput = document.querySelector("#model");
 const jobInputPanel = document.querySelector("#job-input-panel");
 const jobInputTitle = document.querySelector("#job-input-title");
 const jobInputCount = document.querySelector("#job-input-count");
@@ -183,6 +185,21 @@ function renderReadiness(readiness) {
   }
 }
 
+function renderRuntime(runtime) {
+  const supportsModelSelection = runtime?.supportsModelSelection === true;
+  modelControl.hidden = !supportsModelSelection;
+  modelInput.disabled = !supportsModelSelection;
+  if (!supportsModelSelection) {
+    modelInput.value = "";
+    delete modelInput.dataset.initialized;
+    return;
+  }
+  if (!modelInput.dataset.initialized) {
+    modelInput.value = runtime.defaultModel ?? "";
+    modelInput.dataset.initialized = "true";
+  }
+}
+
 function labelTestEvidence(value) {
   return String(value ?? "profile-defined")
     .split("-")
@@ -244,10 +261,11 @@ function renderJob(job, currentActiveJob = job) {
     running && job?.lastActivityAt
       ? Date.now() - Date.parse(job.lastActivityAt)
       : null;
+  const modelSummary = job?.model ? ` · ${job.model}` : "";
   jobStatusElement.textContent = job
     ? `${job.status} · ${job.requestType} · ${
         job.targetEnvironment || "profile default"
-      } · ${formatDuration(job.durationMs)}${
+      }${modelSummary} · ${formatDuration(job.durationMs)}${
         lastActivityAge === null
           ? ""
           : ` · last output ${formatDuration(lastActivityAge)} ago`
@@ -642,7 +660,9 @@ function renderQueue(currentJob, queue = [], history = []) {
       button.classList.add("selected");
     }
     const summary = document.createElement("strong");
-    summary.textContent = `${label} · ${job.status} · ${job.requestType}`;
+    summary.textContent = `${label} · ${job.status} · ${job.requestType}${
+      job.model ? ` · ${job.model}` : ""
+    }`;
     const details = document.createElement("span");
     details.className = "job-request";
     details.textContent =
@@ -1019,6 +1039,7 @@ async function refresh() {
       selectedJobId = activeJob?.id ?? null;
     }
     renderReadiness(body.readiness);
+    renderRuntime(body.runtime);
     renderJob(observedJobs.get(selectedJobId) ?? activeJob, activeJob);
     renderQueue(activeJob, body.queue, body.history);
   } catch (error) {
@@ -1058,6 +1079,7 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         request: data.get("request"),
         requestType: data.get("requestType"),
+        model: data.get("model"),
         mode: data.get("mode"),
         pullRequestStrategy: data.get("separatePullRequests") === "on"
           ? "per-bug"

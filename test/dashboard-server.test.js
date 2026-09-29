@@ -122,6 +122,62 @@ test("direct Copilot executor preserves stdin sessions and resume", () => {
     resumed.args.at(-1),
     "--resume=22222222-2222-4222-8222-222222222222"
   );
+
+  const hydraFusion = buildCopilotInvocation({
+    packageRoot: "C:\\FixLab",
+    prompt,
+    sessionId: "22222222-2222-4222-8222-222222222222",
+    model: "hydrafusion"
+  });
+  assert.deepEqual(
+    hydraFusion.args.slice(
+      hydraFusion.args.indexOf("--agent") + 2,
+      hydraFusion.args.indexOf("--allow-all-tools")
+    ),
+    ["--experimental", "--model", "hydrafusion"]
+  );
+
+  const resumedHydraFusion = buildCopilotInvocation({
+    packageRoot: "C:\\FixLab",
+    prompt,
+    sessionId: "22222222-2222-4222-8222-222222222222",
+    resume: true,
+    model: "hydrafusion"
+  });
+  assert.equal(resumedHydraFusion.args.includes("--experimental"), true);
+  assert.deepEqual(
+    resumedHydraFusion.args.slice(
+      resumedHydraFusion.args.indexOf("--model"),
+      resumedHydraFusion.args.indexOf("--model") + 2
+    ),
+    ["--model", "hydrafusion"]
+  );
+
+  const stableModel = buildCopilotInvocation({
+    packageRoot: "C:\\FixLab",
+    prompt,
+    sessionId: "22222222-2222-4222-8222-222222222222",
+    model: "claude-sonnet-4.5"
+  });
+  assert.equal(stableModel.args.includes("--experimental"), false);
+  assert.deepEqual(
+    stableModel.args.slice(
+      stableModel.args.indexOf("--model"),
+      stableModel.args.indexOf("--model") + 2
+    ),
+    ["--model", "claude-sonnet-4.5"]
+  );
+
+  assert.throws(
+    () =>
+      buildCopilotInvocation({
+        packageRoot: "C:\\FixLab",
+        prompt,
+        sessionId: "22222222-2222-4222-8222-222222222222",
+        model: "hydrafusion & whoami"
+      }),
+    /model must be/
+  );
 });
 
 async function availablePort() {
@@ -394,11 +450,98 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.match(pageText, /Load bugs/);
     assert.match(pageText, /Continue this job/);
     assert.match(pageText, /Screenshots \(optional\)/);
+    assert.match(pageText, /HydraFusion \(research preview\)/);
     assert.match(pageText, /Repository-defined validation context is loaded automatically/);
     assert.match(pageText, /proceeds autonomously/);
 
     const traversal = await fetch(`${url}/..%2fpackage.json`);
     assert.equal(traversal.status, 404);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard preserves a Copilot model when resuming a job", async () => {
+  const repository = createRepository();
+  const calls = [];
+  const executor = (input) => {
+    calls.push(input);
+    if (calls.length === 1) {
+      input.onOutput(
+        "stdout",
+        "FIXLAB_STAGE|intake|blocked|Waiting for user input.\n"
+      );
+      return { completion: Promise.resolve({ code: 1 }), terminate() {} };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(
+    repository,
+    executor,
+    undefined,
+    { runtime: "copilot", model: "hydrafusion" }
+  );
+
+  try {
+    const status = await jsonRequest(url, "/api/status");
+    assert.deepEqual(status.body.runtime, {
+      name: "copilot",
+      defaultModel: "hydrafusion",
+      supportsModelSelection: true
+    });
+
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Validate model persistence.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    assert.equal(started.response.status, 202);
+    assert.equal(started.body.job.model, "hydrafusion");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const resumed = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "continue",
+        details: "The prerequisite is ready."
+      })
+    });
+    assert.equal(resumed.response.status, 202);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0].model, "hydrafusion");
+    assert.equal(calls[1].model, "hydrafusion");
+    assert.equal(calls[1].resume, true);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("Agency dashboard rejects Copilot model selection", async () => {
+  const repository = createRepository();
+  const { dashboard, url } = await startDashboard(repository, () => {
+    throw new Error("executor should not run");
+  });
+
+  try {
+    const rejected = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Do not start this job.",
+        requestType: "bug-fix",
+        mode: "validate-only",
+        model: "hydrafusion"
+      })
+    });
+    assert.equal(rejected.response.status, 400);
+    assert.match(rejected.body.error, /copilot runtime/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -2304,6 +2447,7 @@ test("terminal chat creates a separate bug job from natural language", async () 
 
   assert.equal(await runChat({
     baseUrl: "http://127.0.0.1:4317",
+    model: "hydrafusion",
     input,
     output: outputStream,
     errorOutput: outputStream,
@@ -2314,6 +2458,7 @@ test("terminal chat creates a separate bug job from natural language", async () 
   const submitted = requests.find(({ url }) => url.endsWith("/api/jobs"));
   assert.deepEqual(JSON.parse(submitted.options.body), {
     request: "Product search returns duplicate rows",
+    model: "hydrafusion",
     mode: "fix-and-validate",
     requestType: "bug-fix",
     pullRequestStrategy: "common",

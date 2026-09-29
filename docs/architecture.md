@@ -246,7 +246,12 @@ The dashboard Agency adapter invokes `agency copilot` with the plugin-qualified
 packaged agent is selected as `fixlab:fixlab`, with explicit UUID session or resume
 identity, streaming output, non-interactive blocker behavior, and the same tool
 approval contract. Direct dashboard mode additionally enables Copilot
-autopilot.
+autopilot. Copilot model selection is an execution-transport setting, not an
+agent or repository-profile setting. The CLI accepts a server default, and the
+dashboard can override it per job. The selected model is persisted with the
+bounded job summary and reused for queued starts and session resumes.
+HydraFusion selection adds Copilot's experimental flag; other model identifiers
+do not.
 Runtime selection changes only execution transport; queueing, marker parsing,
 metrics, evidence, validation gates, and pull-request rules remain shared.
 

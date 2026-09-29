@@ -140,6 +140,7 @@ async function requestJson(fetchImpl, url, options) {
 
 export async function runChat({
   baseUrl,
+  model = "",
   input = process.stdin,
   output = process.stdout,
   errorOutput = process.stderr,
@@ -246,6 +247,7 @@ export async function runChat({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         request: details,
+        ...(model ? { model } : {}),
         mode: "fix-and-validate",
         requestType: "bug-fix",
         pullRequestStrategy: "common",
