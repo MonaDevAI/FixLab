@@ -9,6 +9,10 @@ All notable changes to FixLab are documented in this file.
 - Add `fixlab chat` as a terminal client for the active dashboard session,
   including live output, status, evidence, PR, resume, retry, and owned-executor
   stop commands.
+- Let `fixlab chat` select the repository and start the loopback dashboard
+  automatically when no dashboard is already running.
+- Document the simplified chat-first installation, onboarding, UI-bug, API-bug,
+  end-to-end validation, recovery, and pull-request workflow.
 - Show periodic dashboard activity heartbeats while long-running builds,
   tests, and browser validation are quiet without resetting the idle watchdog.
 - Add a packaged, plan-first `fixlab onboard` command so users can initialize,

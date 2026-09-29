@@ -18,6 +18,75 @@ A FixLab runner typically needs:
 
 Install only the tools required by the repository profile.
 
+## Simplified chat-first workflow
+
+Install FixLab once:
+
+```powershell
+npm install --global github:MonaDevAI/FixLab
+fixlab --help
+```
+
+Then start chat from any directory:
+
+```powershell
+fixlab chat
+```
+
+If the dashboard is not already running, FixLab asks for the local repository
+path. If the repository is not ready, it creates the initial profile when
+needed and opens the interactive FixLab onboarding agent. Enter a request such
+as:
+
+```text
+Onboard this React and .NET repository for FixLab. Inspect the project,
+configure the repository profile, show me any commands requiring approval,
+prepare dependencies, verify Playwright and authentication, and run doctor.
+```
+
+FixLab creates or preserves `.github/fixlab/repository-profile.json`. Review
+repository-owned commands before approving restore, authentication, or browser
+setup. When the onboarding session exits with a ready profile, FixLab starts
+the dashboard and connects chat automatically. After onboarding, use ordinary
+language for bugs.
+
+For a UI bug:
+
+```text
+The Product Hierarchy Excel template is missing the PFAM formatting. Reproduce
+the issue in the React UI, make the smallest fix, run focused tests and
+type-check/build, start the required local applications, validate with
+Playwright, capture evidence, and create or update the PR.
+```
+
+For an API or backend bug:
+
+```text
+The create request API returns the wrong status for invalid hierarchy input.
+Reproduce it with the smallest safe API test, identify the .NET service and
+validation path, make the smallest fix, run focused .NET tests and build,
+start the backend when runtime validation is required, verify the HTTP
+response, and create or update the PR.
+```
+
+For a UI bug that also requires backend behavior:
+
+```text
+Fix this React workflow end to end. If the behavior depends on the .NET API,
+restore, build, and start the backend automatically before Playwright. Keep the
+frontend available for local testing, verify the API and UI behavior, capture
+evidence, and create or update the PR.
+```
+
+FixLab reads paths, commands, ports, safe environments, and test-data policy
+from the repository profile. Do not paste credentials into chat. If a job
+stops, type a normal-language recovery instruction such as:
+
+```text
+Continue the same job, preserve existing changes, finish the required
+validation, and create or update the PR.
+```
+
 ## Onboard a repository
 
 For an Agency-like conversation that can help with setup and then accept the
@@ -155,22 +224,23 @@ uses `synthetic-intercepted` for the focused UI assertion. It does not replace
 an expected empty-state check with synthetic data or claim that a synthetic
 pass validated the selected backend.
 
-Start the local dashboard explicitly:
-
-```powershell
-fixlab dashboard
-```
-
-While the dashboard is running, a second terminal can join its active job:
+Start terminal chat directly:
 
 ```powershell
 fixlab chat
 ```
 
+If no dashboard is running, FixLab uses the current onboarded repository or
+asks for the repository path, starts the loopback dashboard in the background,
+and connects. `fixlab chat C:\path\to\application` provides the path directly
+for scripts or non-interactive terminals. `fixlab dashboard` remains available
+when the browser UI should be started explicitly.
+
 This terminal chat and the browser dashboard share the job, runtime session,
 branch, evidence, and pull-request state. Closing chat does not stop the job.
 
-Installation and `fixlab init` do not start it automatically. The dashboard
+Installation and `fixlab init` do not start it automatically. The first chat
+connection can start it after the repository path is selected. The dashboard
 shows profile readiness, accepts `bug-fix` or `small-enhancement` requests, and
 offers fix-and-validate, validate-only, and Playwright-validation-only modes.
 Bug fix is the default request type. Start with validate-only when

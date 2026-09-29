@@ -95,7 +95,7 @@ and genuine blockers.
 Attach an interactive terminal to the active dashboard job with:
 
 ```text
-fixlab chat [--port <number>]
+fixlab chat [repository] [--port <number>] [--runtime <agency|copilot>]
 ```
 
 Free text is sent to the same runtime session. `/status`, `/logs`,
@@ -103,6 +103,13 @@ Free text is sent to the same runtime session. `/status`, `/logs`,
 `/skip` resume it with explicit guidance; `/stop` terminates only the
 FixLab-owned executor and leaves the job resumable; `/exit` closes the shell
 without stopping the job.
+
+If no dashboard is listening, chat uses the current directory when it contains
+a ready FixLab profile. Otherwise it asks for the local repository path and
+opens the interactive onboarding agent. It initializes a missing profile,
+requires onboarding to finish with a ready profile, starts the loopback
+dashboard in the background, and connects automatically. The optional
+repository argument supports non-interactive path selection.
 
 Manual entry is the default intake path. The dashboard can also load a full
 Azure DevOps work-item URL or use a numeric ID with this optional profile

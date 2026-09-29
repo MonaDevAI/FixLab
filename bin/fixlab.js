@@ -6,9 +6,11 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
-  readFileSync
+  readFileSync,
+  statSync
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 import {
   buildAgencyInvocation,
@@ -75,7 +77,7 @@ Usage:
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
   fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
-  fixlab chat [--port <number>]
+  fixlab chat [repository] [--port <number>] [--runtime <agency|copilot>]
   fixlab --help
 
 Commands:
@@ -92,7 +94,7 @@ Commands:
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
   dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
-  chat      Chat with the active dashboard job in the same FixLab session.
+  chat      Chat with the active dashboard job, starting it when necessary.
 
 Runtime:
   agency    Use Agency Copilot (default).
@@ -1047,6 +1049,7 @@ function parseDashboardArguments(args) {
 }
 
 function parseChatArguments(args) {
+  let repositoryArgument;
   let port = DEFAULT_DASHBOARD_PORT;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -1062,9 +1065,15 @@ function parseChatArguments(args) {
       index += 1;
       continue;
     }
-    return { error: `unknown chat option: ${argument}` };
+    if (argument.startsWith("-")) {
+      return { error: `unknown chat option: ${argument}` };
+    }
+    if (repositoryArgument) {
+      return { error: "chat accepts at most one repository path" };
+    }
+    repositoryArgument = argument;
   }
-  return { port };
+  return { port, repositoryArgument };
 }
 
 function parseOnboardArguments(args) {
@@ -1257,6 +1266,126 @@ async function dashboard(repository, port, shouldOpen, runtime) {
   return 0;
 }
 
+async function promptForChatRepository() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    throw new Error(
+      "no FixLab dashboard is running; rerun as fixlab chat <repository> or use an interactive terminal to choose the repository"
+    );
+  }
+  const readline = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  try {
+    const answer = (
+      await readline.question(
+        `Repository path [${process.cwd()}]: `
+      )
+    ).trim();
+    return resolveRepository(answer || process.cwd());
+  } finally {
+    readline.close();
+  }
+}
+
+async function waitForDashboard(baseUrl, child) {
+  const deadline = Date.now() + 15000;
+  let lastError;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) {
+      throw new Error(
+        `the FixLab dashboard exited with code ${child.exitCode}`
+      );
+    }
+    try {
+      const response = await fetch(`${baseUrl}/api/status`, {
+        signal: AbortSignal.timeout(1000)
+      });
+      if (response.ok) {
+        return;
+      }
+      lastError = new Error(`dashboard returned HTTP ${response.status}`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolveDelay) => setTimeout(resolveDelay, 250));
+  }
+  throw new Error(
+    `the FixLab dashboard did not become ready within 15 seconds${
+      lastError?.message ? `: ${lastError.message}` : ""
+    }`
+  );
+}
+
+async function startDashboardForChat({
+  repositoryArgument,
+  port,
+  runtime,
+  baseUrl
+}) {
+  let repository;
+  if (repositoryArgument) {
+    repository = resolveRepository(repositoryArgument);
+  } else {
+    const currentRepository = resolveRepository(process.cwd());
+    repository = inspectRepository(currentRepository).repositoryReady
+      ? currentRepository
+      : await promptForChatRepository();
+  }
+  if (!existsSync(repository) || !statSync(repository).isDirectory()) {
+    throw new Error(`repository does not exist or is not a directory: ${repository}`);
+  }
+
+  let readiness = inspectRepository(repository);
+  if (!readiness.repositoryReady) {
+    if (!existsSync(join(repository, profileRelativePath))) {
+      const initResult = init(repository);
+      if (initResult !== 0) {
+        throw new Error(`could not initialize FixLab for ${repository}`);
+      }
+    }
+    console.log(
+      "The repository is not dashboard-ready. Opening the interactive FixLab onboarding session first."
+    );
+    const onboardingResult = launch(repository, "", runtime);
+    if (onboardingResult !== 0) {
+      throw new Error(
+        `FixLab onboarding exited with code ${onboardingResult}`
+      );
+    }
+    readiness = inspectRepository(repository);
+    if (!readiness.repositoryReady) {
+      throw new Error(
+        `onboarding finished but the repository is not dashboard-ready: ${readiness.error}`
+      );
+    }
+  }
+
+  console.log(`Starting FixLab dashboard for ${repository}...`);
+  const child = spawn(
+    process.execPath,
+    [
+      fileURLToPath(import.meta.url),
+      "dashboard",
+      repository,
+      "--port",
+      String(port),
+      "--no-open",
+      "--runtime",
+      runtime
+    ],
+    {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    }
+  );
+  await waitForDashboard(baseUrl, child);
+  child.unref();
+  console.log(`FixLab dashboard started at ${baseUrl}.`);
+  return baseUrl;
+}
+
 async function main(args) {
   const [command, ...rest] = args;
   if (!command || command === "--help" || command === "-h") {
@@ -1367,13 +1496,26 @@ async function main(args) {
   }
 
   if (command === "chat") {
-    const parsed = parseChatArguments(rest);
+    const runtimeArguments = parseRuntimeArguments(rest);
+    if (runtimeArguments.error) {
+      console.error(runtimeArguments.error);
+      return 1;
+    }
+    const parsed = parseChatArguments(runtimeArguments.args);
     if (parsed.error) {
       console.error(parsed.error);
       return 1;
     }
+    const baseUrl = `http://127.0.0.1:${parsed.port}`;
     return runChat({
-      baseUrl: `http://127.0.0.1:${parsed.port}`
+      baseUrl,
+      recoverConnection: () =>
+        startDashboardForChat({
+          repositoryArgument: parsed.repositoryArgument,
+          port: parsed.port,
+          runtime: runtimeArguments.runtime,
+          baseUrl
+        })
     });
   }
 

@@ -59,6 +59,7 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
   assert.match(result.stdout, /fixlab chat/);
+  assert.match(result.stdout, /chat \[repository\]/);
   assert.match(result.stdout, /fixlab <repository>/);
   assert.match(result.stdout, /--runtime <agency\|copilot>/);
   assert.match(result.stdout, /--environment <name>/);
@@ -783,6 +784,17 @@ test("dashboard rejects unknown options before starting", () => {
 test("dashboard rejects a missing repository before starting", () => {
   const missing = join(tmpdir(), `fixlab-missing-${Date.now()}`);
   const result = run(["dashboard", missing, "--no-open"], process.cwd());
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /repository does not exist/);
+});
+
+test("chat validates a repository before starting a missing dashboard", () => {
+  const missing = join(tmpdir(), `fixlab-chat-missing-${Date.now()}`);
+  const result = run(
+    ["chat", missing, "--port", "4319"],
+    process.cwd()
+  );
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /repository does not exist/);

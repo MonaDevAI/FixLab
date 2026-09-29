@@ -45,10 +45,15 @@ required human actions.
 the packaged FixLab agent directly in that repository so setup, diagnosis,
 implementation, and validation can proceed in one interactive runtime
 session. `fixlab chat` is a separate thin terminal client for an already
-running dashboard job. It polls only the loopback dashboard API, streams the
-bounded job output, and sends comments or resume actions back to the same
-dashboard-owned runtime session. Exiting the terminal leaves the job running;
-an explicit stop request terminates only the executor owned by that job.
+running dashboard job. When the dashboard is unavailable, chat uses the
+current ready repository or prompts for its path. For an incomplete repository
+it creates the initial profile when missing and opens the interactive
+onboarding agent; after readiness succeeds, it starts the dashboard as a
+detached loopback process and reconnects. It polls only the loopback dashboard
+API, streams the bounded job output, and sends comments or resume actions back
+to the same dashboard-owned runtime session. Exiting the terminal leaves the
+job running; an explicit stop request terminates only the executor owned by
+that job.
 
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the

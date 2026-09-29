@@ -1951,6 +1951,61 @@ test("terminal chat sends free text to the active dashboard session", async () =
   assert.match(output, /Guidance queued for the same session/);
 });
 
+test("terminal chat can recover by starting a dashboard connection", async () => {
+  let dashboardStarted = false;
+  const job = {
+    id: "job-recovered",
+    status: "passed",
+    request: "Recover the job",
+    durationMs: 2000,
+    pullRequestReadiness: { message: "PR is ready." },
+    stages: {
+      pr: { status: "passed", message: "PR is ready." }
+    },
+    logs: []
+  };
+  const fetchImpl = async (url) => {
+    if (!dashboardStarted) {
+      throw new Error("connect ECONNREFUSED");
+    }
+    if (url.endsWith("/api/status")) {
+      return new Response(JSON.stringify({ job }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+
+  const exitCode = await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input: Readable.from(["/exit\n"]),
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 10000,
+    recoverConnection: async ({ baseUrl }) => {
+      dashboardStarted = true;
+      return baseUrl;
+    }
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(dashboardStarted, true);
+  assert.match(output, /Job job-recovered: passed/);
+  assert.match(output, /FixLab chat is connected/);
+});
+
 test("dashboard shutdown terminates only its active executor handle", async () => {
   const repository = createRepository();
   let terminated = 0;

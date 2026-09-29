@@ -38,8 +38,10 @@ For direct mode, install and authenticate GitHub Copilot CLI, then verify
 `FIXLAB_RUNTIME=copilot`.
 
 FixLab does not install either runtime or manage its authentication.
-Installing FixLab does not start a server or background service. The local
-dashboard starts only when you run `fixlab dashboard`.
+Installing FixLab does not start a server or background service. Run
+`fixlab chat` after installation; if no dashboard is running, chat asks for
+the repository path, opens interactive onboarding when needed, and starts the
+local dashboard in the background after the profile is ready.
 
 ## Install directly from GitHub
 
@@ -467,7 +469,21 @@ only; FixLab never reads or returns their browser-state contents.
 
 ## Run FixLab
 
-Start the local dashboard from an onboarded repository:
+Start chat from an onboarded repository:
+
+```powershell
+fixlab chat
+fixlab chat --runtime copilot
+```
+
+When the current directory is not an onboarded repository, chat asks for the
+repository path. It can also be supplied directly:
+
+```powershell
+fixlab chat C:\source\application
+```
+
+Use `fixlab dashboard` when the browser UI should be started explicitly:
 
 ```powershell
 fixlab dashboard

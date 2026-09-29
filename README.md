@@ -49,14 +49,31 @@ For direct mode, install and authenticate GitHub Copilot CLI, then use
 
 ```shell
 npm install --global github:MonaDevAI/FixLab
-fixlab C:\path\to\application
+fixlab chat
 ```
 
-The repository-path form opens the Agency-like interactive FixLab shell. The
-agent inspects repository readiness, helps complete onboarding and
-authentication, accepts the bug or enhancement conversationally, and retains
-the same context while it diagnoses, fixes, validates, and prepares the pull
-request.
+When no dashboard is running, chat asks for the local repository path. For a
+new or incomplete repository it opens the interactive onboarding agent first;
+after the profile becomes ready, it starts the loopback dashboard and connects.
+Ask it in plain language to onboard the repository, diagnose a UI or API bug,
+run the profile-defined React/.NET validation, and create or update the pull
+request. The repository-path form `fixlab C:\path\to\application` remains
+available for a direct Agency-like interactive agent session.
+
+Example UI request:
+
+```text
+Reproduce this React UI bug, make the smallest fix, run focused tests and
+Playwright, capture evidence, and create or update the PR.
+```
+
+Example API request:
+
+```text
+Reproduce this .NET API bug, make the smallest fix, run focused tests and
+build, start the backend when required, verify the HTTP behavior, and create
+or update the PR.
+```
 
 For explicit plan-first onboarding without entering the interactive shell:
 
@@ -98,7 +115,9 @@ pwsh -File scripts/repair-node-runtime.ps1 -Repository C:\path\to\application -Y
 `fixlab dashboard` starts the local loopback dashboard and opens it in the
 system browser. `fixlab chat` attaches a terminal chat to that dashboard's
 active job so terminal and browser interactions share one session and evidence
-record.
+record. When no dashboard is running, `fixlab chat` uses the current onboarded
+repository or asks for its path, starts the dashboard in the background, and
+then connects.
 
 FixLab is not yet published to the public npm registry or merged into the
 official GitHub Copilot plugin marketplace. Until marketplace review is

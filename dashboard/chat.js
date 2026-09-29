@@ -95,8 +95,10 @@ export async function runChat({
   output = process.stdout,
   errorOutput = process.stderr,
   fetchImpl = globalThis.fetch,
-  pollIntervalMs = 1000
+  pollIntervalMs = 1000,
+  recoverConnection
 }) {
+  let dashboardUrl = baseUrl;
   let currentJob = null;
   let lastJobId = null;
   let lastLogIndex = -1;
@@ -107,7 +109,7 @@ export async function runChat({
   const writeError = (message) => errorOutput.write(`${message}\n`);
 
   const loadStatus = async ({ announce = false } = {}) => {
-    const body = await requestJson(fetchImpl, `${baseUrl}/api/status`);
+    const body = await requestJson(fetchImpl, `${dashboardUrl}/api/status`);
     currentJob = body.job;
     if (!currentJob) {
       if (announce) {
@@ -143,7 +145,7 @@ export async function runChat({
   };
 
   const submitInput = async (action, details) => {
-    const body = await requestJson(fetchImpl, `${baseUrl}/api/job/input`, {
+    const body = await requestJson(fetchImpl, `${dashboardUrl}/api/job/input`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action, details })
@@ -159,10 +161,24 @@ export async function runChat({
   try {
     await loadStatus();
   } catch (error) {
-    writeError(
-      `Cannot connect to the FixLab dashboard at ${baseUrl}: ${error.message}`
-    );
-    return 1;
+    if (recoverConnection) {
+      try {
+        dashboardUrl =
+          (await recoverConnection({ baseUrl: dashboardUrl, error })) ??
+          dashboardUrl;
+        await loadStatus();
+      } catch (recoveryError) {
+        writeError(
+          `Cannot connect to the FixLab dashboard at ${dashboardUrl}: ${recoveryError.message}`
+        );
+        return 1;
+      }
+    } else {
+      writeError(
+        `Cannot connect to the FixLab dashboard at ${dashboardUrl}: ${error.message}`
+      );
+      return 1;
+    }
   }
 
   write("FixLab chat is connected. Type /help for commands.");
@@ -246,7 +262,7 @@ export async function runChat({
       return;
     }
     if (command === "/stop") {
-      await requestJson(fetchImpl, `${baseUrl}/api/job/stop`, {
+      await requestJson(fetchImpl, `${dashboardUrl}/api/job/stop`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: "{}"
