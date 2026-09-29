@@ -2055,12 +2055,83 @@ test("terminal chat redraws the prompt while job logs stream", async () => {
     fetchImpl,
     pollIntervalMs: 5
   });
-  await new Promise((resolve) => setTimeout(resolve, 25));
+  for (let attempt = 0; attempt < 100 && !output.includes("Build is still running."); attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   input.end("/exit\n");
 
   assert.equal(await chat, 0);
   assert.match(output, /Build is still running/);
   assert.ok(output.match(/fixlab> /g)?.length >= 2);
+});
+
+test("terminal chat buffers streamed output while the user is typing", async () => {
+  let statusReads = 0;
+  let submittedComments = 0;
+  const input = new PassThrough();
+  input.isTTY = true;
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+  outputStream.isTTY = true;
+  const job = {
+    id: "job-typing",
+    status: "running",
+    request: "Analyze a page error",
+    durationMs: 1000,
+    pullRequestReadiness: { message: "Validation is running." },
+    stages: {},
+    logs: []
+  };
+  const fetchImpl = async (url) => {
+    if (url.endsWith("/api/status")) {
+      statusReads += 1;
+      return new Response(JSON.stringify({
+        job: {
+          ...job,
+          logs: statusReads > 1
+            ? [{ index: 1, stream: "stdout", message: "Background progress." }]
+            : []
+        }
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/api/job/input")) {
+      submittedComments += 1;
+      return new Response(JSON.stringify({ job, queued: true }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  const chat = runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input,
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 5
+  });
+  input.write("Analyze the page");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  input.write(" error\n");
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  input.write("/exit\n");
+
+  assert.equal(await chat, 0);
+  assert.equal(submittedComments, 1);
+  assert.match(output, /Background progress/);
 });
 
 test("terminal chat confirms and switches the connected repository", async () => {

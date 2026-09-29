@@ -118,7 +118,8 @@ active job so terminal and browser interactions share one session and evidence
 record. When no dashboard is running, `fixlab chat` uses the current onboarded
 repository or asks for its path, starts the dashboard in the background, and
 then connects. Streaming activity clears and redraws the `fixlab>` line so
-partially typed input remains usable while validation continues. At startup,
+partially typed input remains usable while validation continues. Background
+activity is buffered until the current input line is submitted. At startup,
 chat displays the connected repository and lets the user keep it or enter
 another path; a different repository starts on the next available loopback
 port. Common operational requests also work as plain English, including

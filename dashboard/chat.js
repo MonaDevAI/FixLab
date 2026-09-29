@@ -161,8 +161,13 @@ export async function runChat({
   let interactive = false;
   let handlingLine = false;
   let readline;
+  const pendingMessages = [];
   const writeMessage = (stream, message = "") => {
     if (interactive && readline && !handlingLine && !closed) {
+      if (readline.line) {
+        pendingMessages.push({ stream, message });
+        return;
+      }
       clearLine(output, 0);
       cursorTo(output, 0);
       stream.write(`${message}\n`);
@@ -173,6 +178,16 @@ export async function runChat({
   };
   const write = (message = "") => writeMessage(output, message);
   const writeError = (message) => writeMessage(errorOutput, message);
+  const flushPendingMessages = () => {
+    if (pendingMessages.length === 0) {
+      return;
+    }
+    clearLine(output, 0);
+    cursorTo(output, 0);
+    for (const { stream, message } of pendingMessages.splice(0)) {
+      stream.write(`${message}\n`);
+    }
+  };
 
   const loadStatus = async ({ announce = false } = {}) => {
     const body = await requestJson(fetchImpl, `${dashboardUrl}/api/status`);
@@ -307,7 +322,12 @@ export async function runChat({
   });
 
   const poll = async () => {
-    if (closed || polling || handlingLine) {
+    if (
+      closed ||
+      polling ||
+      handlingLine ||
+      (interactive && Boolean(readline?.line))
+    ) {
       return;
     }
     polling = true;
@@ -458,6 +478,7 @@ export async function runChat({
       .catch((error) => writeError(error.message))
       .finally(() => {
         if (!closed && interactive) {
+          flushPendingMessages();
           readline.prompt();
         }
       });

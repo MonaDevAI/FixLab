@@ -103,7 +103,9 @@ Free text is sent to the same runtime session. `/status`, `/logs`,
 `/skip` resume it with explicit guidance; `/stop` terminates only the
 FixLab-owned executor and leaves the job resumable; `/exit` closes the shell
 without stopping the job. Streamed activity redraws the `fixlab>` input line
-instead of overwriting partially typed text.
+instead of overwriting partially typed text. While the input line contains
+text, background activity is buffered and displayed only after the line is
+submitted, preventing typed fragments from becoming duplicate comments.
 
 If no dashboard is listening, chat uses the current directory when it contains
 a ready FixLab profile. Otherwise it asks for the local repository path and

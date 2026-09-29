@@ -20,6 +20,8 @@ All notable changes to FixLab are documented in this file.
   syntax.
 - Let `new bug <details>` and `add a bug: <details>` create a separate
   dashboard job instead of commenting on the active job.
+- Buffer background activity while the user is typing so Windows terminal
+  redraws cannot split one instruction into repeated partial comments.
 - Document the simplified chat-first installation, onboarding, UI-bug, API-bug,
   end-to-end validation, recovery, and pull-request workflow.
 - Show periodic dashboard activity heartbeats while long-running builds,
