@@ -18,6 +18,8 @@ All notable changes to FixLab are documented in this file.
 - Recognize common chat operations in plain English so dashboard, status, logs,
   evidence, pull-request, help, and repository switching do not require slash
   syntax.
+- Let `new bug <details>` and `add a bug: <details>` create a separate
+  dashboard job instead of commenting on the active job.
 - Document the simplified chat-first installation, onboarding, UI-bug, API-bug,
   end-to-end validation, recovery, and pull-request workflow.
 - Show periodic dashboard activity heartbeats while long-running builds,

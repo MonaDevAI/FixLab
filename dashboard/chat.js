@@ -24,6 +24,7 @@ export function formatChatHelp() {
   /retry [guidance]    Retry a failed or blocked job.
   /continue [guidance] Continue a blocked or completed job.
   /skip [reason]       Resume while recording an explicitly skipped gate.
+  /new-bug <details>   Start or queue a separate bug-fix job.
   /stop                Stop the owned executor and leave the job resumable.
   /help                Show these commands.
   /exit                Leave chat without stopping the job.
@@ -70,6 +71,12 @@ export function parseNaturalChatCommand(line) {
   }
   if (/^(?:help|show help|what can i do)\??$/u.test(lower)) {
     return { command: "/help", details: "" };
+  }
+  const newBug = normalized.match(
+    /^(?:new|add|create)(?: a)? bug(?::|\s+)(.+)$/iu
+  );
+  if (newBug) {
+    return { command: "/new-bug", details: newBug[1].trim() };
   }
   return null;
 }
@@ -218,6 +225,31 @@ export async function runChat({
     );
   };
 
+  const submitNewBug = async (details) => {
+    const body = await requestJson(fetchImpl, `${dashboardUrl}/api/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: details,
+        mode: "fix-and-validate",
+        requestType: "bug-fix",
+        pullRequestStrategy: "common",
+        runAllUiScenarios: false,
+        recordPlaywrightVideo: false,
+        holdForManualLiveTest: false
+      })
+    });
+    currentJob = body.job;
+    const queuedJob = (body.queue ?? []).find(
+      (job) => job.request === details
+    );
+    write(
+      queuedJob
+        ? `New bug queued as job ${queuedJob.id}.`
+        : `New bug started as job ${body.job?.id ?? "unknown"}.`
+    );
+  };
+
   try {
     await loadStatus();
   } catch (error) {
@@ -319,6 +351,14 @@ export async function runChat({
       } else {
         write(`FixLab dashboard: ${dashboardUrl}`);
       }
+      return;
+    }
+    if (command === "/new-bug") {
+      if (!details) {
+        write("Describe the bug after /new-bug or type: new bug <details>");
+        return;
+      }
+      await submitNewBug(details);
       return;
     }
     if (command === "/repository") {

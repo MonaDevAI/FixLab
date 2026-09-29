@@ -2127,6 +2127,10 @@ test("terminal chat recognizes natural operational commands", () => {
       details: "C:\\repos\\admin-ui"
     }
   );
+  assert.deepEqual(parseNaturalChatCommand("add a bug: Save button is disabled"), {
+    command: "/new-bug",
+    details: "Save button is disabled"
+  });
   assert.equal(
     parseNaturalChatCommand("Fix the hierarchy template bug"),
     null
@@ -2171,6 +2175,82 @@ test("terminal chat opens the dashboard from natural language", async () => {
   assert.equal(exitCode, 0);
   assert.equal(openedUrl, "http://127.0.0.1:4317");
   assert.match(output, /Opened FixLab dashboard/);
+});
+
+test("terminal chat creates a separate bug job from natural language", async () => {
+  const requests = [];
+  const input = Readable.from([
+    "new bug Product search returns duplicate rows\n",
+    "/exit\n"
+  ]);
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url, options });
+    if (url.endsWith("/api/status")) {
+      return new Response(JSON.stringify({
+        readiness: {
+          repository: "C:\\repos\\fmdm",
+          repositoryReady: true,
+          profileReady: true
+        },
+        job: {
+          id: "current-job",
+          status: "running",
+          request: "Current work",
+          durationMs: 1000,
+          pullRequestReadiness: { message: "Validation is running." },
+          stages: {},
+          logs: []
+        }
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/api/jobs")) {
+      return new Response(JSON.stringify({
+        job: { id: "current-job" },
+        queue: [{
+          id: "new-bug-job",
+          request: "Product search returns duplicate rows"
+        }]
+      }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  assert.equal(await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input,
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 10000
+  }), 0);
+
+  const submitted = requests.find(({ url }) => url.endsWith("/api/jobs"));
+  assert.deepEqual(JSON.parse(submitted.options.body), {
+    request: "Product search returns duplicate rows",
+    mode: "fix-and-validate",
+    requestType: "bug-fix",
+    pullRequestStrategy: "common",
+    runAllUiScenarios: false,
+    recordPlaywrightVideo: false,
+    holdForManualLiveTest: false
+  });
+  assert.match(output, /New bug queued as job new-bug-job/);
 });
 
 test("dashboard shutdown terminates only its active executor handle", async () => {

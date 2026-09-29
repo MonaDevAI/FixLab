@@ -123,6 +123,17 @@ Common operations do not require slash syntax. Natural phrases such as
 immediately. Other free text remains guidance for the active FixLab agent and
 is queued after its current turn when the job is already running.
 
+Create a separate bug job without opening the browser:
+
+```text
+new bug Product search returns duplicate rows
+add a bug: Save remains disabled after validation succeeds
+```
+
+The new bug starts immediately when FixLab is idle or enters the dashboard
+queue when another job is active. Use ordinary free text without the
+`new bug` prefix when the instruction belongs to the current job.
+
 Manual entry is the default intake path. The dashboard can also load a full
 Azure DevOps work-item URL or use a numeric ID with this optional profile
 section:

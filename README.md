@@ -123,7 +123,8 @@ chat displays the connected repository and lets the user keep it or enter
 another path; a different repository starts on the next available loopback
 port. Common operational requests also work as plain English, including
 `start dashboard`, `show status`, `show logs`, `show pull request`,
-`show evidence`, and `switch repository`.
+`show evidence`, and `switch repository`. `new bug <details>` creates a
+separate bug-fix job instead of adding guidance to the current job.
 
 FixLab is not yet published to the public npm registry or merged into the
 official GitHub Copilot plugin marketplace. Until marketplace review is
