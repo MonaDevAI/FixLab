@@ -20,6 +20,9 @@ All notable changes to FixLab are documented in this file.
   syntax.
 - Let `new bug <details>` and `add a bug: <details>` create a separate
   dashboard job instead of commenting on the active job.
+- Let users remove waiting jobs by queue position or job ID from terminal chat
+  or the dashboard while preserving cancelled history and cleaning queued
+  screenshot artifacts.
 - Buffer background activity while the user is typing so Windows terminal
   redraws cannot split one instruction into repeated partial comments.
 - Document the simplified chat-first installation, onboarding, UI-bug, API-bug,

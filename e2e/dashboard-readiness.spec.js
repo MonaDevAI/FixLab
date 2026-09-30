@@ -308,6 +308,46 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
 test("dashboard lets users select active and queued job roadmaps", async ({
   page
 }) => {
+  let cancelledBody;
+  await page.route("**/api/jobs/cancel", async (route) => {
+    cancelledBody = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          id: "active-job",
+          request: "Active bug",
+          requestType: "bug-fix",
+          status: "running",
+          durationMs: 1000,
+          stages: {},
+          bugs: [],
+          logs: [],
+          canComment: true,
+          canResume: false,
+          inputCount: 0,
+          pendingInputCount: 0
+        },
+        cancelledJob: {
+          id: "queued-job",
+          request: "Queued bug",
+          requestType: "bug-fix",
+          status: "cancelled",
+          durationMs: 0,
+          stages: {},
+          bugs: [],
+          logs: [],
+          canComment: false,
+          canResume: false,
+          inputCount: 0,
+          pendingInputCount: 0
+        },
+        queue: [],
+        history: []
+      })
+    });
+  });
   await page.route("**/api/status", async (route) => {
     await route.fulfill({
       contentType: "application/json",
@@ -428,6 +468,16 @@ test("dashboard lets users select active and queued job roadmaps", async ({
   await page.getByRole("button", { name: /Recent · passed/ }).click();
   await expect(page.locator("#job-status")).toContainText("passed · bug-fix");
   await expect(page.locator(".stage.passed")).toHaveCount(8);
+  await page.getByRole("button", { name: /^Waiting #1 ·/ }).click();
+  await expect(
+    page.getByRole("button", { name: "Remove from queue" })
+  ).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: "Remove from queue" }).click();
+  await expect(page.locator("#job-status")).toContainText(
+    "cancelled · bug-fix"
+  );
+  expect(cancelledBody).toEqual({ jobId: "queued-job" });
 });
 
 test("dashboard clears the bug input after adding a job to the queue", async ({

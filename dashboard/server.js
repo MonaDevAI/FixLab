@@ -1094,6 +1094,7 @@ function summarizeMetrics(records, period) {
     passed: completed.filter((record) => record.status === "passed").length,
     failed: completed.filter((record) => record.status === "failed").length,
     blocked: completed.filter((record) => record.status === "blocked").length,
+    cancelled: completed.filter((record) => record.status === "cancelled").length,
     bugs: selected.reduce((total, record) => total + record.bugCount, 0),
     averageDurationMs:
       completed.length > 0
@@ -2759,6 +2760,72 @@ export function createDashboardServer({
       sendJson(response, 202, {
         job: publicJob(currentJob),
         stopping: true
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/jobs/cancel"
+    ) {
+      if (
+        !request.headers["content-type"]
+          ?.toLowerCase()
+          .startsWith("application/json")
+      ) {
+        sendJson(response, 400, {
+          error: "Content-Type must be application/json"
+        });
+        return;
+      }
+      let body;
+      try {
+        body = await readJsonBody(request);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      const jobId =
+        typeof body.jobId === "string" ? body.jobId.trim() : "";
+      const position = Number(body.position);
+      if (
+        !jobId &&
+        (!Number.isInteger(position) ||
+          position < 1 ||
+          position > queuedJobs.length)
+      ) {
+        sendJson(response, 400, {
+          error: "provide a queued jobId or valid queue position"
+        });
+        return;
+      }
+      const queueIndex = jobId
+        ? queuedJobs.findIndex((job) => job.id === jobId)
+        : position - 1;
+      if (queueIndex < 0 || queueIndex >= queuedJobs.length) {
+        sendJson(response, 404, {
+          error: "queued FixLab job not found"
+        });
+        return;
+      }
+      const [cancelledJob] = queuedJobs.splice(queueIndex, 1);
+      cancelledJob.status = "cancelled";
+      cancelledJob.finishedAt = new Date().toISOString();
+      cancelledJob.lastActivityAt = cancelledJob.finishedAt;
+      cancelledJob.error = null;
+      if (cancelledJob.artifactDirectory) {
+        removeArtifactDirectory(cancelledJob.artifactDirectory);
+        artifactDirectories.delete(cancelledJob.artifactDirectory);
+        cancelledJob.artifactDirectory = null;
+        cancelledJob.screenshots = [];
+      }
+      archiveJob(cancelledJob);
+      recordJobMetric(cancelledJob);
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        cancelledJob: publicJob(cancelledJob),
+        queue: publicQueue(queuedJobs),
+        history: dashboardHistory()
       });
       return;
     }

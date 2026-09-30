@@ -311,6 +311,10 @@ button.secondary {
   color: #ff9a9a;
 }
 
+.cancelled {
+  color: #c6cbd3;
+}
+
 .running {
   color: #8ec5ff;
 }
