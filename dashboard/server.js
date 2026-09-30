@@ -1727,8 +1727,19 @@ function appendOutput(job, stream, text) {
   const lines = job.partial[stream].split("\n");
   job.partial[stream] = lines.pop();
   for (const line of lines) {
-    appendLine(job, stream, line);
+    for (const segment of splitRenderedMarkers(line)) {
+      appendLine(job, stream, segment);
+    }
   }
+}
+
+function splitRenderedMarkers(line) {
+  if (!/^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s)/.test(line)) {
+    return [line];
+  }
+  return line
+    .split(/(?=FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s))/)
+    .filter(Boolean);
 }
 
 function appendLine(job, stream, line) {
@@ -1848,7 +1859,9 @@ function pushActivity(job, entry) {
 function finishJob(job, result) {
   for (const stream of ["stdout", "stderr"]) {
     if (job.partial[stream]) {
-      appendLine(job, stream, job.partial[stream]);
+      for (const segment of splitRenderedMarkers(job.partial[stream])) {
+        appendLine(job, stream, segment);
+      }
       job.partial[stream] = "";
     }
   }
