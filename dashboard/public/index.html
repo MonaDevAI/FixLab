@@ -91,6 +91,14 @@
             <label><input type="radio" name="mode" value="validate-only"> Validate only</label>
             <label><input type="radio" name="mode" value="playwright-only"> Playwright validation only</label>
           </fieldset>
+          <div id="model-control" hidden>
+            <label for="model">GitHub Copilot model</label>
+            <select id="model" name="model">
+              <option value="" selected>Copilot Default</option>
+              <option value="hydrafusion">HydraFusion (research preview)</option>
+            </select>
+            <p class="guidance">Copilot Default uses the model selected by Copilot CLI and provides normal live stage progress. HydraFusion automatically enables Copilot experimental features, but may batch stage updates until its orchestration completes.</p>
+          </div>
           <label for="target-environment">Validation environment</label>
           <select id="target-environment" name="targetEnvironment">
             <option value="">Profile default</option>

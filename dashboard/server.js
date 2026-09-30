@@ -47,6 +47,7 @@ export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 export const DEFAULT_EXECUTION_HEARTBEAT_MS = 2 * 60 * 1000;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
+export const HYDRAFUSION_MODEL = "hydrafusion";
 export const FIXLAB_STAGES = [
   "intake",
   "diagnosis",
@@ -83,6 +84,38 @@ const mutationModes = new Set([
   "approved-write",
   "profile-defined"
 ]);
+
+export function validateCopilotModel(value, runtime = "copilot") {
+  const model = String(value ?? "").trim();
+  if (!model) {
+    return "";
+  }
+  if (runtime !== "copilot") {
+    throw new Error("model selection requires the copilot runtime");
+  }
+  if (
+    model.length > 128 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(model)
+  ) {
+    throw new Error(
+      "model must be 1-128 letters, numbers, dots, underscores, slashes, or hyphens"
+    );
+  }
+  return model.toLowerCase() === HYDRAFUSION_MODEL
+    ? HYDRAFUSION_MODEL
+    : model;
+}
+
+function copilotModelArguments(model) {
+  if (!model) {
+    return [];
+  }
+  return [
+    ...(model.toLowerCase() === HYDRAFUSION_MODEL ? ["--experimental"] : []),
+    "--model",
+    model
+  ];
+}
 const profileRelativePath = join(
   ".github",
   "fixlab",
@@ -314,6 +347,7 @@ function publicQueue(jobs) {
     position: index + 1,
     request: safeSummary(job.request),
     requestType: job.requestType,
+    model: job.model,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
@@ -350,6 +384,7 @@ function dashboardSnapshot(job) {
     id: job.id,
     request: safePersistedSummary(job.request),
     requestType: job.requestType,
+    model: job.model,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
@@ -399,6 +434,7 @@ function restoreDashboardJob(snapshot, repository) {
   const profile = loadRepositoryProfile(repository);
   const restored = {
     ...snapshot,
+    model: snapshot.model ?? "",
     workItem: snapshot.workItem ?? null,
     workItems: snapshot.workItems ?? [],
     screenshots: [],
@@ -725,7 +761,15 @@ export function buildJobPrompt({
     : `- Generate a concise fix contract from the reported behavior and expected outcome.
 - Diagnose and reproduce with repository evidence. Do not claim a cause or reproduction without evidence.
 - Use the smallest focused reproduction that demonstrates the reported defect.`;
-  return `Run a FixLab ${mode} job.
+  return `FixLab output protocol (follow before any tool call):
+- Your first assistant output must be this literal plain-text line:
+  FIXLAB_STAGE|intake|running|Accepted the request and starting intake.
+- Emit that line before reading files, searching, planning with tools, delegating, or running commands.
+- Before beginning each later stage, emit FIXLAB_STAGE|stage|running|concise next action as a literal assistant response line.
+- Emit a terminal passed, skipped, blocked, or failed marker for the current stage before starting the next stage.
+- Never defer or batch stage markers until the end of the job.
+
+Run a FixLab ${mode} job.
 Request type: ${requestType}
 Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
@@ -1280,17 +1324,20 @@ export function buildCopilotInvocation({
   packageRoot,
   prompt,
   sessionId,
-  resume = false
+  resume = false,
+  model = ""
 }) {
   if (!sessionId) {
     throw new Error("Copilot invocation requires a session ID");
   }
+  const selectedModel = validateCopilotModel(model);
   return {
     args: [
       "--plugin-dir",
       packageRoot,
       "--agent",
       "fixlab:fixlab",
+      ...copilotModelArguments(selectedModel),
       "--allow-all-tools",
       "--no-ask-user",
       "--autopilot",
@@ -1317,8 +1364,13 @@ function findDirectExecutable(command) {
     : candidates?.[0];
 }
 
-function createExecutor({ command, packageRoot, buildInvocation }) {
-  return ({ repository, prompt, sessionId, resume, onOutput }) => {
+function createExecutor({
+  command,
+  packageRoot,
+  buildInvocation,
+  defaultModel = ""
+}) {
+  return ({ repository, prompt, sessionId, resume, model, onOutput }) => {
     const executable = findDirectExecutable(command);
     if (!executable) {
       throw new Error(
@@ -1329,7 +1381,8 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
       packageRoot,
       prompt,
       sessionId,
-      resume
+      resume,
+      model: model ?? defaultModel
     });
     const child = spawn(executable, invocation.args, {
       cwd: repository,
@@ -1398,22 +1451,29 @@ export function createAgencyExecutor({ packageRoot }) {
   });
 }
 
-export function createCopilotExecutor({ packageRoot }) {
+export function createCopilotExecutor({ packageRoot, model = "" }) {
+  const selectedModel = validateCopilotModel(model);
   return createExecutor({
     command: "copilot",
     packageRoot,
-    buildInvocation: buildCopilotInvocation
+    buildInvocation: buildCopilotInvocation,
+    defaultModel: selectedModel
   });
 }
 
-export function createRuntimeExecutor({ packageRoot, runtime = "agency" }) {
+export function createRuntimeExecutor({
+  packageRoot,
+  runtime = "agency",
+  model = ""
+}) {
   if (!FIXLAB_RUNTIMES.includes(runtime)) {
     throw new Error(
       `FixLab runtime must be one of: ${FIXLAB_RUNTIMES.join(", ")}`
     );
   }
+  const selectedModel = validateCopilotModel(model, runtime);
   return runtime === "copilot"
-    ? createCopilotExecutor({ packageRoot })
+    ? createCopilotExecutor({ packageRoot, model: selectedModel })
     : createAgencyExecutor({ packageRoot });
 }
 
@@ -1434,6 +1494,7 @@ function publicJob(job) {
     id: job.id,
     request: job.request,
     requestType: job.requestType,
+    model: job.model,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
@@ -1666,8 +1727,19 @@ function appendOutput(job, stream, text) {
   const lines = job.partial[stream].split("\n");
   job.partial[stream] = lines.pop();
   for (const line of lines) {
-    appendLine(job, stream, line);
+    for (const segment of splitRenderedMarkers(line)) {
+      appendLine(job, stream, segment);
+    }
   }
+}
+
+function splitRenderedMarkers(line) {
+  if (!/^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s)/.test(line)) {
+    return [line];
+  }
+  return line
+    .split(/(?=FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s))/)
+    .filter(Boolean);
 }
 
 function appendLine(job, stream, line) {
@@ -1787,7 +1859,9 @@ function pushActivity(job, entry) {
 function finishJob(job, result) {
   for (const stream of ["stdout", "stderr"]) {
     if (job.partial[stream]) {
-      appendLine(job, stream, job.partial[stream]);
+      for (const segment of splitRenderedMarkers(job.partial[stream])) {
+        appendLine(job, stream, segment);
+      }
       job.partial[stream] = "";
     }
   }
@@ -2117,13 +2191,15 @@ export function createDashboardServer({
   repository,
   packageRoot,
   runtime = "agency",
+  model = "",
   publicDirectory = join(packageRoot, "dashboard", "public"),
-  executor = createRuntimeExecutor({ packageRoot, runtime }),
+  executor = createRuntimeExecutor({ packageRoot, runtime, model }),
   workItemLoader = createAzureDevOpsLoader(),
   executionIdleTimeoutMs,
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
   const resolvedRepository = resolve(repository);
+  const defaultModel = validateCopilotModel(model, runtime);
   let currentJob = null;
   let activeHandle = null;
   const queuedJobs = [];
@@ -2294,6 +2370,7 @@ export function createDashboardServer({
       prompt,
       sessionId: job.id,
       resume,
+      model: job.model,
       onOutput(stream, text) {
         job.lastActivityAt = new Date().toISOString();
         armIdleWatchdog();
@@ -2384,6 +2461,11 @@ export function createDashboardServer({
       persistDashboardState();
       sendJson(response, 200, {
         readiness: inspectRepository(resolvedRepository),
+        runtime: {
+          name: runtime,
+          defaultModel,
+          supportsModelSelection: runtime === "copilot"
+        },
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
         history: dashboardHistory(),
@@ -2883,6 +2965,16 @@ export function createDashboardServer({
         });
         return;
       }
+      let selectedModel;
+      try {
+        selectedModel = validateCopilotModel(
+          body.model ?? defaultModel,
+          runtime
+        );
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       const pullRequestStrategy = body.pullRequestStrategy ?? "common";
       if (!["common", "per-bug"].includes(pullRequestStrategy)) {
         sendJson(response, 400, {
@@ -3047,6 +3139,7 @@ export function createDashboardServer({
         createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
+        model: selectedModel,
         pullRequestStrategy,
         runAllUiScenarios,
         targetEnvironment,

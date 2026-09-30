@@ -113,6 +113,8 @@ test.beforeAll(async () => {
   dashboard = createDashboardServer({
     repository,
     packageRoot,
+    runtime: "copilot",
+    model: "hydrafusion",
     executor,
     workItemLoader
   });
@@ -152,6 +154,13 @@ test("dashboard exposes repository readiness through the running server", async 
   await expect(
     page.locator('input[name="recordPlaywrightVideo"]')
   ).toBeVisible();
+  await expect(page.getByLabel("GitHub Copilot model")).toHaveValue("");
+  await expect(
+    page.getByLabel("GitHub Copilot model").locator('option[value=""]')
+  ).toHaveText("Copilot Default");
+  await expect(
+    page.getByLabel("GitHub Copilot model").locator('option[value="hydrafusion"]')
+  ).toHaveText("HydraFusion (research preview)");
 });
 
 test("dashboard exposes multi-bug intake and resumable user input", async ({
