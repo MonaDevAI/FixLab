@@ -6,6 +6,9 @@ All notable changes to FixLab are documented in this file.
 
 - Make **Copilot Default** the dashboard model selector's initial choice and
   expose **HydraFusion** as an explicit research-preview alternative.
+- Require the first FixLab stage marker before any model tool call so
+  HydraFusion reports dashboard stage progress instead of batching it at the
+  end of its orchestration.
 - Add an Agency-like `fixlab <repository>` interactive entry point for
   conversational setup, diagnosis, repair, and validation.
 - Add `fixlab chat` as a terminal client for the active dashboard session,

@@ -54,7 +54,10 @@ Default** is selected initially and uses the model chosen by Copilot CLI;
 **HydraFusion** is available as a research-preview alternative. A selected
 model is retained when a queued or blocked job resumes. HydraFusion is best
 suited to substantial tasks whose full requirements are supplied in the first
-turn. Availability depends on the installed Copilot CLI and account.
+turn. Because HydraFusion can batch intermediate assistant output while its
+tools run, the dashboard may remain on the current stage until the orchestration
+emits its next marker; use **Copilot Default** when live stage-by-stage progress
+is required. Availability depends on the installed Copilot CLI and account.
 
 FixLab does not install either runtime or manage its authentication.
 Installing FixLab does not start a server or background service. Run

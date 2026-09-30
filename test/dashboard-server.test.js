@@ -452,6 +452,7 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.match(pageText, /Screenshots \(optional\)/);
     assert.match(pageText, /Copilot Default/);
     assert.match(pageText, /HydraFusion \(research preview\)/);
+    assert.match(pageText, /may batch stage updates/);
     assert.match(pageText, /Repository-defined validation context is loaded automatically/);
     assert.match(pageText, /proceeds autonomously/);
 
@@ -2841,6 +2842,15 @@ test("validate-only prompt prohibits repository changes", () => {
     requestType: "bug-fix"
   });
 
+  assert.match(
+    prompt,
+    /^FixLab output protocol \(follow before any tool call\):/u
+  );
+  assert.match(
+    prompt,
+    /Your first assistant output must be this literal plain-text line:\s+FIXLAB_STAGE\|intake\|running\|Accepted the request and starting intake\./u
+  );
+  assert.match(prompt, /Never defer or batch stage markers until the end/u);
   assert.match(prompt, /Do not edit files/);
   assert.match(prompt, /create commits/);
   assert.match(prompt, /create pull requests/);

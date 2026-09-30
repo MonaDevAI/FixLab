@@ -761,7 +761,15 @@ export function buildJobPrompt({
     : `- Generate a concise fix contract from the reported behavior and expected outcome.
 - Diagnose and reproduce with repository evidence. Do not claim a cause or reproduction without evidence.
 - Use the smallest focused reproduction that demonstrates the reported defect.`;
-  return `Run a FixLab ${mode} job.
+  return `FixLab output protocol (follow before any tool call):
+- Your first assistant output must be this literal plain-text line:
+  FIXLAB_STAGE|intake|running|Accepted the request and starting intake.
+- Emit that line before reading files, searching, planning with tools, delegating, or running commands.
+- Before beginning each later stage, emit FIXLAB_STAGE|stage|running|concise next action as a literal assistant response line.
+- Emit a terminal passed, skipped, blocked, or failed marker for the current stage before starting the next stage.
+- Never defer or batch stage markers until the end of the job.
+
+Run a FixLab ${mode} job.
 Request type: ${requestType}
 Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
