@@ -49,11 +49,12 @@ $env:FIXLAB_MODEL = "hydrafusion"
 fixlab chat
 ```
 
-The dashboard also provides a model field for each Copilot job, with
-HydraFusion as a preset. Leave it blank to use the Copilot CLI default. A
-selected model is retained when a queued or blocked job resumes. HydraFusion
-is best suited to substantial tasks whose full requirements are supplied in
-the first turn. Availability depends on the installed Copilot CLI and account.
+The dashboard provides a model selector for each Copilot job. **Copilot
+Default** is selected initially and uses the model chosen by Copilot CLI;
+**HydraFusion** is available as a research-preview alternative. A selected
+model is retained when a queued or blocked job resumes. HydraFusion is best
+suited to substantial tasks whose full requirements are supplied in the first
+turn. Availability depends on the installed Copilot CLI and account.
 
 FixLab does not install either runtime or manage its authentication.
 Installing FixLab does not start a server or background service. Run

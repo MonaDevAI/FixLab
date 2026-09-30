@@ -450,6 +450,7 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.match(pageText, /Load bugs/);
     assert.match(pageText, /Continue this job/);
     assert.match(pageText, /Screenshots \(optional\)/);
+    assert.match(pageText, /Copilot Default/);
     assert.match(pageText, /HydraFusion \(research preview\)/);
     assert.match(pageText, /Repository-defined validation context is loaded automatically/);
     assert.match(pageText, /proceeds autonomously/);

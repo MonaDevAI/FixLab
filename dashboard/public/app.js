@@ -208,7 +208,7 @@ function renderRuntime(runtime) {
     return;
   }
   if (!modelInput.dataset.initialized) {
-    modelInput.value = runtime.defaultModel ?? "";
+    modelInput.value = "";
     modelInput.dataset.initialized = "true";
   }
 }
