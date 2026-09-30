@@ -1586,6 +1586,94 @@ test("dashboard queues concurrent jobs and starts the next passed job", async ()
   }
 });
 
+test("dashboard cancels waiting jobs without interrupting the active job", async () => {
+  const repository = createRepository();
+  let executorCalls = 0;
+  const executor = () => {
+    executorCalls += 1;
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const active = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Keep this job active.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    const second = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Cancel this waiting job by position.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    const third = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Cancel this waiting job by ID.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    const secondId = second.body.queuedJob.id;
+    const thirdId = third.body.queuedJob.id;
+
+    const activeRejected = await jsonRequest(url, "/api/jobs/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: active.body.job.id })
+    });
+    assert.equal(activeRejected.response.status, 404);
+    assert.match(activeRejected.body.error, /queued/);
+
+    const invalidPosition = await jsonRequest(url, "/api/jobs/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position: 99 })
+    });
+    assert.equal(invalidPosition.response.status, 400);
+
+    const cancelledSecond = await jsonRequest(url, "/api/jobs/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ position: 1 })
+    });
+    assert.equal(cancelledSecond.response.status, 202);
+    assert.equal(cancelledSecond.body.job.id, active.body.job.id);
+    assert.equal(cancelledSecond.body.job.status, "running");
+    assert.equal(cancelledSecond.body.cancelledJob.id, secondId);
+    assert.equal(cancelledSecond.body.cancelledJob.status, "cancelled");
+    assert.equal(cancelledSecond.body.queue.length, 1);
+    assert.equal(cancelledSecond.body.queue[0].id, thirdId);
+    assert.equal(cancelledSecond.body.queue[0].position, 1);
+    assert.equal(cancelledSecond.body.history[0].id, secondId);
+
+    const cancelledThird = await jsonRequest(url, "/api/jobs/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: thirdId })
+    });
+    assert.equal(cancelledThird.response.status, 202);
+    assert.equal(cancelledThird.body.cancelledJob.id, thirdId);
+    assert.deepEqual(cancelledThird.body.queue, []);
+    assert.equal(executorCalls, 1);
+
+    const metrics = await jsonRequest(url, "/api/metrics?period=all");
+    assert.equal(metrics.body.metrics.cancelled, 2);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard dismisses a failed job and starts the next queued job", async () => {
   const repository = createRepository();
   let executorCalls = 0;
@@ -2345,6 +2433,19 @@ test("terminal chat recognizes natural operational commands", () => {
     command: "/new-bug",
     details: "Save button is disabled"
   });
+  assert.deepEqual(parseNaturalChatCommand("cancel waiting job 4"), {
+    command: "/cancel-job",
+    details: "4"
+  });
+  assert.deepEqual(
+    parseNaturalChatCommand(
+      "remove job 253ef92a-7bdf-47bd-b944-cdb0e6297580 from the queue"
+    ),
+    {
+      command: "/cancel-job",
+      details: "253ef92a-7bdf-47bd-b944-cdb0e6297580"
+    }
+  );
   assert.equal(
     parseNaturalChatCommand("Fix the hierarchy template bug"),
     null
@@ -2467,6 +2568,75 @@ test("terminal chat creates a separate bug job from natural language", async () 
     holdForManualLiveTest: false
   });
   assert.match(output, /New bug queued as job new-bug-job/);
+});
+
+test("terminal chat cancels a waiting job by queue position", async () => {
+  const requests = [];
+  const input = Readable.from(["cancel waiting job 2\n", "/exit\n"]);
+  let output = "";
+  const outputStream = new Writable({
+    write(chunk, _encoding, callback) {
+      output += chunk.toString();
+      callback();
+    }
+  });
+  const fetchImpl = async (url, options = {}) => {
+    requests.push({ url, options });
+    if (url.endsWith("/api/status")) {
+      return new Response(JSON.stringify({
+        readiness: {
+          repository: "C:\\repos\\fmdm",
+          repositoryReady: true,
+          profileReady: true
+        },
+        job: {
+          id: "current-job",
+          status: "running",
+          request: "Current work",
+          durationMs: 1000,
+          pullRequestReadiness: { message: "Validation is running." },
+          stages: {},
+          logs: []
+        },
+        queue: []
+      }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/api/jobs/cancel")) {
+      return new Response(JSON.stringify({
+        job: { id: "current-job" },
+        cancelledJob: { id: "cancelled-job", status: "cancelled" },
+        queue: [{ id: "remaining-job" }]
+      }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+
+  assert.equal(await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input,
+    output: outputStream,
+    errorOutput: outputStream,
+    fetchImpl,
+    pollIntervalMs: 10000
+  }), 0);
+
+  const cancelled = requests.find(
+    ({ url }) => url.endsWith("/api/jobs/cancel")
+  );
+  assert.deepEqual(JSON.parse(cancelled.options.body), { position: 2 });
+  assert.match(
+    output,
+    /Cancelled queued job cancelled-job\. 1 job\(s\) waiting\./
+  );
 });
 
 test("dashboard shutdown terminates only its active executor handle", async () => {

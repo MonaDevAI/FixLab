@@ -190,6 +190,10 @@ failed jobs pause queue advancement so the same session remains resumable. A
 user may explicitly dismiss a failed job without resuming it; FixLab preserves
 the failed outcome in dashboard history, performs no repository mutation for
 that job, and starts the next queued job.
+Waiting jobs can be removed by queue position or job ID before execution. The
+dashboard records the job as cancelled, deletes only its FixLab-owned
+screenshot artifacts, renumbers the remaining queue, and never interrupts the
+active executor.
 During execution, the agent can emit bounded `FIXLAB_ACTIVITY` evidence and
 decision summaries. The dashboard shows these summaries in a separate Agent
 analysis panel so users can follow what was checked, what the evidence means,

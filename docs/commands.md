@@ -136,6 +136,17 @@ The new bug starts immediately when FixLab is idle or enters the dashboard
 queue when another job is active. Use ordinary free text without the
 `new bug` prefix when the instruction belongs to the current job.
 
+Remove a waiting job without interrupting the active job:
+
+```text
+cancel waiting job 2
+remove job 253ef92a-7bdf-47bd-b944-cdb0e6297580 from the queue
+/cancel-job 2
+```
+
+The removed job remains visible as cancelled in dashboard history. FixLab
+deletes its queued screenshot artifacts and renumbers the remaining jobs.
+
 Manual entry is the default intake path. The dashboard can also load a full
 Azure DevOps work-item URL or use a numeric ID with this optional profile
 section:

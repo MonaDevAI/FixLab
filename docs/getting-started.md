@@ -285,6 +285,12 @@ a blocked or failed job pauses the queue so its action-needed state remains
 available for same-session resume. An obsolete failed job can be dismissed
 explicitly; it remains failed in dashboard history and the next queued job
 starts without resuming the failed session.
+Select any waiting job and choose **Remove from queue** to cancel it before
+execution. The dashboard asks for confirmation, records the job as cancelled
+in history, removes its queued screenshot artifacts, and renumbers the
+remaining waiting jobs without interrupting the active job. Terminal chat also
+accepts `cancel waiting job 2`, `remove job <id> from the queue`, or
+`/cancel-job <id|position>`.
 Use **Add comment to current job** for a new instruction that belongs to the
 active bug batch or existing pull request. FixLab queues the text for the same
 session and delivers it after the current agent turn instead of creating a

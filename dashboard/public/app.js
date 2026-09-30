@@ -52,6 +52,12 @@ const jobInputAction = document.querySelector("#job-input-action");
 const jobInputDetails = document.querySelector("#job-input-details");
 const jobInputSubmit = document.querySelector("#job-input-submit");
 const jobInputMessage = document.querySelector("#job-input-message");
+const jobInputActionLabel = document.querySelector(
+  "label[for='job-input-action']"
+);
+const jobInputDetailsLabel = document.querySelector(
+  "label[for='job-input-details']"
+);
 const retryLiveTestButton = document.createElement("button");
 retryLiveTestButton.id = "retry-live-test";
 retryLiveTestButton.type = "button";
@@ -74,11 +80,18 @@ dismissFailedJobButton.type = "button";
 dismissFailedJobButton.className = "secondary";
 dismissFailedJobButton.textContent = "Dismiss failed job and continue queue";
 dismissFailedJobButton.hidden = true;
+const cancelQueuedJobButton = document.createElement("button");
+cancelQueuedJobButton.id = "cancel-queued-job";
+cancelQueuedJobButton.type = "button";
+cancelQueuedJobButton.className = "secondary";
+cancelQueuedJobButton.textContent = "Remove from queue";
+cancelQueuedJobButton.hidden = true;
 jobInputSubmit.before(
   retryLiveTestButton,
   skipLiveTestButton,
   approvePullRequestButton,
-  dismissFailedJobButton
+  dismissFailedJobButton,
+  cancelQueuedJobButton
 );
 const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
@@ -424,8 +437,15 @@ function renderJob(job, currentActiveJob = job) {
     job?.pullRequestReadiness?.status === "approval-required";
   const canDismissFailedJob =
     canResume && job?.status === "failed";
-  jobInputPanel.hidden = !(canResume || canComment);
+  const canCancelQueuedJob =
+    !isActive && job?.status === "queued";
+  jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob);
   jobInputSubmit.disabled = !(canResume || canComment);
+  jobInputSubmit.hidden = canCancelQueuedJob;
+  jobInputAction.hidden = canCancelQueuedJob;
+  jobInputActionLabel.hidden = canCancelQueuedJob;
+  jobInputDetails.hidden = canCancelQueuedJob;
+  jobInputDetailsLabel.hidden = canCancelQueuedJob;
   retryLiveTestButton.hidden = !canRetryLiveTest;
   retryLiveTestButton.disabled = !canRetryLiveTest;
   skipLiveTestButton.hidden = !canRetryLiveTest;
@@ -434,6 +454,8 @@ function renderJob(job, currentActiveJob = job) {
   approvePullRequestButton.disabled = !canApprovePullRequest;
   dismissFailedJobButton.hidden = !canDismissFailedJob;
   dismissFailedJobButton.disabled = !canDismissFailedJob;
+  cancelQueuedJobButton.hidden = !canCancelQueuedJob;
+  cancelQueuedJobButton.disabled = !canCancelQueuedJob;
   jobInputCount.textContent = job
     ? `${job.inputCount} update(s) · ${job.pendingInputCount} pending`
     : "";
@@ -470,6 +492,10 @@ function renderJob(job, currentActiveJob = job) {
       jobInputGuidance.textContent =
         "Continue this completed session with one focused addition. FixLab reuses its evidence, branch, and pull request.";
     }
+  } else if (canCancelQueuedJob) {
+    jobInputTitle.textContent = "Remove waiting job";
+    jobInputGuidance.textContent =
+      "Removing this waiting job prevents it from starting, records it as cancelled in history, and deletes its queued screenshot artifacts.";
   }
 }
 
@@ -672,6 +698,47 @@ function renderQueue(currentJob, queue = [], history = []) {
       selectJob(job.id);
       renderQueue(currentJob, queue, history);
     });
+
+    cancelQueuedJobButton.addEventListener("click", async () => {
+      jobInputMessage.textContent = "";
+      formError.textContent = "";
+      const selectedJob = observedJobs.get(selectedJobId);
+      if (!selectedJob || selectedJob.status !== "queued") {
+        formError.textContent = "Select a waiting job to remove.";
+        return;
+      }
+      if (
+        !window.confirm(
+          "Remove this waiting job from the queue? It will not run, its screenshot artifacts will be deleted, and it will remain visible as cancelled in history."
+        )
+      ) {
+        return;
+      }
+      cancelQueuedJobButton.disabled = true;
+      try {
+        const body = await fetchJson("/api/jobs/cancel", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ jobId: selectedJob.id })
+        });
+        if (body.cancelledJob) {
+          rememberJob(body.cancelledJob);
+        }
+        activeJob = body.job;
+        selectedJobId =
+          body.cancelledJob?.id ?? body.job?.id ?? null;
+        renderJob(
+          observedJobs.get(selectedJobId) ?? body.cancelledJob ?? body.job,
+          activeJob
+        );
+        renderQueue(activeJob, body.queue, body.history);
+        jobInputMessage.textContent = "Waiting job removed from the queue.";
+        await refreshMetrics();
+      } catch (error) {
+        formError.textContent = error.message;
+        cancelQueuedJobButton.disabled = false;
+      }
+    });
     item.append(button);
     if (job.request.length > 160) {
       const expandButton = document.createElement("button");
@@ -716,7 +783,7 @@ function renderMetrics(metrics, warning) {
       : `${metrics.cacheReusePercent.toFixed(1)}%`;
   metricStatuses.textContent =
     warning ||
-    `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · exact usage available for ${metrics.usageJobs} completed job(s)`;
+    `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · ${metrics.cancelled} cancelled · exact usage available for ${metrics.usageJobs} completed job(s)`;
 }
 
 async function fetchJson(url, options) {

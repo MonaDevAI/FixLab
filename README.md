@@ -136,7 +136,9 @@ another path; a different repository starts on the next available loopback
 port. Common operational requests also work as plain English, including
 `start dashboard`, `show status`, `show logs`, `show pull request`,
 `show evidence`, and `switch repository`. `new bug <details>` creates a
-separate bug-fix job instead of adding guidance to the current job.
+separate bug-fix job instead of adding guidance to the current job. Waiting
+jobs can be removed without interrupting the active job by selecting **Remove
+from queue** in the dashboard or typing `cancel waiting job <position>`.
 
 FixLab is not yet published to the public npm registry or merged into the
 official GitHub Copilot plugin marketplace. Until marketplace review is

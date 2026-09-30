@@ -25,6 +25,7 @@ export function formatChatHelp() {
   /continue [guidance] Continue a blocked or completed job.
   /skip [reason]       Resume while recording an explicitly skipped gate.
   /new-bug <details>   Start or queue a separate bug-fix job.
+  /cancel-job <id|#>   Remove a waiting job by ID or queue position.
   /stop                Stop the owned executor and leave the job resumable.
   /help                Show these commands.
   /exit                Leave chat without stopping the job.
@@ -77,6 +78,12 @@ export function parseNaturalChatCommand(line) {
   );
   if (newBug) {
     return { command: "/new-bug", details: newBug[1].trim() };
+  }
+  const cancelJob = normalized.match(
+    /^(?:cancel|remove)(?:\s+(?:queued|waiting))?(?:\s+job)?\s+#?([a-z0-9-]+)(?:\s+from(?:\s+the)?\s+queue)?$/iu
+  );
+  if (cancelJob) {
+    return { command: "/cancel-job", details: cancelJob[1].trim() };
   }
   return null;
 }
@@ -266,6 +273,26 @@ export async function runChat({
         : `New bug started as job ${body.job?.id ?? "unknown"}.`
     );
   };
+  const cancelQueuedJob = async (selector) => {
+    const position = Number.parseInt(selector, 10);
+    const body = await requestJson(
+      fetchImpl,
+      `${dashboardUrl}/api/jobs/cancel`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          /^\d+$/u.test(selector)
+            ? { position }
+            : { jobId: selector }
+        )
+      }
+    );
+    currentJob = body.job;
+    write(
+      `Cancelled queued job ${body.cancelledJob.id}. ${body.queue.length} job(s) waiting.`
+    );
+  };
 
   try {
     await loadStatus();
@@ -381,6 +408,16 @@ export async function runChat({
         return;
       }
       await submitNewBug(details);
+      return;
+    }
+    if (command === "/cancel-job") {
+      if (!details) {
+        write(
+          "Provide a queued job ID or position, for example: /cancel-job 2"
+        );
+        return;
+      }
+      await cancelQueuedJob(details.replace(/^#/u, ""));
       return;
     }
     if (command === "/repository") {
