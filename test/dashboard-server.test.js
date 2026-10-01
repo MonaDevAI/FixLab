@@ -75,19 +75,19 @@ test("Agency executor keeps long prompts out of process arguments", () => {
   );
 });
 
-test("local browser opener accepts only loopback URLs", () => {
+test("local browser opener accepts only credential-free loopback URLs", async () => {
   const launches = [];
-  const child = {
-    once() {},
-    unref() {}
-  };
-  openLocalUrl("http://127.0.0.1:3000/app", {
+  const child = new EventEmitter();
+  child.unref = () => {};
+  const launched = openLocalUrl("http://127.0.0.1:3000/app", {
     platform: "win32",
     spawnImpl(command, args, options) {
       launches.push({ command, args, options });
       return child;
     }
   });
+  child.emit("spawn");
+  await launched;
   assert.deepEqual(launches, [
     {
       command: "explorer.exe",
@@ -101,14 +101,35 @@ test("local browser opener accepts only loopback URLs", () => {
   ]);
   assert.throws(
     () =>
+      openLocalUrl("http://user:password@localhost:3000", {
+        platform: "win32",
+        spawnImpl() {
+          throw new Error("should not launch");
+        }
+      }),
+    /credential-free HTTP\(S\) on loopback/
+  );
+  assert.throws(
+    () =>
       openLocalUrl("https://example.com", {
         platform: "win32",
         spawnImpl() {
           throw new Error("should not launch");
         }
       }),
-    /must use HTTP\(S\) on loopback/
+    /credential-free HTTP\(S\) on loopback/
   );
+
+  const failedChild = new EventEmitter();
+  failedChild.unref = () => {};
+  const failedLaunch = openLocalUrl("http://localhost:3000", {
+    platform: "linux",
+    spawnImpl() {
+      return failedChild;
+    }
+  });
+  failedChild.emit("error", new Error("xdg-open is missing"));
+  await assert.rejects(failedLaunch, /xdg-open is missing/);
 });
 
 test("executor completion settles after process exit when inherited pipes remain open", async () => {
@@ -253,6 +274,25 @@ test("dashboard readiness blocks an incomplete live-test profile", () => {
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+test("dashboard readiness rejects credentials in a loopback health URL", () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  profile.applications.frontend.healthUrl =
+    "http://user:password@localhost:3000";
+  writeFileSync(profilePath, JSON.stringify(profile, null, 2));
+
+  const readiness = inspectRepository(repository);
+  assert.equal(readiness.profileReady, false);
+  assert.match(readiness.error, /credential-free loopback URL required/);
+  rmSync(repository, { recursive: true, force: true });
 });
 
 test("dashboard readiness validates configured test synthesis", () => {
@@ -609,6 +649,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
   };
   let receivedPrompt = "";
   const openedLocalhostUrls = [];
+  let resolveBrowserOpen;
   const executor = ({ onOutput, prompt }) => {
     receivedPrompt = prompt;
     for (const id of ["101", "202"]) {
@@ -629,6 +670,9 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     {
       browserOpener(localhostUrl) {
         openedLocalhostUrls.push(localhostUrl);
+        return new Promise((resolveOpen) => {
+          resolveBrowserOpen = resolveOpen;
+        });
       }
     }
   );
@@ -707,6 +751,15 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
       "http://127.0.0.1:3000"
     );
     assert.deepEqual(openedLocalhostUrls, ["http://127.0.0.1:3000"]);
+    assert.equal(started.body.job.manualLocalhostOpenedAt, null);
+    resolveBrowserOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = await jsonRequest(url, "/api/job");
+    assert.ok(opened.body.job.manualLocalhostOpenedAt);
+    assert.match(
+      opened.body.job.logs.at(-1).message,
+      /Opened the React localhost URL/
+    );
     assert.equal("description" in started.body.job.workItems[0], false);
     assert.match(receivedPrompt, /Pull request strategy: per-bug/);
     assert.match(receivedPrompt, /isolated delivery unit/);
@@ -733,6 +786,144 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
       completed.body.job.pullRequestReadiness.status,
       "created"
     );
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard records synchronous browser launcher failures", async () => {
+  const repository = createRepository();
+  const executor = ({ onOutput }) => {
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(
+    repository,
+    executor,
+    undefined,
+    {
+      browserOpener() {
+        throw new Error("browser launcher is unavailable");
+      }
+    }
+  );
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Open React localhost for manual validation.",
+        requestType: "small-enhancement",
+        mode: "fix-and-validate",
+        manualLocalhostTest: true
+      })
+    });
+    assert.equal(started.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const completed = await jsonRequest(url, "/api/job");
+    assert.equal(completed.body.job.manualLocalhostOpenedAt, null);
+    assert.ok(
+      completed.body.job.logs.some((entry) =>
+        /browser launcher is unavailable/.test(entry.message)
+      )
+    );
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard finalizes a pending manual marker as blocked", async () => {
+  const repository = createRepository();
+  const executor = ({ onOutput }) => {
+    onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Require manual localhost confirmation.",
+        requestType: "small-enhancement",
+        mode: "fix-and-validate",
+        manualLocalhostTest: true
+      })
+    });
+    assert.equal(started.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const blocked = await jsonRequest(url, "/api/job");
+    assert.equal(blocked.body.job.status, "blocked");
+    assert.equal(blocked.body.job.manualLocalhostPending, true);
+    assert.equal(blocked.body.job.stages["live-test"].status, "blocked");
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard keeps an explicit manual failure authoritative", async () => {
+  const repository = createRepository();
+  let callCount = 0;
+  const executor = ({ onOutput }) => {
+    callCount += 1;
+    if (callCount === 1) {
+      onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
+      for (const stage of FIXLAB_STAGES) {
+        const status = stage === "live-test" ? "blocked" : "passed";
+        onOutput(
+          "stdout",
+          `FIXLAB_STAGE|${stage}|${status}|${stage} initial\n`
+        );
+      }
+    } else {
+      for (const stage of FIXLAB_STAGES) {
+        onOutput(
+          "stdout",
+          `FIXLAB_STAGE|${stage}|passed|${stage} resumed\n`
+        );
+      }
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Respect a failed manual localhost result.",
+        requestType: "small-enhancement",
+        mode: "fix-and-validate",
+        manualLocalhostTest: true
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const resumed = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "manual-fail" })
+    });
+    assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const failed = await jsonRequest(url, "/api/job");
+    assert.equal(failed.body.job.status, "failed");
+    assert.equal(failed.body.job.manualLocalhostResult, "failed");
+    assert.equal(failed.body.job.stages["live-test"].status, "failed");
+    assert.match(failed.body.job.error, /Manual React localhost validation failed/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -1019,7 +1210,8 @@ test("blocked job accepts user input and resumes the same Agency session", async
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         request: "Validate an authenticated browser workflow.",
-        mode: "validate-only"
+        mode: "validate-only",
+        manualLocalhostTest: true
       })
     });
     assert.equal(started.response.status, 202);
@@ -1033,6 +1225,18 @@ test("blocked job accepts user input and resumes the same Agency session", async
     assert.equal(blocked.body.job.status, "blocked");
     assert.equal(blocked.body.job.canResume, true);
     assert.equal(blocked.body.job.stages["live-test"].status, "blocked");
+    assert.equal(blocked.body.job.manualLocalhostPending, false);
+
+    const invalidManualResult = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "manual-pass" })
+    });
+    assert.equal(invalidManualResult.response.status, 409);
+    assert.match(
+      invalidManualResult.body.error,
+      /manual localhost confirmation is not pending/
+    );
 
     const resumed = await jsonRequest(url, "/api/job/input", {
       method: "POST",
@@ -1705,8 +1909,9 @@ test("dashboard persists privacy-safe token and duration metrics", async () => {
     assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
   } finally {
     await second.dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
   }
+
+  rmSync(repository, { recursive: true, force: true });
 });
 
 test("dashboard restores private job summaries and PR readiness after restart", async () => {
@@ -1777,8 +1982,9 @@ test("dashboard restores private job summaries and PR readiness after restart", 
     );
   } finally {
     await second.dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
   }
+
+  rmSync(repository, { recursive: true, force: true });
 });
 
 test("dashboard recovers an orphaned running job as failed and resumable", async () => {
@@ -1825,6 +2031,7 @@ test("dashboard recovers an orphaned running job as failed and resumable", async
 test("dashboard recovery preserves a completed manual localhost gate", async () => {
   const repository = createGitRepository();
   const executor = ({ onOutput }) => {
+    onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
     for (const stage of FIXLAB_STAGES) {
       const status =
         stage === "live-test"
@@ -1858,14 +2065,29 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     await first.dashboard.close();
   }
 
-  const second = await startDashboard(repository, () => {
-    throw new Error("executor should not run while recovering a job");
+  const historyPath = join(
+    dirname(createCacheContext(repository).cachePath),
+    "dashboard-jobs.json"
+  );
+  const legacyHistory = JSON.parse(readFileSync(historyPath, "utf8"));
+  delete legacyHistory.jobs.find((job) => job.id === jobId)
+    .manualLocalhostPending;
+  writeFileSync(historyPath, JSON.stringify(legacyHistory, null, 2));
+
+  let resumedPrompt = "";
+  const second = await startDashboard(repository, ({ prompt, onOutput }) => {
+    resumedPrompt = prompt;
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} resumed\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
   });
   try {
     const status = await jsonRequest(second.url, "/api/status");
     assert.equal(status.body.job.id, jobId);
     assert.equal(status.body.job.status, "blocked");
     assert.equal(status.body.job.manualLocalhostTest, true);
+    assert.equal(status.body.job.manualLocalhostPending, true);
     assert.equal(
       status.body.job.manualLocalhostUrl,
       "http://127.0.0.1:3000"
@@ -1873,6 +2095,129 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     assert.equal(status.body.job.canResume, true);
     assert.equal(status.body.job.stages["live-test"].status, "blocked");
     assert.equal(status.body.job.error, null);
+
+    const bypass = await jsonRequest(second.url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "continue",
+        details: "Continue without a manual result."
+      })
+    });
+    assert.equal(bypass.response.status, 409);
+    assert.match(
+      bypass.body.error,
+      /explicit manual-pass or manual-fail/
+    );
+
+    const resumed = await jsonRequest(second.url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "manual-pass" })
+    });
+    assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
+    assert.equal(resumed.body.job.manualLocalhostPending, false);
+    assert.equal(resumed.body.job.manualLocalhostResult, "passed");
+    assert.match(resumedPrompt, /explicitly marked it passed/);
+    assert.match(
+      resumedPrompt,
+      /Persisted manual React localhost result: passed/
+    );
+    assert.match(resumedPrompt, /stop only the FixLab-owned frontend process/);
+  } finally {
+    await second.dashboard.close();
+  }
+
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  profile.applications.frontend.healthUrl =
+    "http://user:password@localhost:3000";
+  writeFileSync(profilePath, JSON.stringify(profile, null, 2));
+
+  const third = await startDashboard(repository, () => {
+    throw new Error("executor should not run while restoring accepted evidence");
+  });
+  try {
+    const restored = await jsonRequest(third.url, "/api/status");
+    assert.equal(restored.body.job.status, "passed");
+    assert.equal(restored.body.job.canResume, false);
+    assert.equal(restored.body.job.manualLocalhostPending, false);
+    assert.equal(restored.body.job.manualLocalhostResult, "passed");
+    assert.equal(restored.body.job.manualLocalhostUrl, "");
+  } finally {
+    await third.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard disables an unsafe restored manual localhost gate", async () => {
+  const repository = createGitRepository();
+  const executor = ({ onOutput }) => {
+    onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
+    for (const stage of FIXLAB_STAGES) {
+      const status = stage === "live-test" ? "blocked" : "passed";
+      onOutput(
+        "stdout",
+        `FIXLAB_STAGE|${stage}|${status}|${stage} completed\n`
+      );
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const first = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Restore this manual localhost gate safely.",
+        requestType: "bug-fix",
+        mode: "validate-only",
+        manualLocalhostTest: true
+      })
+    });
+    assert.equal(started.response.status, 202);
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  profile.applications.frontend.healthUrl =
+    "http://user:password@localhost:3000";
+  writeFileSync(profilePath, JSON.stringify(profile, null, 2));
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("unsafe restored job must not resume");
+  });
+  try {
+    const status = await jsonRequest(second.url, "/api/status");
+    assert.equal(status.body.job.status, "failed");
+    assert.equal(status.body.job.canResume, false);
+    assert.equal(status.body.job.manualLocalhostPending, false);
+    assert.equal(status.body.job.manualLocalhostUrl, "");
+    assert.doesNotMatch(JSON.stringify(status.body), /user:password/);
+
+    const resumed = await jsonRequest(second.url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "continue",
+        details: "Resume this unsafe job."
+      })
+    });
+    assert.equal(resumed.response.status, 409);
+    assert.match(resumed.body.error, /cannot be resumed safely/);
   } finally {
     await second.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -2089,6 +2434,62 @@ test("terminal chat sends free text to the active dashboard session", async () =
   });
   assert.match(output, /FixLab chat is connected/);
   assert.match(output, /Guidance queued for the same session/);
+});
+
+test("terminal chat dispatches manual localhost pass and fail actions", async () => {
+  const submitted = [];
+  const job = {
+    id: "manual-job",
+    status: "blocked",
+    request: "Validate React localhost",
+    durationMs: 1000,
+    manualLocalhostPending: true,
+    pullRequestReadiness: { message: "Manual validation is pending." },
+    stages: {
+      "live-test": { status: "blocked", message: "Manual result required." },
+      pr: { status: "skipped", message: "Manual result required." }
+    },
+    logs: []
+  };
+  const fetchImpl = async (url, options = {}) => {
+    if (url.endsWith("/api/status")) {
+      return new Response(JSON.stringify({ job }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/api/job/input")) {
+      submitted.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ job, queued: false }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+  const output = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    }
+  });
+
+  const exitCode = await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input: Readable.from(["manual test passed\n/manual-fail\n/exit\n"]),
+    output,
+    errorOutput: output,
+    fetchImpl,
+    pollIntervalMs: 10000
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(
+    submitted.map(({ action }) => action),
+    ["manual-pass", "manual-fail"]
+  );
 });
 
 test("terminal chat can recover by starting a dashboard connection", async () => {
@@ -2342,6 +2743,14 @@ test("terminal chat recognizes natural operational commands", () => {
   assert.deepEqual(parseNaturalChatCommand("cancel waiting job 4"), {
     command: "/cancel-job",
     details: "4"
+  });
+  assert.deepEqual(parseNaturalChatCommand("manual test passed"), {
+    command: "/manual-pass",
+    details: ""
+  });
+  assert.deepEqual(parseNaturalChatCommand("React test failed"), {
+    command: "/manual-fail",
+    details: ""
   });
   assert.deepEqual(
     parseNaturalChatCommand(

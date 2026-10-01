@@ -670,6 +670,8 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
     request: "Validate grouped details",
     requestType: "bug-fix",
     status: "blocked",
+    manualLocalhostTest: true,
+    manualLocalhostPending: false,
     durationMs: 1000,
     stages: Object.fromEntries(
       [
@@ -778,6 +780,7 @@ test("dashboard requires explicit manual localhost confirmation", async ({
     durationMs: 1000,
     manualLocalhostTest: true,
     manualLocalhostUrl: "http://127.0.0.1:3000",
+    manualLocalhostPending: true,
     stages,
     bugs: [],
     logs: [],
@@ -830,14 +833,7 @@ test("dashboard requires explicit manual localhost confirmation", async ({
   );
 
   await page.getByRole("button", { name: "Passed" }).click();
-  expect(submittedInput.action).toBe("continue");
-  expect(submittedInput.details).toContain(
-    "manual React localhost validation"
-  );
-  expect(submittedInput.details).toContain("marked it passed");
-  expect(submittedInput.details).toContain(
-    "stop only the FixLab-owned frontend process"
-  );
+  expect(submittedInput).toEqual({ action: "manual-pass" });
 });
 
 test("dashboard exposes explicit pull-request approval when validation is complete", async ({
