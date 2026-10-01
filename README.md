@@ -185,6 +185,8 @@ visible risk. FixLab never reports a skipped or timed-out gate as successful.
   traces, failures, and explicit data-source behavior.
 - **Resumable workflows** for authentication, genuine blockers, manual
   validation, and focused follow-up instructions.
+- **Restart-safe queues** that restore waiting jobs in their original order and
+  preserve their runtime session IDs.
 - **Pull-request readiness** based on completed gates, effective-diff review,
   remaining risks, and preserved evidence.
 

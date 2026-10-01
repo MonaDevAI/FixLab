@@ -76,7 +76,9 @@
   "environments": [
     "local",
     "development",
-    "integration"
+    "test",
+    "integration",
+    "uat"
   ],
   "pullRequests": {
     "defaultTargetBranch": "develop",
