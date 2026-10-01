@@ -128,6 +128,10 @@ port. Common operational requests also work as plain English, including
 separate bug-fix job instead of adding guidance to the current job. Waiting
 jobs can be removed without interrupting the active job by selecting **Remove
 from queue** in the dashboard or typing `cancel waiting job <position>`.
+The dashboard lifecycle controls can also hold an active or waiting job,
+resume a held job in its retained session, restart a terminal job with a new
+job ID and session, and delete terminal history older than a chosen number of
+days. Active, waiting, and held jobs are never removed by history cleanup.
 
 FixLab is not yet published to the public npm registry or merged into the
 official GitHub Copilot plugin marketplace. Until marketplace review is
@@ -229,7 +233,8 @@ The current GitHub release is **v0.6.1**. It includes:
 - A single-user local dashboard.
 - Repository onboarding templates and React/.NET examples.
 - Manual and Azure DevOps work-item intake.
-- Focused validation, browser evidence, queueing, metrics, and recovery.
+- Focused validation, browser evidence, queueing, lifecycle controls, metrics,
+  and recovery.
 
 The dashboard is local and bound to `127.0.0.1`. FixLab does not currently
 provide a hosted multi-user broker, shared dashboard, or managed runner

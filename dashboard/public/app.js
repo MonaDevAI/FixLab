@@ -24,6 +24,15 @@ const testMutationMode = document.querySelector("#test-mutation-mode");
 const queuePanel = document.querySelector("#queue-panel");
 const queueCount = document.querySelector("#queue-count");
 const queueList = document.querySelector("#queue-list");
+const jobLifecycleStatus = document.querySelector("#job-lifecycle-status");
+const holdJobButton = document.querySelector("#hold-job");
+const resumeHeldJobButton = document.querySelector("#resume-held-job");
+const restartJobButton = document.querySelector("#restart-job");
+const historyRetentionDays = document.querySelector(
+  "#history-retention-days"
+);
+const purgeJobHistoryButton = document.querySelector("#purge-job-history");
+const jobControlsMessage = document.querySelector("#job-controls-message");
 const bugResultsPanel = document.querySelector("#bug-results-panel");
 const bugResultsElement = document.querySelector("#bug-results");
 const agentActivityPanel = document.querySelector("#agent-activity-panel");
@@ -445,6 +454,21 @@ function renderJob(job, currentActiveJob = job) {
     canResume && job?.status === "failed";
   const canCancelQueuedJob =
     !isActive && job?.status === "queued";
+  const canHoldJob =
+    Boolean(job?.id) &&
+    ((isActive && ["running", "blocked", "failed"].includes(job.status)) ||
+      (!isActive && job.status === "queued"));
+  const canResumeHeldJob = !isActive && job?.status === "held";
+  const canRestartJob =
+    Boolean(job?.id) &&
+    ["passed", "failed", "blocked", "cancelled"].includes(job.status) &&
+    !(isActive && running);
+  holdJobButton.hidden = !canHoldJob;
+  holdJobButton.disabled = !canHoldJob;
+  resumeHeldJobButton.hidden = !canResumeHeldJob;
+  resumeHeldJobButton.disabled = !canResumeHeldJob;
+  restartJobButton.hidden = !canRestartJob;
+  restartJobButton.disabled = !canRestartJob;
   jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob);
   jobInputSubmit.disabled = !(canResume || canComment);
   jobInputSubmit.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
@@ -641,10 +665,11 @@ function selectJob(jobId) {
   }
 }
 
-function renderQueue(currentJob, queue = [], history = []) {
+function renderQueue(currentJob, queue = [], held = [], history = []) {
   const visibleIds = new Set([
     currentJob?.id,
     ...queue.map((job) => job.id),
+    ...held.map((job) => job.id),
     ...history.map((job) => job.id)
   ]);
   for (const jobId of observedJobs.keys()) {
@@ -660,17 +685,22 @@ function renderQueue(currentJob, queue = [], history = []) {
   for (const job of history) {
     rememberJob(job);
   }
+  for (const job of held) {
+    rememberJob(job);
+  }
   for (const job of queue) {
     if (!observedJobs.has(job.id)) {
       observedJobs.set(job.id, queuedJobView(job));
     }
   }
   const queuedIds = new Set(queue.map((job) => job.id));
+  const heldIds = new Set(held.map((job) => job.id));
   const recentJobs = [...observedJobs.values()]
     .filter(
       (job) =>
         job.id !== currentJob?.id &&
-        !queuedIds.has(job.id)
+        !queuedIds.has(job.id) &&
+        !heldIds.has(job.id)
     )
     .reverse();
   const entries = [
@@ -679,13 +709,16 @@ function renderQueue(currentJob, queue = [], history = []) {
       job: observedJobs.get(job.id),
       label: `Waiting #${job.position}`
     })),
+    ...held.map((job) => ({ job, label: "Held" })),
     ...recentJobs.map((job) => ({ job, label: "Recent" }))
   ];
 
   queuePanel.hidden = entries.length < 2;
   queuePanel.querySelector("h3").textContent = "Jobs";
   queueCount.textContent =
-    `${queue.length} waiting · ${recentJobs.length} recent`;
+    `${queue.length} waiting · ${held.length} held · ${recentJobs.length} recent`;
+  jobLifecycleStatus.textContent =
+    `${queue.length} waiting · ${held.length} held · ${recentJobs.length} recent`;
   queueList.replaceChildren();
   for (const { job, label } of entries) {
     const item = document.createElement("li");
@@ -708,49 +741,9 @@ function renderQueue(currentJob, queue = [], history = []) {
     button.append(summary, details);
     button.addEventListener("click", () => {
       selectJob(job.id);
-      renderQueue(currentJob, queue, history);
+      renderQueue(currentJob, queue, held, history);
     });
 
-    cancelQueuedJobButton.addEventListener("click", async () => {
-      jobInputMessage.textContent = "";
-      formError.textContent = "";
-      const selectedJob = observedJobs.get(selectedJobId);
-      if (!selectedJob || selectedJob.status !== "queued") {
-        formError.textContent = "Select a waiting job to remove.";
-        return;
-      }
-      if (
-        !window.confirm(
-          "Remove this waiting job from the queue? It will not run, its screenshot artifacts will be deleted, and it will remain visible as cancelled in history."
-        )
-      ) {
-        return;
-      }
-      cancelQueuedJobButton.disabled = true;
-      try {
-        const body = await fetchJson("/api/jobs/cancel", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ jobId: selectedJob.id })
-        });
-        if (body.cancelledJob) {
-          rememberJob(body.cancelledJob);
-        }
-        activeJob = body.job;
-        selectedJobId =
-          body.cancelledJob?.id ?? body.job?.id ?? null;
-        renderJob(
-          observedJobs.get(selectedJobId) ?? body.cancelledJob ?? body.job,
-          activeJob
-        );
-        renderQueue(activeJob, body.queue, body.history);
-        jobInputMessage.textContent = "Waiting job removed from the queue.";
-        await refreshMetrics();
-      } catch (error) {
-        formError.textContent = error.message;
-        cancelQueuedJobButton.disabled = false;
-      }
-    });
     item.append(button);
     if (job.request.length > 160) {
       const expandButton = document.createElement("button");
@@ -1114,12 +1107,15 @@ async function refresh() {
     for (const historicalJob of body.history ?? []) {
       rememberJob(historicalJob);
     }
+    for (const heldJob of body.held ?? []) {
+      rememberJob(heldJob);
+    }
     if (!selectedJobId || !observedJobs.has(selectedJobId)) {
       selectedJobId = activeJob?.id ?? null;
     }
     renderReadiness(body.readiness);
     renderJob(observedJobs.get(selectedJobId) ?? activeJob, activeJob);
-    renderQueue(activeJob, body.queue, body.history);
+    renderQueue(activeJob, body.queue, body.held, body.history);
   } catch (error) {
     formError.textContent = error.message;
   }
@@ -1181,11 +1177,182 @@ form.addEventListener("submit", async (event) => {
     selectedJobId = body.job?.id ?? null;
     rememberJob(body.job);
     renderJob(body.job, activeJob);
-    renderQueue(activeJob, body.queue, body.history);
+    renderQueue(activeJob, body.queue, body.held, body.history);
     await refreshMetrics();
   } catch (error) {
     formError.textContent = error.message;
     startButton.disabled = false;
+  }
+});
+
+cancelQueuedJobButton.addEventListener("click", async () => {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  const selectedJob = observedJobs.get(selectedJobId);
+  if (!selectedJob || selectedJob.status !== "queued") {
+    formError.textContent = "Select a waiting job to remove.";
+    return;
+  }
+  if (
+    !window.confirm(
+      "Remove this waiting job from the queue? It will not run, its screenshot artifacts will be deleted, and it will remain visible as cancelled in history."
+    )
+  ) {
+    return;
+  }
+  cancelQueuedJobButton.disabled = true;
+  try {
+    const body = await fetchJson("/api/jobs/cancel", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: selectedJob.id })
+    });
+    if (body.cancelledJob) {
+      rememberJob(body.cancelledJob);
+    }
+    activeJob = body.job;
+    selectedJobId = body.cancelledJob?.id ?? body.job?.id ?? null;
+    const history = body.cancelledJob &&
+        !(body.history ?? []).some((job) => job.id === body.cancelledJob.id)
+      ? [body.cancelledJob, ...(body.history ?? [])]
+      : body.history;
+    renderJob(
+      observedJobs.get(selectedJobId) ?? body.cancelledJob ?? body.job,
+      activeJob
+    );
+    renderQueue(activeJob, body.queue, body.held, history);
+    jobInputMessage.textContent = "Waiting job removed from the queue.";
+    await refreshMetrics();
+  } catch (error) {
+    formError.textContent = error.message;
+    cancelQueuedJobButton.disabled = false;
+  }
+});
+
+holdJobButton.addEventListener("click", async () => {
+  const selectedJob = observedJobs.get(selectedJobId);
+  if (!selectedJob?.id) {
+    jobControlsMessage.textContent = "Select a running or waiting job to hold.";
+    return;
+  }
+  if (
+    !window.confirm(
+      "Hold this job? FixLab will stop only its owned executor, preserve its workflow state, and continue the waiting queue."
+    )
+  ) {
+    return;
+  }
+  holdJobButton.disabled = true;
+  jobControlsMessage.textContent = "";
+  try {
+    await fetchJson("/api/jobs/hold", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: selectedJob.id })
+    });
+    selectedJobId = selectedJob.id;
+    jobControlsMessage.textContent =
+      "Hold accepted. The job remains available under Held jobs.";
+    await refresh();
+    await refreshMetrics();
+  } catch (error) {
+    jobControlsMessage.textContent = error.message;
+    holdJobButton.disabled = false;
+  }
+});
+
+resumeHeldJobButton.addEventListener("click", async () => {
+  const selectedJob = observedJobs.get(selectedJobId);
+  if (!selectedJob?.id || selectedJob.status !== "held") {
+    jobControlsMessage.textContent = "Select a held job to resume.";
+    return;
+  }
+  resumeHeldJobButton.disabled = true;
+  jobControlsMessage.textContent = "";
+  try {
+    const body = await fetchJson("/api/jobs/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: selectedJob.id })
+    });
+    selectedJobId = body.resumedJob?.id ?? selectedJob.id;
+    jobControlsMessage.textContent = body.queued
+      ? "Held job returned to the waiting queue."
+      : "Held job resumed in the same session.";
+    await refresh();
+    await refreshMetrics();
+  } catch (error) {
+    jobControlsMessage.textContent = error.message;
+    resumeHeldJobButton.disabled = false;
+  }
+});
+
+restartJobButton.addEventListener("click", async () => {
+  const selectedJob = observedJobs.get(selectedJobId);
+  if (!selectedJob?.id) {
+    jobControlsMessage.textContent = "Select a terminal job to restart.";
+    return;
+  }
+  if (
+    !window.confirm(
+      "Restart this retained job from intake? FixLab will create a new job and session while preserving the original outcome in history."
+    )
+  ) {
+    return;
+  }
+  restartJobButton.disabled = true;
+  jobControlsMessage.textContent = "";
+  try {
+    const body = await fetchJson("/api/jobs/restart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: selectedJob.id })
+    });
+    selectedJobId = body.restartedJob?.id ?? body.job?.id ?? null;
+    jobControlsMessage.textContent = body.queued
+      ? "Restarted job added to the waiting queue."
+      : "Restarted job is running from intake.";
+    await refresh();
+    await refreshMetrics();
+  } catch (error) {
+    jobControlsMessage.textContent = error.message;
+    restartJobButton.disabled = false;
+  }
+});
+
+purgeJobHistoryButton.addEventListener("click", async () => {
+  const olderThanDays = Number(historyRetentionDays.value);
+  if (
+    !Number.isInteger(olderThanDays) ||
+    olderThanDays < 1 ||
+    olderThanDays > 3650
+  ) {
+    jobControlsMessage.textContent =
+      "Enter a whole number of days between 1 and 3650.";
+    return;
+  }
+  if (
+    !window.confirm(
+      `Delete completed job history older than ${olderThanDays} day(s)? Active, waiting, and held jobs are never deleted.`
+    )
+  ) {
+    return;
+  }
+  purgeJobHistoryButton.disabled = true;
+  jobControlsMessage.textContent = "";
+  try {
+    const body = await fetchJson("/api/history/purge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ olderThanDays })
+    });
+    jobControlsMessage.textContent =
+      `${body.deleted} completed job(s) deleted from retained history.`;
+    await refresh();
+  } catch (error) {
+    jobControlsMessage.textContent = error.message;
+  } finally {
+    purgeJobHistoryButton.disabled = false;
   }
 });
 
@@ -1245,7 +1412,7 @@ dismissFailedJobButton.addEventListener("click", async () => {
       rememberJob(body.job);
     }
     renderJob(body.job, activeJob);
-    renderQueue(activeJob, body.queue, body.history);
+    renderQueue(activeJob, body.queue, body.held, body.history);
     await refreshMetrics();
   } catch (error) {
     formError.textContent = error.message;
