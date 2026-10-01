@@ -258,7 +258,7 @@ export async function runChat({
         pullRequestStrategy: "common",
         runAllUiScenarios: false,
         recordPlaywrightVideo: false,
-        holdForManualLiveTest: false
+        manualLocalhostTest: false
       })
     });
     currentJob = body.job;
