@@ -2808,6 +2808,13 @@ export function createDashboardServer({
         });
         return;
       }
+      if (currentJob.manualLocalhostPending && !manualResult) {
+        sendJson(response, 409, {
+          error:
+            "manual localhost confirmation requires an explicit manual-pass or manual-fail action"
+        });
+        return;
+      }
       const submittedDetails =
         typeof body.details === "string" ? body.details.trim() : "";
       const details = manualResult

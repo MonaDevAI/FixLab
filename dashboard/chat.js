@@ -24,6 +24,8 @@ export function formatChatHelp() {
   /retry [guidance]    Retry a failed or blocked job.
   /continue [guidance] Continue a blocked or completed job.
   /skip [reason]       Resume while recording an explicitly skipped gate.
+  /manual-pass         Confirm that manual React localhost validation passed.
+  /manual-fail         Confirm that manual React localhost validation failed.
   /new-bug <details>   Start or queue a separate bug-fix job.
   /cancel-job <id|#>   Remove a waiting job by ID or queue position.
   /stop                Stop the owned executor and leave the job resumable.
@@ -72,6 +74,12 @@ export function parseNaturalChatCommand(line) {
   }
   if (/^(?:help|show help|what can i do)\??$/u.test(lower)) {
     return { command: "/help", details: "" };
+  }
+  if (/^(?:manual test|localhost test|react test) passed$/u.test(lower)) {
+    return { command: "/manual-pass", details: "" };
+  }
+  if (/^(?:manual test|localhost test|react test) failed$/u.test(lower)) {
+    return { command: "/manual-fail", details: "" };
   }
   const newBug = normalized.match(
     /^(?:new|add|create)(?: a)? bug(?::|\s+)(.+)$/iu
@@ -494,7 +502,22 @@ export async function runChat({
       );
       return;
     }
+    if (["/manual-pass", "/manual-fail"].includes(command)) {
+      await submitInput(
+        command.slice(1),
+        command === "/manual-pass"
+          ? "Manual React localhost validation passed."
+          : "Manual React localhost validation failed."
+      );
+      return;
+    }
     await loadStatus();
+    if (currentJob?.manualLocalhostPending) {
+      write(
+        "Manual React localhost validation is pending. Use /manual-pass or /manual-fail."
+      );
+      return;
+    }
     await submitInput(
       currentJob?.status === "running" ? "comment" : "continue",
       line

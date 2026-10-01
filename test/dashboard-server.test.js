@@ -1983,6 +1983,20 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     assert.equal(status.body.job.stages["live-test"].status, "blocked");
     assert.equal(status.body.job.error, null);
 
+    const bypass = await jsonRequest(second.url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "continue",
+        details: "Continue without a manual result."
+      })
+    });
+    assert.equal(bypass.response.status, 409);
+    assert.match(
+      bypass.body.error,
+      /explicit manual-pass or manual-fail/
+    );
+
     const resumed = await jsonRequest(second.url, "/api/job/input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2530,6 +2544,14 @@ test("terminal chat recognizes natural operational commands", () => {
   assert.deepEqual(parseNaturalChatCommand("cancel waiting job 4"), {
     command: "/cancel-job",
     details: "4"
+  });
+  assert.deepEqual(parseNaturalChatCommand("manual test passed"), {
+    command: "/manual-pass",
+    details: ""
+  });
+  assert.deepEqual(parseNaturalChatCommand("React test failed"), {
+    command: "/manual-fail",
+    details: ""
   });
   assert.deepEqual(
     parseNaturalChatCommand(
