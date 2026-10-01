@@ -432,11 +432,11 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.status === "blocked" &&
     job?.stages?.["live-test"]?.status === "blocked" &&
-    !job?.manualLocalhostTest;
+    !job?.manualLocalhostPending;
   const canConfirmManualLocalhost =
     canResume &&
     job?.status === "blocked" &&
-    job?.manualLocalhostTest &&
+    job?.manualLocalhostPending &&
     job?.stages?.["live-test"]?.status === "blocked";
   const canApprovePullRequest =
     canResume &&
@@ -491,7 +491,7 @@ function renderJob(job, currentActiveJob = job) {
       jobInputGuidance.textContent =
         canApprovePullRequest
           ? "All required validation gates passed. Explicit approval is required before FixLab creates or updates the pull request."
-          : job?.manualLocalhostTest &&
+          : job?.manualLocalhostPending &&
               job?.stages?.["live-test"]?.status === "blocked"
             ? `The React app is running at ${job.manualLocalhostUrl || "the profile-defined localhost URL"}. Validate it in the browser, then confirm Passed or Failed before FixLab closes the job.`
           : job?.stages?.["live-test"]?.status === "blocked"
@@ -1274,16 +1274,11 @@ async function submitManualLocalhostResult(passed) {
   passManualLocalhostButton.disabled = true;
   failManualLocalhostButton.disabled = true;
   try {
-    const result = passed ? "passed" : "failed";
     const body = await fetchJson("/api/job/input", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: "continue",
-        details:
-          `The user completed manual React localhost validation and explicitly marked it ${result}. ` +
-          `Record the live-test stage as ${result}, stop only the FixLab-owned frontend process, ` +
-          "preserve this manual result in the job evidence, and continue the remaining gated outcome without rerunning Playwright."
+        action: passed ? "manual-pass" : "manual-fail"
       })
     });
     jobInputMessage.textContent = passed

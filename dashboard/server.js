@@ -51,9 +51,13 @@ export function openLocalUrl(
   const url = new URL(value);
   if (
     !["http:", "https:"].includes(url.protocol) ||
-    !["localhost", "127.0.0.1"].includes(url.hostname)
+    !["localhost", "127.0.0.1"].includes(url.hostname) ||
+    url.username ||
+    url.password
   ) {
-    throw new Error("manual localhost URL must use HTTP(S) on loopback");
+    throw new Error(
+      "manual localhost URL must use credential-free HTTP(S) on loopback"
+    );
   }
 
   const launchers = {
@@ -65,14 +69,18 @@ export function openLocalUrl(
   if (!launcher) {
     throw new Error(`opening a browser is not supported on ${platform}`);
   }
-  const child = spawnImpl(launcher[0], launcher[1], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true
+  return new Promise((resolveLaunch, rejectLaunch) => {
+    const child = spawnImpl(launcher[0], launcher[1], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    });
+    child.once("spawn", () => {
+      child.unref?.();
+      resolveLaunch();
+    });
+    child.once("error", rejectLaunch);
   });
-  child.once?.("error", () => {});
-  child.unref?.();
-  return child;
 }
 export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
@@ -189,9 +197,13 @@ export function validateLiveTestProfile(profile, repository) {
         const healthUrl = new URL(frontend.healthUrl);
         if (
           !["http:", "https:"].includes(healthUrl.protocol) ||
-          !["localhost", "127.0.0.1"].includes(healthUrl.hostname)
+          !["localhost", "127.0.0.1"].includes(healthUrl.hostname) ||
+          healthUrl.username ||
+          healthUrl.password
         ) {
-          missing.push("applications.frontend.healthUrl (loopback URL required)");
+          missing.push(
+            "applications.frontend.healthUrl (credential-free loopback URL required)"
+          );
         }
       } catch {
         missing.push("applications.frontend.healthUrl (valid URL required)");
@@ -352,6 +364,7 @@ function publicQueue(jobs) {
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: job.manualLocalhostUrl,
     manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
+    manualLocalhostPending: job.manualLocalhostPending,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     mode: job.mode,
@@ -389,6 +402,7 @@ function dashboardSnapshot(job) {
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: "",
     manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
+    manualLocalhostPending: job.manualLocalhostPending,
     testEvidence: {
       enabled: job.testEvidence.enabled,
       source: job.testEvidence.source,
@@ -439,6 +453,7 @@ function restoreDashboardJob(snapshot, repository) {
     manualLocalhostUrl:
       profile.applications?.frontend?.healthUrl ?? "",
     manualLocalhostOpenedAt: snapshot.manualLocalhostOpenedAt ?? null,
+    manualLocalhostPending: snapshot.manualLocalhostPending ?? false,
     workItem: snapshot.workItem ?? null,
     workItems: snapshot.workItems ?? [],
     screenshots: [],
@@ -744,7 +759,8 @@ export function buildJobPrompt({
   const manualLocalhostGuidance = manualLocalhostTest
     ? `- Manual React localhost validation is enabled independently of Playwright. After required automated validation finishes, start or reuse only the profile-defined frontend and wait for its health check at ${manualLocalhostUrl || "the profile-defined local health URL"}.
 - Emit local-stack passed only after the React frontend is healthy. The dashboard will then open the localhost URL in the user's default browser.
-- Keep the FixLab-owned frontend running and emit live-test blocked with the local URL and an exact request for the user to confirm Passed or Failed. Do not run or rerun Playwright solely because this manual option is enabled.
+- After every required automated browser gate is terminal, emit FIXLAB_MANUAL|localhost|pending immediately before live-test blocked. Keep the FixLab-owned frontend running and request that the user confirm Passed or Failed. Do not emit this marker for a Playwright, authentication, test-data, or other automated blocker.
+- Do not run or rerun Playwright solely because this manual option is enabled.
 - If an authorized draft PR already exists, keep it draft with the manual gate pending; otherwise emit pr skipped because manual confirmation is pending.
 - When the dashboard resumes this session with the user's manual result, mark live-test passed or failed accordingly, stop only the retained FixLab-owned frontend process, and continue to the gated PR outcome.`
     : "- Stop FixLab-owned applications after automated browser validation unless another explicit workflow requirement needs them.";
@@ -1481,6 +1497,7 @@ function publicJob(job) {
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: job.manualLocalhostUrl,
     manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
+    manualLocalhostPending: job.manualLocalhostPending,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
@@ -1784,6 +1801,20 @@ function appendLine(job, stream, line) {
       reported: true,
       scenario: safeSummary(scenario)
     };
+    return;
+  }
+
+  if (line === "FIXLAB_MANUAL|localhost|pending") {
+    if (!job.manualLocalhostTest) {
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: "Ignored manual localhost marker for a job without that option."
+      });
+      return;
+    }
+    job.manualLocalhostPending = true;
     return;
   }
 
@@ -2345,26 +2376,32 @@ export function createDashboardServer({
         if (
           job.manualLocalhostTest &&
           !job.manualLocalhostOpenedAt &&
+          !job.manualLocalhostOpening &&
           !localStackWasReady &&
           job.stages["local-stack"].status === "passed"
         ) {
-          job.manualLocalhostOpenedAt = new Date().toISOString();
-          try {
-            browserOpener(job.manualLocalhostUrl);
-            pushLog(job, {
-              index: job.nextLogIndex,
-              timestamp: job.manualLocalhostOpenedAt,
-              stream: "dashboard",
-              message: `Opened React localhost for manual validation: ${job.manualLocalhostUrl}`
+          job.manualLocalhostOpening = true;
+          Promise.resolve(browserOpener(job.manualLocalhostUrl))
+            .then(() => {
+              job.manualLocalhostOpenedAt = new Date().toISOString();
+              pushLog(job, {
+                index: job.nextLogIndex,
+                timestamp: job.manualLocalhostOpenedAt,
+                stream: "dashboard",
+                message: "Opened the React localhost URL for manual validation."
+              });
+            })
+            .catch((error) => {
+              pushLog(job, {
+                index: job.nextLogIndex,
+                timestamp: new Date().toISOString(),
+                stream: "dashboard",
+                message: `Could not open React localhost automatically: ${error.message}`
+              });
+            })
+            .finally(() => {
+              job.manualLocalhostOpening = false;
             });
-          } catch (error) {
-            pushLog(job, {
-              index: job.nextLogIndex,
-              timestamp: job.manualLocalhostOpenedAt,
-              stream: "dashboard",
-              message: `Could not open React localhost automatically: ${error.message}`
-            });
-          }
         }
       }
     });
@@ -2717,18 +2754,42 @@ export function createDashboardServer({
         sendJson(response, 400, { error: error.message });
         return;
       }
-      const details =
-        typeof body.details === "string" ? body.details.trim() : "";
-      if (!details || details.length > 10000) {
+      const action = body.action ?? "continue";
+      if (
+        ![
+          "comment",
+          "continue",
+          "retry",
+          "skip",
+          "manual-pass",
+          "manual-fail"
+        ].includes(action)
+      ) {
         sendJson(response, 400, {
-          error: "details must be a non-empty string of at most 10000 characters"
+          error:
+            "action must be comment, continue, retry, skip, manual-pass, or manual-fail"
         });
         return;
       }
-      const action = body.action ?? "continue";
-      if (!["comment", "continue", "retry", "skip"].includes(action)) {
+      const manualResult = ["manual-pass", "manual-fail"].includes(action);
+      if (manualResult && !currentJob.manualLocalhostPending) {
+        sendJson(response, 409, {
+          error: "manual localhost confirmation is not pending"
+        });
+        return;
+      }
+      const submittedDetails =
+        typeof body.details === "string" ? body.details.trim() : "";
+      const details = manualResult
+        ? `The user completed manual React localhost validation and explicitly marked it ${
+            action === "manual-pass" ? "passed" : "failed"
+          }. Record the live-test stage as ${
+            action === "manual-pass" ? "passed" : "failed"
+          }, stop only the FixLab-owned frontend process, preserve this manual result in the job evidence, and continue the remaining gated outcome without rerunning Playwright.`
+        : submittedDetails;
+      if (!details || details.length > 10000) {
         sendJson(response, 400, {
-          error: "action must be comment, continue, retry, or skip"
+          error: "details must be a non-empty string of at most 10000 characters"
         });
         return;
       }
@@ -2745,6 +2806,9 @@ export function createDashboardServer({
         createdAt: new Date().toISOString()
       };
       currentJob.inputs.push(input);
+      if (manualResult) {
+        currentJob.manualLocalhostPending = false;
+      }
       if (running) {
         currentJob.pendingInputs.push(input);
         pushLog(currentJob, {
@@ -3124,6 +3188,8 @@ export function createDashboardServer({
         manualLocalhostTest,
         manualLocalhostUrl,
         manualLocalhostOpenedAt: null,
+        manualLocalhostOpening: false,
+        manualLocalhostPending: false,
         testEvidence,
         branchNaming,
         intakeSource,

@@ -75,19 +75,19 @@ test("Agency executor keeps long prompts out of process arguments", () => {
   );
 });
 
-test("local browser opener accepts only loopback URLs", () => {
+test("local browser opener accepts only credential-free loopback URLs", async () => {
   const launches = [];
-  const child = {
-    once() {},
-    unref() {}
-  };
-  openLocalUrl("http://127.0.0.1:3000/app", {
+  const child = new EventEmitter();
+  child.unref = () => {};
+  const launched = openLocalUrl("http://127.0.0.1:3000/app", {
     platform: "win32",
     spawnImpl(command, args, options) {
       launches.push({ command, args, options });
       return child;
     }
   });
+  child.emit("spawn");
+  await launched;
   assert.deepEqual(launches, [
     {
       command: "explorer.exe",
@@ -101,14 +101,25 @@ test("local browser opener accepts only loopback URLs", () => {
   ]);
   assert.throws(
     () =>
-      openLocalUrl("https://example.com", {
+      openLocalUrl("http://user:password@localhost:3000", {
         platform: "win32",
         spawnImpl() {
           throw new Error("should not launch");
         }
       }),
-    /must use HTTP\(S\) on loopback/
+    /credential-free HTTP\(S\) on loopback/
   );
+
+  const failedChild = new EventEmitter();
+  failedChild.unref = () => {};
+  const failedLaunch = openLocalUrl("http://localhost:3000", {
+    platform: "linux",
+    spawnImpl() {
+      return failedChild;
+    }
+  });
+  failedChild.emit("error", new Error("xdg-open is missing"));
+  await assert.rejects(failedLaunch, /xdg-open is missing/);
 });
 
 test("executor completion settles after process exit when inherited pipes remain open", async () => {
@@ -253,6 +264,25 @@ test("dashboard readiness blocks an incomplete live-test profile", () => {
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+test("dashboard readiness rejects credentials in a loopback health URL", () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  profile.applications.frontend.healthUrl =
+    "http://user:password@localhost:3000";
+  writeFileSync(profilePath, JSON.stringify(profile, null, 2));
+
+  const readiness = inspectRepository(repository);
+  assert.equal(readiness.profileReady, false);
+  assert.match(readiness.error, /credential-free loopback URL required/);
+  rmSync(repository, { recursive: true, force: true });
 });
 
 test("dashboard readiness validates configured test synthesis", () => {
@@ -609,6 +639,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
   };
   let receivedPrompt = "";
   const openedLocalhostUrls = [];
+  let resolveBrowserOpen;
   const executor = ({ onOutput, prompt }) => {
     receivedPrompt = prompt;
     for (const id of ["101", "202"]) {
@@ -629,6 +660,9 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     {
       browserOpener(localhostUrl) {
         openedLocalhostUrls.push(localhostUrl);
+        return new Promise((resolveOpen) => {
+          resolveBrowserOpen = resolveOpen;
+        });
       }
     }
   );
@@ -707,6 +741,15 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
       "http://127.0.0.1:3000"
     );
     assert.deepEqual(openedLocalhostUrls, ["http://127.0.0.1:3000"]);
+    assert.equal(started.body.job.manualLocalhostOpenedAt, null);
+    resolveBrowserOpen();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const opened = await jsonRequest(url, "/api/job");
+    assert.ok(opened.body.job.manualLocalhostOpenedAt);
+    assert.match(
+      opened.body.job.logs.at(-1).message,
+      /Opened the React localhost URL/
+    );
     assert.equal("description" in started.body.job.workItems[0], false);
     assert.match(receivedPrompt, /Pull request strategy: per-bug/);
     assert.match(receivedPrompt, /isolated delivery unit/);
@@ -1019,7 +1062,8 @@ test("blocked job accepts user input and resumes the same Agency session", async
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         request: "Validate an authenticated browser workflow.",
-        mode: "validate-only"
+        mode: "validate-only",
+        manualLocalhostTest: true
       })
     });
     assert.equal(started.response.status, 202);
@@ -1033,6 +1077,18 @@ test("blocked job accepts user input and resumes the same Agency session", async
     assert.equal(blocked.body.job.status, "blocked");
     assert.equal(blocked.body.job.canResume, true);
     assert.equal(blocked.body.job.stages["live-test"].status, "blocked");
+    assert.equal(blocked.body.job.manualLocalhostPending, false);
+
+    const invalidManualResult = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "manual-pass" })
+    });
+    assert.equal(invalidManualResult.response.status, 409);
+    assert.match(
+      invalidManualResult.body.error,
+      /manual localhost confirmation is not pending/
+    );
 
     const resumed = await jsonRequest(url, "/api/job/input", {
       method: "POST",
@@ -1825,6 +1881,7 @@ test("dashboard recovers an orphaned running job as failed and resumable", async
 test("dashboard recovery preserves a completed manual localhost gate", async () => {
   const repository = createGitRepository();
   const executor = ({ onOutput }) => {
+    onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
     for (const stage of FIXLAB_STAGES) {
       const status =
         stage === "live-test"
@@ -1858,14 +1915,20 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     await first.dashboard.close();
   }
 
-  const second = await startDashboard(repository, () => {
-    throw new Error("executor should not run while recovering a job");
+  let resumedPrompt = "";
+  const second = await startDashboard(repository, ({ prompt, onOutput }) => {
+    resumedPrompt = prompt;
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} resumed\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
   });
   try {
     const status = await jsonRequest(second.url, "/api/status");
     assert.equal(status.body.job.id, jobId);
     assert.equal(status.body.job.status, "blocked");
     assert.equal(status.body.job.manualLocalhostTest, true);
+    assert.equal(status.body.job.manualLocalhostPending, true);
     assert.equal(
       status.body.job.manualLocalhostUrl,
       "http://127.0.0.1:3000"
@@ -1873,6 +1936,16 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     assert.equal(status.body.job.canResume, true);
     assert.equal(status.body.job.stages["live-test"].status, "blocked");
     assert.equal(status.body.job.error, null);
+
+    const resumed = await jsonRequest(second.url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "manual-pass" })
+    });
+    assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
+    assert.equal(resumed.body.job.manualLocalhostPending, false);
+    assert.match(resumedPrompt, /explicitly marked it passed/);
+    assert.match(resumedPrompt, /stop only the FixLab-owned frontend process/);
   } finally {
     await second.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
