@@ -44,11 +44,12 @@ export const MAX_DASHBOARD_HISTORY_ENTRIES = 20;
 export const MAX_QUEUED_JOBS = 20;
 export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
 
-export function openLocalUrl(
-  value,
-  { platform = process.platform, spawnImpl = spawn } = {}
-) {
-  const url = new URL(value);
+function validatedManualLocalhostUrl(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("manual localhost URL is required");
+  }
+  const trimmed = value.trim();
+  const url = new URL(trimmed);
   if (
     !["http:", "https:"].includes(url.protocol) ||
     !["localhost", "127.0.0.1"].includes(url.hostname) ||
@@ -59,6 +60,14 @@ export function openLocalUrl(
       "manual localhost URL must use credential-free HTTP(S) on loopback"
     );
   }
+  return trimmed;
+}
+
+export function openLocalUrl(
+  value,
+  { platform = process.platform, spawnImpl = spawn } = {}
+) {
+  const url = new URL(validatedManualLocalhostUrl(value));
 
   const launchers = {
     win32: ["explorer.exe", [url.href]],
@@ -194,19 +203,11 @@ export function validateLiveTestProfile(profile, repository) {
       missing.push("applications.frontend.healthUrl");
     } else {
       try {
-        const healthUrl = new URL(frontend.healthUrl);
-        if (
-          !["http:", "https:"].includes(healthUrl.protocol) ||
-          !["localhost", "127.0.0.1"].includes(healthUrl.hostname) ||
-          healthUrl.username ||
-          healthUrl.password
-        ) {
-          missing.push(
-            "applications.frontend.healthUrl (credential-free loopback URL required)"
-          );
-        }
+        validatedManualLocalhostUrl(frontend.healthUrl);
       } catch {
-        missing.push("applications.frontend.healthUrl (valid URL required)");
+        missing.push(
+          "applications.frontend.healthUrl (credential-free loopback URL required)"
+        );
       }
     }
   }
@@ -444,14 +445,25 @@ function dashboardSnapshot(job) {
 
 function restoreDashboardJob(snapshot, repository) {
   const profile = loadRepositoryProfile(repository);
+  let manualLocalhostUrl = "";
+  let manualLocalhostProfileError = false;
+  try {
+    manualLocalhostUrl = validatedManualLocalhostUrl(
+      profile.applications?.frontend?.healthUrl
+    );
+  } catch {
+    manualLocalhostProfileError =
+      snapshot.manualLocalhostTest ??
+      snapshot.holdForManualLiveTest ??
+      false;
+  }
   const restored = {
     ...snapshot,
     manualLocalhostTest:
       snapshot.manualLocalhostTest ??
       snapshot.holdForManualLiveTest ??
       false,
-    manualLocalhostUrl:
-      profile.applications?.frontend?.healthUrl ?? "",
+    manualLocalhostUrl,
     manualLocalhostOpenedAt: snapshot.manualLocalhostOpenedAt ?? null,
     manualLocalhostPending: snapshot.manualLocalhostPending ?? false,
     workItem: snapshot.workItem ?? null,
@@ -474,6 +486,15 @@ function restoreDashboardJob(snapshot, repository) {
     cacheContext: createCacheContext(repository),
     partial: { stdout: "", stderr: "" }
   };
+  if (manualLocalhostProfileError) {
+    const message =
+      "Manual localhost validation cannot resume because the profile frontend health URL is no longer a safe credential-free loopback URL.";
+    restored.status = "failed";
+    restored.error = message;
+    restored.resumeDisabled = true;
+    restored.manualLocalhostPending = false;
+    restored.stages["live-test"] = { status: "failed", message };
+  }
   restored.initialPrompt = buildJobPrompt({
     request: restored.request,
     mode: restored.mode,
@@ -1513,7 +1534,9 @@ function publicJob(job) {
     finishedAt: job.finishedAt,
     lastActivityAt: job.lastActivityAt,
     error: job.error,
-    canResume: ["blocked", "failed", "passed"].includes(job.status),
+    canResume:
+      !job.resumeDisabled &&
+      ["blocked", "failed", "passed"].includes(job.status),
     canComment: job.status === "running",
     inputCount: job.inputs.length,
     pendingInputCount: job.pendingInputs.length,
@@ -2381,7 +2404,8 @@ export function createDashboardServer({
           job.stages["local-stack"].status === "passed"
         ) {
           job.manualLocalhostOpening = true;
-          Promise.resolve(browserOpener(job.manualLocalhostUrl))
+          Promise.resolve()
+            .then(() => browserOpener(job.manualLocalhostUrl))
             .then(() => {
               job.manualLocalhostOpenedAt = new Date().toISOString();
               pushLog(job, {
@@ -2720,6 +2744,12 @@ export function createDashboardServer({
     ) {
       if (!currentJob) {
         sendJson(response, 404, { error: "no FixLab job is available" });
+        return;
+      }
+      if (currentJob.resumeDisabled) {
+        sendJson(response, 409, {
+          error: "this FixLab job cannot be resumed safely"
+        });
         return;
       }
       const running = currentJob.status === "running" && Boolean(activeHandle);

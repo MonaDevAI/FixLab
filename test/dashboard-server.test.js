@@ -782,6 +782,52 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
   }
 });
 
+test("dashboard records synchronous browser launcher failures", async () => {
+  const repository = createRepository();
+  const executor = ({ onOutput }) => {
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(
+    repository,
+    executor,
+    undefined,
+    {
+      browserOpener() {
+        throw new Error("browser launcher is unavailable");
+      }
+    }
+  );
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Open React localhost for manual validation.",
+        requestType: "small-enhancement",
+        mode: "fix-and-validate",
+        manualLocalhostTest: true
+      })
+    });
+    assert.equal(started.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const completed = await jsonRequest(url, "/api/job");
+    assert.equal(completed.body.job.manualLocalhostOpenedAt, null);
+    assert.ok(
+      completed.body.job.logs.some((entry) =>
+        /browser launcher is unavailable/.test(entry.message)
+      )
+    );
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard parses complete stage markers and passes a job", async () => {
   const repository = createRepository();
   let receivedPrompt;
@@ -1946,6 +1992,75 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     assert.equal(resumed.body.job.manualLocalhostPending, false);
     assert.match(resumedPrompt, /explicitly marked it passed/);
     assert.match(resumedPrompt, /stop only the FixLab-owned frontend process/);
+  } finally {
+    await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard disables an unsafe restored manual localhost gate", async () => {
+  const repository = createGitRepository();
+  const executor = ({ onOutput }) => {
+    onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
+    for (const stage of FIXLAB_STAGES) {
+      const status = stage === "live-test" ? "blocked" : "passed";
+      onOutput(
+        "stdout",
+        `FIXLAB_STAGE|${stage}|${status}|${stage} completed\n`
+      );
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const first = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Restore this manual localhost gate safely.",
+        requestType: "bug-fix",
+        mode: "validate-only",
+        manualLocalhostTest: true
+      })
+    });
+    assert.equal(started.response.status, 202);
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  profile.applications.frontend.healthUrl =
+    "http://user:password@localhost:3000";
+  writeFileSync(profilePath, JSON.stringify(profile, null, 2));
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("unsafe restored job must not resume");
+  });
+  try {
+    const status = await jsonRequest(second.url, "/api/status");
+    assert.equal(status.body.job.status, "failed");
+    assert.equal(status.body.job.canResume, false);
+    assert.equal(status.body.job.manualLocalhostPending, false);
+    assert.equal(status.body.job.manualLocalhostUrl, "");
+    assert.doesNotMatch(JSON.stringify(status.body), /user:password/);
+
+    const resumed = await jsonRequest(second.url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "continue",
+        details: "Resume this unsafe job."
+      })
+    });
+    assert.equal(resumed.response.status, 409);
+    assert.match(resumed.body.error, /cannot be resumed safely/);
   } finally {
     await second.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
