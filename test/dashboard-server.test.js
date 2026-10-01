@@ -828,6 +828,98 @@ test("dashboard records synchronous browser launcher failures", async () => {
   }
 });
 
+test("dashboard finalizes a pending manual marker as blocked", async () => {
+  const repository = createRepository();
+  const executor = ({ onOutput }) => {
+    onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} complete\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Require manual localhost confirmation.",
+        requestType: "small-enhancement",
+        mode: "fix-and-validate",
+        manualLocalhostTest: true
+      })
+    });
+    assert.equal(started.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const blocked = await jsonRequest(url, "/api/job");
+    assert.equal(blocked.body.job.status, "blocked");
+    assert.equal(blocked.body.job.manualLocalhostPending, true);
+    assert.equal(blocked.body.job.stages["live-test"].status, "blocked");
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard keeps an explicit manual failure authoritative", async () => {
+  const repository = createRepository();
+  let callCount = 0;
+  const executor = ({ onOutput }) => {
+    callCount += 1;
+    if (callCount === 1) {
+      onOutput("stdout", "FIXLAB_MANUAL|localhost|pending\n");
+      for (const stage of FIXLAB_STAGES) {
+        const status = stage === "live-test" ? "blocked" : "passed";
+        onOutput(
+          "stdout",
+          `FIXLAB_STAGE|${stage}|${status}|${stage} initial\n`
+        );
+      }
+    } else {
+      for (const stage of FIXLAB_STAGES) {
+        onOutput(
+          "stdout",
+          `FIXLAB_STAGE|${stage}|passed|${stage} resumed\n`
+        );
+      }
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Respect a failed manual localhost result.",
+        requestType: "small-enhancement",
+        mode: "fix-and-validate",
+        manualLocalhostTest: true
+      })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const resumed = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "manual-fail" })
+    });
+    assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const failed = await jsonRequest(url, "/api/job");
+    assert.equal(failed.body.job.status, "failed");
+    assert.equal(failed.body.job.manualLocalhostResult, "failed");
+    assert.equal(failed.body.job.stages["live-test"].status, "failed");
+    assert.match(failed.body.job.error, /Manual React localhost validation failed/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard parses complete stage markers and passes a job", async () => {
   const repository = createRepository();
   let receivedPrompt;

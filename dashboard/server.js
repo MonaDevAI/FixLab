@@ -1904,6 +1904,19 @@ function finishJob(job, result) {
     job.error = job.error ? `${job.error}; ${message}` : message;
   }
 
+  if (job.manualLocalhostPending) {
+    job.stages["live-test"] = {
+      status: "blocked",
+      message:
+        "Manual React localhost validation requires an explicit Passed or Failed result."
+    };
+  }
+  if (job.manualLocalhostResult === "failed") {
+    const message = "Manual React localhost validation failed.";
+    job.stages["live-test"] = { status: "failed", message };
+    job.error = job.error ? `${job.error}; ${message}` : message;
+  }
+
   const missing = FIXLAB_STAGES.filter(
     (stage) => !terminalStatuses.has(job.stages[stage].status)
   );
