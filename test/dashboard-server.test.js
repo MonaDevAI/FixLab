@@ -1807,8 +1807,9 @@ test("dashboard persists privacy-safe token and duration metrics", async () => {
     assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
   } finally {
     await second.dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
   }
+
+  rmSync(repository, { recursive: true, force: true });
 });
 
 test("dashboard restores private job summaries and PR readiness after restart", async () => {
@@ -1879,8 +1880,9 @@ test("dashboard restores private job summaries and PR readiness after restart", 
     );
   } finally {
     await second.dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
   }
+
+  rmSync(repository, { recursive: true, force: true });
 });
 
 test("dashboard recovers an orphaned running job as failed and resumable", async () => {
@@ -2004,10 +2006,26 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     });
     assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
     assert.equal(resumed.body.job.manualLocalhostPending, false);
+    assert.equal(resumed.body.job.manualLocalhostResult, "passed");
     assert.match(resumedPrompt, /explicitly marked it passed/);
+    assert.match(
+      resumedPrompt,
+      /Persisted manual React localhost result: passed/
+    );
     assert.match(resumedPrompt, /stop only the FixLab-owned frontend process/);
   } finally {
     await second.dashboard.close();
+  }
+
+  const third = await startDashboard(repository, () => {
+    throw new Error("executor should not run while restoring accepted evidence");
+  });
+  try {
+    const restored = await jsonRequest(third.url, "/api/status");
+    assert.equal(restored.body.job.manualLocalhostPending, false);
+    assert.equal(restored.body.job.manualLocalhostResult, "passed");
+  } finally {
+    await third.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -2291,6 +2309,62 @@ test("terminal chat sends free text to the active dashboard session", async () =
   });
   assert.match(output, /FixLab chat is connected/);
   assert.match(output, /Guidance queued for the same session/);
+});
+
+test("terminal chat dispatches manual localhost pass and fail actions", async () => {
+  const submitted = [];
+  const job = {
+    id: "manual-job",
+    status: "blocked",
+    request: "Validate React localhost",
+    durationMs: 1000,
+    manualLocalhostPending: true,
+    pullRequestReadiness: { message: "Manual validation is pending." },
+    stages: {
+      "live-test": { status: "blocked", message: "Manual result required." },
+      pr: { status: "skipped", message: "Manual result required." }
+    },
+    logs: []
+  };
+  const fetchImpl = async (url, options = {}) => {
+    if (url.endsWith("/api/status")) {
+      return new Response(JSON.stringify({ job }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    if (url.endsWith("/api/job/input")) {
+      submitted.push(JSON.parse(options.body));
+      return new Response(JSON.stringify({ job, queued: false }), {
+        status: 202,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+    return new Response(JSON.stringify({ error: "not found" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json" }
+    });
+  };
+  const output = new Writable({
+    write(_chunk, _encoding, callback) {
+      callback();
+    }
+  });
+
+  const exitCode = await runChat({
+    baseUrl: "http://127.0.0.1:4317",
+    input: Readable.from(["manual test passed\n/manual-fail\n/exit\n"]),
+    output,
+    errorOutput: output,
+    fetchImpl,
+    pollIntervalMs: 10000
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(
+    submitted.map(({ action }) => action),
+    ["manual-pass", "manual-fail"]
+  );
 });
 
 test("terminal chat can recover by starting a dashboard connection", async () => {

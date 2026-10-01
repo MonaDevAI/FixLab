@@ -366,6 +366,7 @@ function publicQueue(jobs) {
     manualLocalhostUrl: job.manualLocalhostUrl,
     manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
     manualLocalhostPending: job.manualLocalhostPending,
+    manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     mode: job.mode,
@@ -404,6 +405,7 @@ function dashboardSnapshot(job) {
     manualLocalhostUrl: "",
     manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
     manualLocalhostPending: job.manualLocalhostPending,
+    manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: {
       enabled: job.testEvidence.enabled,
       source: job.testEvidence.source,
@@ -466,6 +468,7 @@ function restoreDashboardJob(snapshot, repository) {
     manualLocalhostUrl,
     manualLocalhostOpenedAt: snapshot.manualLocalhostOpenedAt ?? null,
     manualLocalhostPending: snapshot.manualLocalhostPending ?? false,
+    manualLocalhostResult: snapshot.manualLocalhostResult ?? null,
     workItem: snapshot.workItem ?? null,
     workItems: snapshot.workItems ?? [],
     screenshots: [],
@@ -1519,6 +1522,7 @@ function publicJob(job) {
     manualLocalhostUrl: job.manualLocalhostUrl,
     manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
     manualLocalhostPending: job.manualLocalhostPending,
+    manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
@@ -1838,6 +1842,7 @@ function appendLine(job, stream, line) {
       return;
     }
     job.manualLocalhostPending = true;
+    job.manualLocalhostResult = null;
     return;
   }
 
@@ -1947,10 +1952,16 @@ function finishJob(job, result) {
 
 function buildResumePrompt(job, { action, details }) {
   const expectedBugs = job.bugs.map((bug) => bug.id).join(", ");
+  const manualResult = job.manualLocalhostResult
+    ? `Persisted manual React localhost result: ${job.manualLocalhostResult}.
+- Preserve this accepted result as job evidence across retries or dashboard restarts.
+- Do not ask for another manual result unless a new frontend change invalidates it.`
+    : "No persisted manual React localhost result is available.";
   return `Resume the existing FixLab dashboard session for job ${job.id}.
 User action: ${action}
 User input:
 ${details}
+${manualResult}
 
 Resume requirements:
 - Reuse the completed diagnosis, current worktree, validation evidence, branch, and pull request from this session.
@@ -2845,6 +2856,8 @@ export function createDashboardServer({
       currentJob.inputs.push(input);
       if (manualResult) {
         currentJob.manualLocalhostPending = false;
+        currentJob.manualLocalhostResult =
+          action === "manual-pass" ? "passed" : "failed";
       }
       if (running) {
         currentJob.pendingInputs.push(input);
@@ -3227,6 +3240,7 @@ export function createDashboardServer({
         manualLocalhostOpenedAt: null,
         manualLocalhostOpening: false,
         manualLocalhostPending: false,
+        manualLocalhostResult: null,
         testEvidence,
         branchNaming,
         intakeSource,
