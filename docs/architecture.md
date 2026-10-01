@@ -96,10 +96,12 @@ must use the selected environment exactly or block with the missing
 prerequisite; it cannot silently fall back to local or another environment.
 Direct CLI runs provide the equivalent
 `fixlab run --environment <profile-environment>` option.
-An optional manual-live-test hold keeps the FixLab-owned frontend available
-after successful Playwright validation and blocks the PR stage until the user
-records a manual local-mode result. The resumed session then stops only its
-owned process and continues the normal PR approval flow.
+An optional manual localhost gate is independent of Playwright. After the
+profile-defined React frontend passes its loopback health check, the dashboard
+opens that URL in the user's default browser, keeps the FixLab-owned frontend
+available, and blocks completion until the user records Passed or Failed. The
+resumed session then stops only its owned process and continues the normal
+gated outcome.
 
 Repository profiles can enable first-class test synthesis. Before browser
 execution, the agent turns the reported behavior and expected result into the

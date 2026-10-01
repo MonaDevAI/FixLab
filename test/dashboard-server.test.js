@@ -30,7 +30,8 @@ import {
   MAX_JOB_ACTIVITY_ENTRIES,
   MAX_CACHE_BYTES,
   MAX_CACHE_ENTRIES,
-  MAX_JOB_LOG_ENTRIES
+  MAX_JOB_LOG_ENTRIES,
+  openLocalUrl
 } from "../dashboard/server.js";
 
 const packageRoot = new URL("..", import.meta.url).pathname.replace(
@@ -71,6 +72,42 @@ test("Agency executor keeps long prompts out of process arguments", () => {
   assert.equal(
     resumed.args.at(-1),
     "--resume=11111111-1111-4111-8111-111111111111"
+  );
+});
+
+test("local browser opener accepts only loopback URLs", () => {
+  const launches = [];
+  const child = {
+    once() {},
+    unref() {}
+  };
+  openLocalUrl("http://127.0.0.1:3000/app", {
+    platform: "win32",
+    spawnImpl(command, args, options) {
+      launches.push({ command, args, options });
+      return child;
+    }
+  });
+  assert.deepEqual(launches, [
+    {
+      command: "explorer.exe",
+      args: ["http://127.0.0.1:3000/app"],
+      options: {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: true
+      }
+    }
+  ]);
+  assert.throws(
+    () =>
+      openLocalUrl("https://example.com", {
+        platform: "win32",
+        spawnImpl() {
+          throw new Error("should not launch");
+        }
+      }),
+    /must use HTTP\(S\) on loopback/
   );
 });
 
@@ -571,6 +608,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     }));
   };
   let receivedPrompt = "";
+  const openedLocalhostUrls = [];
   const executor = ({ onOutput, prompt }) => {
     receivedPrompt = prompt;
     for (const id of ["101", "202"]) {
@@ -587,7 +625,12 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
   const { dashboard, url } = await startDashboard(
     repository,
     executor,
-    workItemLoader
+    workItemLoader,
+    {
+      browserOpener(localhostUrl) {
+        openedLocalhostUrls.push(localhostUrl);
+      }
+    }
   );
 
   try {
@@ -649,7 +692,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
         mode: "fix-and-validate",
         pullRequestStrategy: "per-bug",
         runAllUiScenarios: true,
-        holdForManualLiveTest: true,
+        manualLocalhostTest: true,
         intakeSource: "azure-devops",
         workItems: loaded.body.workItems
       })
@@ -658,22 +701,23 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     assert.equal(started.body.job.workItems.length, 2);
     assert.equal(started.body.job.pullRequestStrategy, "per-bug");
     assert.equal(started.body.job.runAllUiScenarios, true);
-    assert.equal(started.body.job.holdForManualLiveTest, true);
+    assert.equal(started.body.job.manualLocalhostTest, true);
     assert.equal(
-      started.body.job.manualLiveTestUrl,
+      started.body.job.manualLocalhostUrl,
       "http://127.0.0.1:3000"
     );
+    assert.deepEqual(openedLocalhostUrls, ["http://127.0.0.1:3000"]);
     assert.equal("description" in started.body.job.workItems[0], false);
     assert.match(receivedPrompt, /Pull request strategy: per-bug/);
     assert.match(receivedPrompt, /isolated delivery unit/);
     assert.match(receivedPrompt, /every repository-defined Playwright\/UI scenario/);
     assert.match(
       receivedPrompt,
-      /Hold for manual local testing after Playwright: yes/
+      /Open React localhost for manual validation: yes/
     );
     assert.match(
       receivedPrompt,
-      /keep the FixLab-owned frontend running/
+      /Manual React localhost validation is enabled independently of Playwright/
     );
     assert.match(receivedPrompt, /manual confirmation is pending/);
     assert.match(receivedPrompt, /users\/fixlab-test/);
@@ -1778,7 +1822,7 @@ test("dashboard recovers an orphaned running job as failed and resumable", async
   }
 });
 
-test("dashboard recovery preserves a completed manual live-test hold", async () => {
+test("dashboard recovery preserves a completed manual localhost gate", async () => {
   const repository = createGitRepository();
   const executor = ({ onOutput }) => {
     for (const stage of FIXLAB_STAGES) {
@@ -1803,10 +1847,10 @@ test("dashboard recovery preserves a completed manual live-test hold", async () 
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        request: "Retain this manual live-test hold after restart.",
+        request: "Retain this manual localhost gate after restart.",
         requestType: "bug-fix",
         mode: "validate-only",
-        holdForManualLiveTest: true
+        manualLocalhostTest: true
       })
     });
     jobId = started.body.job.id;
@@ -1821,6 +1865,11 @@ test("dashboard recovery preserves a completed manual live-test hold", async () 
     const status = await jsonRequest(second.url, "/api/status");
     assert.equal(status.body.job.id, jobId);
     assert.equal(status.body.job.status, "blocked");
+    assert.equal(status.body.job.manualLocalhostTest, true);
+    assert.equal(
+      status.body.job.manualLocalhostUrl,
+      "http://127.0.0.1:3000"
+    );
     assert.equal(status.body.job.canResume, true);
     assert.equal(status.body.job.stages["live-test"].status, "blocked");
     assert.equal(status.body.job.error, null);
@@ -2420,7 +2469,7 @@ test("terminal chat creates a separate bug job from natural language", async () 
     pullRequestStrategy: "common",
     runAllUiScenarios: false,
     recordPlaywrightVideo: false,
-    holdForManualLiveTest: false
+    manualLocalhostTest: false
   });
   assert.match(output, /New bug queued as job new-bug-job/);
 });

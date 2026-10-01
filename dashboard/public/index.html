@@ -101,10 +101,10 @@
             <label><input type="checkbox" name="separatePullRequests"> Create a separate PR per bug</label>
             <label><input type="checkbox" name="runAllUiScenarios"> Run UI tests for all scenarios at the end</label>
             <label><input type="checkbox" name="recordPlaywrightVideo"> Record Playwright video evidence</label>
-            <label><input type="checkbox" name="holdForManualLiveTest"> Hold after Playwright for manual local testing</label>
+            <label><input type="checkbox" name="manualLocalhostTest"> Open React localhost for manual validation</label>
           </fieldset>
           <p class="guidance">By default, FixLab implements all selected bug fixes first, runs shared validation once, and prepares one common PR. Select separate PRs to isolate each bug's fix and evidence.</p>
-          <p class="guidance">When manual local testing is selected, FixLab keeps its local frontend running after Playwright and pauses before PR creation until you provide the manual result.</p>
+          <p class="guidance">Manual localhost validation is separate from Playwright. FixLab opens the healthy profile-defined React frontend in your default browser, keeps it running, and pauses before completion until you confirm Passed or Failed.</p>
           <p class="guidance">Video evidence records only the application journey and remains local under repository-owned Playwright artifact directories. Screenshots are still required for lightweight review evidence.</p>
           <p class="guidance">Playwright validation only skips source diagnosis, implementation, review, and pull-request work. It performs required profile setup, reuses browser authentication, starts required applications, and runs the focused browser journey.</p>
           <button id="start-button" type="submit">Start job</button>

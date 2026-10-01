@@ -43,6 +43,37 @@ export const MAX_METRICS_ENTRIES = 500;
 export const MAX_DASHBOARD_HISTORY_ENTRIES = 20;
 export const MAX_QUEUED_JOBS = 20;
 export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
+
+export function openLocalUrl(
+  value,
+  { platform = process.platform, spawnImpl = spawn } = {}
+) {
+  const url = new URL(value);
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    !["localhost", "127.0.0.1"].includes(url.hostname)
+  ) {
+    throw new Error("manual localhost URL must use HTTP(S) on loopback");
+  }
+
+  const launchers = {
+    win32: ["explorer.exe", [url.href]],
+    darwin: ["open", [url.href]],
+    linux: ["xdg-open", [url.href]]
+  };
+  const launcher = launchers[platform];
+  if (!launcher) {
+    throw new Error(`opening a browser is not supported on ${platform}`);
+  }
+  const child = spawnImpl(launcher[0], launcher[1], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true
+  });
+  child.once?.("error", () => {});
+  child.unref?.();
+  return child;
+}
 export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 export const DEFAULT_EXECUTION_HEARTBEAT_MS = 2 * 60 * 1000;
@@ -318,8 +349,9 @@ function publicQueue(jobs) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
-    holdForManualLiveTest: job.holdForManualLiveTest,
-    manualLiveTestUrl: job.manualLiveTestUrl,
+    manualLocalhostTest: job.manualLocalhostTest,
+    manualLocalhostUrl: job.manualLocalhostUrl,
+    manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     mode: job.mode,
@@ -354,8 +386,9 @@ function dashboardSnapshot(job) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
-    holdForManualLiveTest: job.holdForManualLiveTest,
-    manualLiveTestUrl: "",
+    manualLocalhostTest: job.manualLocalhostTest,
+    manualLocalhostUrl: "",
+    manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
     testEvidence: {
       enabled: job.testEvidence.enabled,
       source: job.testEvidence.source,
@@ -399,6 +432,13 @@ function restoreDashboardJob(snapshot, repository) {
   const profile = loadRepositoryProfile(repository);
   const restored = {
     ...snapshot,
+    manualLocalhostTest:
+      snapshot.manualLocalhostTest ??
+      snapshot.holdForManualLiveTest ??
+      false,
+    manualLocalhostUrl:
+      profile.applications?.frontend?.healthUrl ?? "",
+    manualLocalhostOpenedAt: snapshot.manualLocalhostOpenedAt ?? null,
     workItem: snapshot.workItem ?? null,
     workItems: snapshot.workItems ?? [],
     screenshots: [],
@@ -427,9 +467,8 @@ function restoreDashboardJob(snapshot, repository) {
     runAllUiScenarios: restored.runAllUiScenarios,
     targetEnvironment: restored.targetEnvironment,
     recordPlaywrightVideo: restored.recordPlaywrightVideo,
-    holdForManualLiveTest: restored.holdForManualLiveTest,
-    manualLiveTestUrl:
-      profile.applications?.frontend?.healthUrl ?? "",
+    manualLocalhostTest: restored.manualLocalhostTest,
+    manualLocalhostUrl: restored.manualLocalhostUrl,
     testEvidence: restored.testEvidence,
     branchNaming: restored.branchNaming,
     intakeSource: restored.intakeSource,
@@ -626,8 +665,8 @@ export function buildJobPrompt({
   runAllUiScenarios = false,
   targetEnvironment = "",
   recordPlaywrightVideo = false,
-  holdForManualLiveTest = false,
-  manualLiveTestUrl = "",
+  manualLocalhostTest = false,
+  manualLocalhostUrl = "",
   testEvidence = {
     enabled: true,
     source: "profile-defined",
@@ -702,10 +741,11 @@ export function buildJobPrompt({
 - Save the recording as WebM or MP4 under the repository-owned test-results, playwright-report, or artifacts directory. Keep it under 50 MiB and capture only the application surface: no credentials, browser profiles, personal windows, or unrelated data.
 - Keep the required screenshot evidence as the lightweight review artifact. If recording is unavailable, report that limitation explicitly instead of claiming video evidence exists.`
     : "- Playwright video recording was not requested. Preserve the required screenshot evidence and any repository-default traces.";
-  const manualLiveTestGuidance = holdForManualLiveTest
-    ? `- After automated Playwright finishes successfully, keep the FixLab-owned frontend running at ${manualLiveTestUrl || "the profile-defined local health URL"} for manual local-mode testing.
-- The user explicitly requested this hold, so the owned frontend process may remain running after the agent turn. Record its process identity and never stop an unrelated process.
-- Emit live-test blocked with the successful Playwright result and local URL. If an authorized draft PR already exists, update it with the pending manual gate and keep it draft; otherwise emit pr skipped because manual confirmation is pending.
+  const manualLocalhostGuidance = manualLocalhostTest
+    ? `- Manual React localhost validation is enabled independently of Playwright. After required automated validation finishes, start or reuse only the profile-defined frontend and wait for its health check at ${manualLocalhostUrl || "the profile-defined local health URL"}.
+- Emit local-stack passed only after the React frontend is healthy. The dashboard will then open the localhost URL in the user's default browser.
+- Keep the FixLab-owned frontend running and emit live-test blocked with the local URL and an exact request for the user to confirm Passed or Failed. Do not run or rerun Playwright solely because this manual option is enabled.
+- If an authorized draft PR already exists, keep it draft with the manual gate pending; otherwise emit pr skipped because manual confirmation is pending.
 - When the dashboard resumes this session with the user's manual result, mark live-test passed or failed accordingly, stop only the retained FixLab-owned frontend process, and continue to the gated PR outcome.`
     : "- Stop FixLab-owned applications after automated browser validation unless another explicit workflow requirement needs them.";
   const branchNamingGuidance = branchNaming
@@ -731,7 +771,7 @@ Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
 Selected validation environment: ${targetEnvironment || "profile-defined"}
 Record Playwright video evidence: ${recordPlaywrightVideo ? "yes" : "no"}
-Hold for manual local testing after Playwright: ${holdForManualLiveTest ? "yes" : "no"}
+Open React localhost for manual validation: ${manualLocalhostTest ? "yes" : "no"}
 Test synthesis: ${testEvidence.enabled ? "enabled" : "disabled"}
 Configured test data source: ${testEvidence.source}
 Configured mutation mode: ${testEvidence.mutationMode}
@@ -761,7 +801,7 @@ ${pullRequestGuidance}
 ${uiScenarioGuidance}
 ${environmentGuidance}
 ${videoGuidance}
-${manualLiveTestGuidance}
+${manualLocalhostGuidance}
 ${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
@@ -1438,8 +1478,9 @@ function publicJob(job) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
-    holdForManualLiveTest: job.holdForManualLiveTest,
-    manualLiveTestUrl: job.manualLiveTestUrl,
+    manualLocalhostTest: job.manualLocalhostTest,
+    manualLocalhostUrl: job.manualLocalhostUrl,
+    manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
@@ -2120,6 +2161,7 @@ export function createDashboardServer({
   publicDirectory = join(packageRoot, "dashboard", "public"),
   executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader(),
+  browserOpener = openLocalUrl,
   executionIdleTimeoutMs,
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
@@ -2297,7 +2339,33 @@ export function createDashboardServer({
       onOutput(stream, text) {
         job.lastActivityAt = new Date().toISOString();
         armIdleWatchdog();
+        const localStackWasReady =
+          job.stages["local-stack"].status === "passed";
         appendOutput(job, stream, text);
+        if (
+          job.manualLocalhostTest &&
+          !job.manualLocalhostOpenedAt &&
+          !localStackWasReady &&
+          job.stages["local-stack"].status === "passed"
+        ) {
+          job.manualLocalhostOpenedAt = new Date().toISOString();
+          try {
+            browserOpener(job.manualLocalhostUrl);
+            pushLog(job, {
+              index: job.nextLogIndex,
+              timestamp: job.manualLocalhostOpenedAt,
+              stream: "dashboard",
+              message: `Opened React localhost for manual validation: ${job.manualLocalhostUrl}`
+            });
+          } catch (error) {
+            pushLog(job, {
+              index: job.nextLogIndex,
+              timestamp: job.manualLocalhostOpenedAt,
+              stream: "dashboard",
+              message: `Could not open React localhost automatically: ${error.message}`
+            });
+          }
+        }
       }
     });
     activeHandle = handle;
@@ -2917,15 +2985,17 @@ export function createDashboardServer({
         sendJson(response, 400, { error: error.message });
         return;
       }
-      const holdForManualLiveTest =
-        body.holdForManualLiveTest ?? false;
-      if (typeof holdForManualLiveTest !== "boolean") {
+      const manualLocalhostTest =
+        body.manualLocalhostTest ??
+        body.holdForManualLiveTest ??
+        false;
+      if (typeof manualLocalhostTest !== "boolean") {
         sendJson(response, 400, {
-          error: "holdForManualLiveTest must be a boolean"
+          error: "manualLocalhostTest must be a boolean"
         });
         return;
       }
-      const manualLiveTestUrl =
+      const manualLocalhostUrl =
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       const testEvidence = configuredTestSynthesis(repositoryProfile);
       const configuredBranchNaming =
@@ -3051,8 +3121,9 @@ export function createDashboardServer({
         runAllUiScenarios,
         targetEnvironment,
         recordPlaywrightVideo,
-        holdForManualLiveTest,
-        manualLiveTestUrl,
+        manualLocalhostTest,
+        manualLocalhostUrl,
+        manualLocalhostOpenedAt: null,
         testEvidence,
         branchNaming,
         intakeSource,
@@ -3097,8 +3168,8 @@ export function createDashboardServer({
         runAllUiScenarios,
         targetEnvironment,
         recordPlaywrightVideo,
-        holdForManualLiveTest,
-        manualLiveTestUrl,
+        manualLocalhostTest,
+        manualLocalhostUrl,
         testEvidence,
         branchNaming,
         intakeSource,
