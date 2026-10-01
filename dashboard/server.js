@@ -467,7 +467,14 @@ function restoreDashboardJob(snapshot, repository) {
       false,
     manualLocalhostUrl,
     manualLocalhostOpenedAt: snapshot.manualLocalhostOpenedAt ?? null,
-    manualLocalhostPending: snapshot.manualLocalhostPending ?? false,
+    manualLocalhostPending:
+      snapshot.manualLocalhostPending ??
+      (Boolean(
+        snapshot.manualLocalhostTest ??
+        snapshot.holdForManualLiveTest
+      ) &&
+        snapshot.stages?.["live-test"]?.status === "blocked" &&
+        !snapshot.manualLocalhostResult),
     manualLocalhostResult: snapshot.manualLocalhostResult ?? null,
     workItem: snapshot.workItem ?? null,
     workItems: snapshot.workItems ?? [],
@@ -490,13 +497,15 @@ function restoreDashboardJob(snapshot, repository) {
     partial: { stdout: "", stderr: "" }
   };
   if (manualLocalhostProfileError) {
-    const message =
-      "Manual localhost validation cannot resume because the profile frontend health URL is no longer a safe credential-free loopback URL.";
-    restored.status = "failed";
-    restored.error = message;
     restored.resumeDisabled = true;
     restored.manualLocalhostPending = false;
-    restored.stages["live-test"] = { status: "failed", message };
+    if (!restored.manualLocalhostResult) {
+      const message =
+        "Manual localhost validation cannot resume because the profile frontend health URL is no longer a safe credential-free loopback URL.";
+      restored.status = "failed";
+      restored.error = message;
+      restored.stages["live-test"] = { status: "failed", message };
+    }
   }
   restored.initialPrompt = buildJobPrompt({
     request: restored.request,

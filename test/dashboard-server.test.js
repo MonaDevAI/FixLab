@@ -109,6 +109,16 @@ test("local browser opener accepts only credential-free loopback URLs", async ()
       }),
     /credential-free HTTP\(S\) on loopback/
   );
+  assert.throws(
+    () =>
+      openLocalUrl("https://example.com", {
+        platform: "win32",
+        spawnImpl() {
+          throw new Error("should not launch");
+        }
+      }),
+    /credential-free HTTP\(S\) on loopback/
+  );
 
   const failedChild = new EventEmitter();
   failedChild.unref = () => {};
@@ -2055,6 +2065,15 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     await first.dashboard.close();
   }
 
+  const historyPath = join(
+    dirname(createCacheContext(repository).cachePath),
+    "dashboard-jobs.json"
+  );
+  const legacyHistory = JSON.parse(readFileSync(historyPath, "utf8"));
+  delete legacyHistory.jobs.find((job) => job.id === jobId)
+    .manualLocalhostPending;
+  writeFileSync(historyPath, JSON.stringify(legacyHistory, null, 2));
+
   let resumedPrompt = "";
   const second = await startDashboard(repository, ({ prompt, onOutput }) => {
     resumedPrompt = prompt;
@@ -2109,13 +2128,27 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
     await second.dashboard.close();
   }
 
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+  profile.applications.frontend.healthUrl =
+    "http://user:password@localhost:3000";
+  writeFileSync(profilePath, JSON.stringify(profile, null, 2));
+
   const third = await startDashboard(repository, () => {
     throw new Error("executor should not run while restoring accepted evidence");
   });
   try {
     const restored = await jsonRequest(third.url, "/api/status");
+    assert.equal(restored.body.job.status, "passed");
+    assert.equal(restored.body.job.canResume, false);
     assert.equal(restored.body.job.manualLocalhostPending, false);
     assert.equal(restored.body.job.manualLocalhostResult, "passed");
+    assert.equal(restored.body.job.manualLocalhostUrl, "");
   } finally {
     await third.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
