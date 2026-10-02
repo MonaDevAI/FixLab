@@ -58,9 +58,10 @@ that job.
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the
 packaged Agency plugin, and retains one active job plus a bounded 20-job
-pending queue. It also writes the latest 20 private job summaries to the shared
-Git directory so bug outcomes and pull-request readiness remain visible after
-a dashboard update or restart. It is not the durable, authenticated team broker
+pending queue and a separate persisted held-job collection. It also writes the
+latest 20 private job summaries to the shared Git directory so bug outcomes,
+held workflow state, and pull-request readiness remain visible after a
+dashboard update or restart. It is not the durable, authenticated team broker
 described below.
 
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
@@ -164,9 +165,10 @@ base64 encoding, signature, per-file size, and total size. Generated local
 files live under the Git directory or a repository-specific OS temporary
 directory. Only their local paths are placed in the job prompt.
 
-Artifacts belong to active or queued dashboard jobs. Replacing a completed
-active job removes its files, clean shutdown removes active and queued files,
-and startup prunes directories older than seven days. Abrupt process
+Artifacts belong to active, queued, or held dashboard jobs. Holding a job keeps
+its artifacts available while the dashboard remains running. Replacing a
+completed active job removes its files, clean shutdown removes registered job
+files, and startup prunes directories older than seven days. Abrupt process
 termination can retain artifacts until the next pruning pass.
 
 Each job receives a UUID-backed session from the selected runtime. When the
@@ -196,6 +198,21 @@ Waiting jobs can be removed by queue position or job ID before execution. The
 dashboard records the job as cancelled, deletes only its FixLab-owned
 screenshot artifacts, renumbers the remaining queue, and never interrupts the
 active executor.
+An active job can instead be held. The dashboard marks it `holding`, stops only
+the executor owned by that job, flushes bounded partial output, persists it as
+`held`, and immediately advances the waiting queue. Blocked, failed, and
+waiting jobs can be held without launching an executor. Resuming a previously
+started held job reuses its UUID runtime session and retained workflow stage;
+resuming a held waiting job returns it to normal first-launch queue semantics.
+A terminal passed, failed, blocked, or cancelled job can be restarted as a new
+job with a new ID and runtime session while the original outcome remains in
+history.
+
+Age-based cleanup accepts a whole number of days and removes only terminal
+passed, failed, blocked, or cancelled summaries older than that cutoff. It can
+remove a terminal current summary as well as retained history, but never
+deletes an active, waiting, or held job. FixLab removes only the purged jobs'
+owned artifact directories and does not mutate repository source.
 During execution, the agent can emit bounded `FIXLAB_ACTIVITY` evidence and
 decision summaries. The dashboard shows these summaries in a separate Agent
 analysis panel so users can follow what was checked, what the evidence means,
@@ -206,13 +223,14 @@ panel so expected command latency is distinguishable from a stalled session.
 Heartbeats do not count as executor output and do not reset the profile-defined
 idle watchdog. Activity is retained only in the active in-memory job and is
 excluded from persisted dashboard history.
-The dashboard job list is read-only selectable. Selecting an active, queued,
-or recently completed job changes only the displayed roadmap and evidence; it
-does not reorder, start, stop, or resume execution. The local server retains
-up to 20 job summaries in `.git/fixlab/dashboard-jobs.json` for this view. The
-private file contains request summaries, bug identities and outcomes, stage
-summaries, and pull-request readiness, but no raw logs, screenshots,
-credentials, authentication state, or source content.
+The dashboard job list includes active, queued, held, and recently completed
+jobs. Selecting a job changes the displayed roadmap and evidence and enables
+only lifecycle actions valid for its current state; selection alone never
+changes execution. The local server retains up to 20 job summaries in
+`.git/fixlab/dashboard-jobs.json` for this view. The private file contains
+request summaries, bug identities and outcomes, stage summaries, held state,
+and pull-request readiness, but no raw logs, screenshots, credentials,
+authentication state, or source content.
 
 ## Context and token efficiency
 

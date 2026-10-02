@@ -380,6 +380,14 @@ function publicQueue(jobs) {
   }));
 }
 
+function publicHeld(jobs) {
+  return jobs.map((job) => ({
+    ...publicJob(job),
+    activity: [],
+    logs: []
+  }));
+}
+
 function publicHistory(jobs) {
   return jobs.map((job) => ({
     ...publicJob(job),
@@ -422,6 +430,7 @@ function dashboardSnapshot(job) {
     status: job.status,
     createdAt: job.createdAt,
     startedAt: job.startedAt,
+    heldAt: job.heldAt ?? null,
     finishedAt: job.finishedAt,
     lastActivityAt: job.lastActivityAt,
     error: job.error ? safePersistedSummary(job.error) : null,
@@ -496,6 +505,9 @@ function restoreDashboardJob(snapshot, repository) {
     cacheContext: createCacheContext(repository),
     partial: { stdout: "", stderr: "" }
   };
+  restored.heldAt = snapshot.heldAt ?? null;
+  restored.holdRequested = false;
+  restored.resumeSession = false;
   if (manualLocalhostProfileError) {
     restored.resumeDisabled = true;
     restored.manualLocalhostPending = false;
@@ -532,6 +544,15 @@ export function recoverInterruptedDashboardJob(
   snapshot,
   recoveredAt = new Date().toISOString()
 ) {
+  if (snapshot?.status === "holding") {
+    return {
+      ...snapshot,
+      status: "held",
+      heldAt: snapshot.heldAt ?? recoveredAt,
+      finishedAt: null,
+      error: null
+    };
+  }
   if (snapshot?.status !== "running") {
     return snapshot;
   }
@@ -1549,14 +1570,16 @@ function publicJob(job) {
     error: job.error,
     canResume:
       !job.resumeDisabled &&
-      ["blocked", "failed", "passed"].includes(job.status),
+      ["blocked", "failed", "passed", "held"].includes(job.status),
     canComment: job.status === "running",
     inputCount: job.inputs.length,
     pendingInputCount: job.pendingInputs.length,
     durationMs: Math.max(
       0,
       job.startedAt
-        ? Date.parse(job.finishedAt ?? new Date().toISOString()) -
+        ? Date.parse(
+            job.finishedAt ?? job.heldAt ?? new Date().toISOString()
+          ) -
             Date.parse(job.startedAt)
         : 0
     ),
@@ -1894,12 +1917,7 @@ function pushActivity(job, entry) {
 }
 
 function finishJob(job, result) {
-  for (const stream of ["stdout", "stderr"]) {
-    if (job.partial[stream]) {
-      appendLine(job, stream, job.partial[stream]);
-      job.partial[stream] = "";
-    }
-  }
+  flushPartialOutput(job);
 
   if (
     job.testEvidence.enabled &&
@@ -1970,6 +1988,34 @@ function finishJob(job, result) {
       : "failed";
   job.finishedAt = new Date().toISOString();
   writeCacheSummary(job.cacheContext, job);
+}
+
+function flushPartialOutput(job) {
+  for (const stream of ["stdout", "stderr"]) {
+    if (job.partial[stream]) {
+      appendLine(job, stream, job.partial[stream]);
+      job.partial[stream] = "";
+    }
+  }
+}
+
+function holdJob(job) {
+  flushPartialOutput(job);
+  const activeStage =
+    FIXLAB_STAGES.find((stage) => job.stages[stage].status === "running") ??
+    FIXLAB_STAGES.find((stage) => !terminalStatuses.has(job.stages[stage].status));
+  if (activeStage) {
+    job.stages[activeStage] = {
+      status: "blocked",
+      message: "Held by the user; resume continues from this stage."
+    };
+  }
+  job.status = "held";
+  job.heldAt = new Date().toISOString();
+  job.lastActivityAt = job.heldAt;
+  job.finishedAt = null;
+  job.error = null;
+  job.holdRequested = false;
 }
 
 function buildResumePrompt(job, { action, details }) {
@@ -2221,10 +2267,21 @@ function resetJobForResume(job) {
   const restartIndex =
     job.status === "passed"
       ? FIXLAB_STAGES.indexOf("diagnosis")
+      : job.status === "held"
+        ? Math.max(
+            0,
+            FIXLAB_STAGES.findIndex((stage) =>
+              ["blocked", "failed", "running", "pending"].includes(
+                job.stages[stage].status
+              )
+            )
+          )
       : Math.max(
           0,
           FIXLAB_STAGES.findIndex((stage) =>
-            ["blocked", "failed"].includes(job.stages[stage].status)
+            ["blocked", "failed", "running"].includes(
+              job.stages[stage].status
+            )
           )
         );
   for (const stage of FIXLAB_STAGES.slice(restartIndex)) {
@@ -2236,6 +2293,7 @@ function resetJobForResume(job) {
     bug.summary = "";
   }
   job.status = "running";
+  job.heldAt = null;
   job.finishedAt = null;
   job.error = null;
   job.partial = { stdout: "", stderr: "" };
@@ -2256,6 +2314,7 @@ export function createDashboardServer({
   let currentJob = null;
   let activeHandle = null;
   const queuedJobs = [];
+  const heldJobs = [];
   const completedJobs = [];
   const artifactDirectories = new Set();
   const playwrightConnection = { handle: null, lastResult: null };
@@ -2275,6 +2334,10 @@ export function createDashboardServer({
     recoverInterruptedDashboardJob(job)
   );
   let dashboardHistoryWarning = loadedDashboardHistory.warning;
+  for (const snapshot of persistedJobs.filter((job) => job.status === "held")) {
+    heldJobs.push(restoreDashboardJob(snapshot, resolvedRepository));
+  }
+  persistedJobs = persistedJobs.filter((job) => job.status !== "held");
   const resumableSnapshot = persistedJobs.find((job) =>
     ["blocked", "failed", "passed"].includes(job.status)
   );
@@ -2292,6 +2355,7 @@ export function createDashboardServer({
     const liveIds = new Set([
       currentJob?.id,
       ...queuedJobs.map((job) => job.id),
+      ...heldJobs.map((job) => job.id),
       ...completedJobs.map((job) => job.id)
     ]);
     return [
@@ -2304,6 +2368,7 @@ export function createDashboardServer({
     const snapshots = [
       ...(currentJob ? [dashboardSnapshot(currentJob)] : []),
       ...queuedJobs.map(dashboardSnapshot),
+      ...heldJobs.map(dashboardSnapshot),
       ...completedJobs.map(dashboardSnapshot),
       ...persistedJobs
     ];
@@ -2344,6 +2409,85 @@ export function createDashboardServer({
     }
     completedJobs.unshift(job);
     completedJobs.splice(20);
+  }
+
+  function retireCurrentJob() {
+    if (!currentJob) {
+      return;
+    }
+    if (currentJob.artifactDirectory) {
+      removeArtifactDirectory(currentJob.artifactDirectory);
+      artifactDirectories.delete(currentJob.artifactDirectory);
+    }
+    archiveJob(currentJob);
+    currentJob = null;
+  }
+
+  function retainedJob(jobId) {
+    return [
+      currentJob,
+      ...queuedJobs,
+      ...heldJobs,
+      ...completedJobs,
+      ...persistedJobs
+    ].find((job) => job?.id === jobId);
+  }
+
+  function createRestartedJob(source, status) {
+    const sourceJob = source.screenshots
+      ? source
+      : restoreDashboardJob(source, resolvedRepository);
+    const createdAt = new Date().toISOString();
+    const snapshot = {
+      ...dashboardSnapshot(sourceJob),
+      id: randomUUID(),
+      status,
+      createdAt,
+      startedAt: status === "running" ? createdAt : null,
+      heldAt: null,
+      finishedAt: null,
+      lastActivityAt: status === "running" ? createdAt : null,
+      error: null,
+      manualLocalhostOpenedAt: null,
+      manualLocalhostPending: false,
+      manualLocalhostResult: null,
+      testEvidence: configuredTestSynthesis(
+        loadRepositoryProfile(resolvedRepository)
+      ),
+      stages: Object.fromEntries(
+        FIXLAB_STAGES.map((stage) => [
+          stage,
+          { status: "pending", message: "" }
+        ])
+      ),
+      bugs: (sourceJob.bugs ?? []).map((bug) => ({
+        id: bug.id,
+        outcome: "pending",
+        owner: "",
+        summary: ""
+      }))
+    };
+    const restarted = restoreDashboardJob(snapshot, resolvedRepository);
+    restarted.pendingPrompt = restarted.initialPrompt;
+    return restarted;
+  }
+
+  function moveHeldJob(job) {
+    holdJob(job);
+    if (!heldJobs.some((candidate) => candidate.id === job.id)) {
+      heldJobs.unshift(job);
+    }
+    recordJobMetric(job);
+  }
+
+  function purgeableJob(job, cutoff) {
+    if (!["passed", "failed", "blocked", "cancelled"].includes(job.status)) {
+      return false;
+    }
+    const timestamp = Date.parse(
+      job.finishedAt ?? job.lastActivityAt ?? job.createdAt
+    );
+    return Number.isFinite(timestamp) && timestamp < cutoff;
   }
 
   function startJob(job, prompt, resume = false) {
@@ -2468,11 +2612,19 @@ export function createDashboardServer({
     heartbeatTimer.unref?.();
     Promise.race([Promise.resolve(handle.completion), idleCompletion])
       .then((result) => {
-        finishJob(job, result);
+        if (job.holdRequested) {
+          holdJob(job);
+        } else {
+          finishJob(job, result);
+        }
         recordJobMetric(job);
       })
       .catch((error) => {
-        finishJob(job, { code: null, error });
+        if (job.holdRequested) {
+          holdJob(job);
+        } else {
+          finishJob(job, { code: null, error });
+        }
         recordJobMetric(job);
       })
       .finally(() => {
@@ -2480,6 +2632,17 @@ export function createDashboardServer({
         clearInterval(heartbeatTimer);
         if (activeHandle === handle) {
           activeHandle = null;
+        }
+        if (job.status === "held") {
+          if (currentJob?.id === job.id) {
+            currentJob = null;
+          }
+          if (!heldJobs.some((candidate) => candidate.id === job.id)) {
+            heldJobs.unshift(job);
+          }
+          persistDashboardState();
+          startNextJob();
+          return;
         }
         if (job.pendingInputs.length > 0) {
           const pendingInputs = job.pendingInputs.splice(0);
@@ -2523,12 +2686,17 @@ export function createDashboardServer({
     archiveJob(currentJob);
     currentJob = queuedJobs.shift();
     currentJob.status = "running";
-    currentJob.startedAt = new Date().toISOString();
-    currentJob.lastActivityAt = currentJob.startedAt;
+    currentJob.startedAt ??= new Date().toISOString();
+    currentJob.lastActivityAt = new Date().toISOString();
     recordJobMetric(currentJob);
     try {
-      startJob(currentJob, currentJob.pendingPrompt);
+      startJob(
+        currentJob,
+        currentJob.pendingPrompt,
+        Boolean(currentJob.resumeSession)
+      );
       delete currentJob.pendingPrompt;
+      delete currentJob.resumeSession;
     } catch (error) {
       finishJob(currentJob, { code: null, error });
       recordJobMetric(currentJob);
@@ -2548,6 +2716,7 @@ export function createDashboardServer({
         readiness: inspectRepository(resolvedRepository),
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
         history: dashboardHistory(),
         historyWarning: dashboardHistoryWarning
       });
@@ -2559,6 +2728,7 @@ export function createDashboardServer({
       sendJson(response, 200, {
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
         history: dashboardHistory(),
         historyWarning: dashboardHistoryWarning
       });
@@ -2766,6 +2936,7 @@ export function createDashboardServer({
         job: publicJob(currentJob),
         dismissedJob: publicJob(dismissedJob),
         queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
         history: dashboardHistory()
       });
       return;
@@ -2850,13 +3021,17 @@ export function createDashboardServer({
       }
       const submittedDetails =
         typeof body.details === "string" ? body.details.trim() : "";
+      const defaultDetails =
+        action === "continue"
+          ? "Resume the same FixLab session from its retained workflow state and continue the remaining required stages."
+          : "";
       const details = manualResult
         ? `The user completed manual React localhost validation and explicitly marked it ${
             action === "manual-pass" ? "passed" : "failed"
           }. Record the live-test stage as ${
             action === "manual-pass" ? "passed" : "failed"
           }, stop only the FixLab-owned frontend process, preserve this manual result in the job evidence, and continue the remaining gated outcome without rerunning Playwright.`
-        : submittedDetails;
+        : submittedDetails || defaultDetails;
       if (!details || details.length > 10000) {
         sendJson(response, 400, {
           error: "details must be a non-empty string of at most 10000 characters"
@@ -2892,7 +3067,8 @@ export function createDashboardServer({
         sendJson(response, 202, {
           job: publicJob(currentJob),
           queued: true,
-          queue: publicQueue(queuedJobs)
+          queue: publicQueue(queuedJobs),
+          held: publicHeld(heldJobs)
         });
         return;
       }
@@ -2917,7 +3093,8 @@ export function createDashboardServer({
       }
       sendJson(response, 202, {
         job: publicJob(currentJob),
-        queue: publicQueue(queuedJobs)
+        queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs)
       });
       return;
     }
@@ -3029,6 +3206,338 @@ export function createDashboardServer({
         job: publicJob(currentJob),
         cancelledJob: publicJob(cancelledJob),
         queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
+        history: dashboardHistory()
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/jobs/hold"
+    ) {
+      let body;
+      try {
+        if (
+          !request.headers["content-type"]
+            ?.toLowerCase()
+            .startsWith("application/json")
+        ) {
+          throw new Error("Content-Type must be application/json");
+        }
+        body = await readJsonBody(request);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      const jobId =
+        typeof body.jobId === "string" ? body.jobId.trim() : "";
+      if (!jobId) {
+        sendJson(response, 400, { error: "jobId must be a non-empty string" });
+        return;
+      }
+      if (heldJobs.some((job) => job.id === jobId)) {
+        sendJson(response, 409, { error: "FixLab job is already held" });
+        return;
+      }
+      if (currentJob?.id === jobId) {
+        if (currentJob.status === "running" && activeHandle?.terminate) {
+          currentJob.holdRequested = true;
+          currentJob.status = "holding";
+          pushLog(currentJob, {
+            index: currentJob.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message:
+              "Hold requested; stopping only this job's FixLab-owned executor."
+          });
+          try {
+            activeHandle.terminate();
+          } catch (error) {
+            currentJob.holdRequested = false;
+            currentJob.status = "running";
+            sendJson(response, 500, {
+              error: `could not hold the FixLab-owned executor: ${error.message}`
+            });
+            return;
+          }
+          persistDashboardState();
+          sendJson(response, 202, {
+            job: publicJob(currentJob),
+            holding: true,
+            queue: publicQueue(queuedJobs),
+            held: publicHeld(heldJobs)
+          });
+          return;
+        }
+        if (!["blocked", "failed"].includes(currentJob.status)) {
+          sendJson(response, 409, {
+            error: "only running, blocked, failed, or queued jobs can be held"
+          });
+          return;
+        }
+        const heldJob = currentJob;
+        currentJob = null;
+        moveHeldJob(heldJob);
+        startNextJob();
+        sendJson(response, 202, {
+          job: publicJob(currentJob),
+          heldJob: publicJob(heldJob),
+          queue: publicQueue(queuedJobs),
+          held: publicHeld(heldJobs),
+          history: dashboardHistory()
+        });
+        return;
+      }
+      const queueIndex = queuedJobs.findIndex((job) => job.id === jobId);
+      if (queueIndex < 0) {
+        sendJson(response, 404, { error: "active or queued FixLab job not found" });
+        return;
+      }
+      const [heldJob] = queuedJobs.splice(queueIndex, 1);
+      moveHeldJob(heldJob);
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        heldJob: publicJob(heldJob),
+        queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
+        history: dashboardHistory()
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/jobs/resume"
+    ) {
+      let body;
+      try {
+        if (
+          !request.headers["content-type"]
+            ?.toLowerCase()
+            .startsWith("application/json")
+        ) {
+          throw new Error("Content-Type must be application/json");
+        }
+        body = await readJsonBody(request);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      const jobId =
+        typeof body.jobId === "string" ? body.jobId.trim() : "";
+      const heldIndex = heldJobs.findIndex((job) => job.id === jobId);
+      if (heldIndex < 0) {
+        sendJson(response, 404, { error: "held FixLab job not found" });
+        return;
+      }
+      if (queuedJobs.length >= MAX_QUEUED_JOBS) {
+        sendJson(response, 409, {
+          error: `the FixLab queue already contains ${MAX_QUEUED_JOBS} jobs`
+        });
+        return;
+      }
+      const [job] = heldJobs.splice(heldIndex, 1);
+      const resumeSession = Boolean(job.startedAt);
+      const pendingDetails = job.pendingInputs
+        .splice(0)
+        .map((input) => input.details)
+        .join("\n\n");
+      const prompt = resumeSession
+        ? buildResumePrompt(job, {
+            action: "continue",
+            details:
+              pendingDetails ||
+              "Resume this held job from its retained workflow stage."
+          })
+        : job.pendingPrompt ?? job.initialPrompt;
+      resetJobForResume(job);
+      const shouldQueue =
+        Boolean(activeHandle) ||
+        Boolean(currentJob && currentJob.status !== "passed") ||
+        queuedJobs.length > 0;
+      if (!shouldQueue) {
+        retireCurrentJob();
+        currentJob = job;
+        currentJob.startedAt ??= new Date().toISOString();
+        currentJob.lastActivityAt = new Date().toISOString();
+        recordJobMetric(currentJob);
+        try {
+          startJob(currentJob, prompt, resumeSession);
+        } catch (error) {
+          finishJob(currentJob, { code: null, error });
+          recordJobMetric(currentJob);
+          activeHandle = null;
+        }
+      } else {
+        job.status = "queued";
+        job.pendingPrompt = prompt;
+        job.resumeSession = resumeSession;
+        queuedJobs.push(job);
+        recordJobMetric(job);
+      }
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        resumedJob: shouldQueue ? publicQueue([job])[0] : publicJob(job),
+        queued: shouldQueue,
+        queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
+        history: dashboardHistory()
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/jobs/restart"
+    ) {
+      let body;
+      try {
+        if (
+          !request.headers["content-type"]
+            ?.toLowerCase()
+            .startsWith("application/json")
+        ) {
+          throw new Error("Content-Type must be application/json");
+        }
+        body = await readJsonBody(request);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      const jobId =
+        typeof body.jobId === "string" ? body.jobId.trim() : "";
+      const source = retainedJob(jobId);
+      if (!source) {
+        sendJson(response, 404, { error: "retained FixLab job not found" });
+        return;
+      }
+      if (!["passed", "failed", "blocked", "cancelled"].includes(source.status)) {
+        sendJson(response, 409, {
+          error: "only terminal FixLab jobs can be restarted"
+        });
+        return;
+      }
+      if (queuedJobs.length >= MAX_QUEUED_JOBS) {
+        sendJson(response, 409, {
+          error: `the FixLab queue already contains ${MAX_QUEUED_JOBS} jobs`
+        });
+        return;
+      }
+      if (currentJob?.id === source.id) {
+        retireCurrentJob();
+      }
+      const shouldQueue =
+        Boolean(activeHandle) ||
+        Boolean(currentJob && currentJob.status !== "passed") ||
+        queuedJobs.length > 0;
+      if (!shouldQueue) {
+        retireCurrentJob();
+      }
+      const restartedJob = createRestartedJob(
+        source,
+        shouldQueue ? "queued" : "running"
+      );
+      recordJobMetric(restartedJob);
+      if (shouldQueue) {
+        queuedJobs.push(restartedJob);
+      } else {
+        currentJob = restartedJob;
+        try {
+          startJob(currentJob, currentJob.pendingPrompt);
+          delete currentJob.pendingPrompt;
+        } catch (error) {
+          finishJob(currentJob, { code: null, error });
+          recordJobMetric(currentJob);
+          activeHandle = null;
+        }
+      }
+      sendJson(response, 202, {
+        job: publicJob(currentJob),
+        restartedJob: shouldQueue
+          ? publicQueue([restartedJob])[0]
+          : publicJob(restartedJob),
+        queued: shouldQueue,
+        queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
+        history: dashboardHistory()
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/history/purge"
+    ) {
+      let body;
+      try {
+        if (
+          !request.headers["content-type"]
+            ?.toLowerCase()
+            .startsWith("application/json")
+        ) {
+          throw new Error("Content-Type must be application/json");
+        }
+        body = await readJsonBody(request);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      const olderThanDays = Number(body.olderThanDays);
+      if (
+        !Number.isInteger(olderThanDays) ||
+        olderThanDays < 1 ||
+        olderThanDays > 3650
+      ) {
+        sendJson(response, 400, {
+          error: "olderThanDays must be an integer between 1 and 3650"
+        });
+        return;
+      }
+      const cutoff = Date.now() - olderThanDays * 24 * 60 * 60 * 1000;
+      let deleted = 0;
+      const deletedIds = new Set();
+      if (!activeHandle && currentJob && purgeableJob(currentJob, cutoff)) {
+        if (currentJob.artifactDirectory) {
+          removeArtifactDirectory(currentJob.artifactDirectory);
+          artifactDirectories.delete(currentJob.artifactDirectory);
+        }
+        deletedIds.add(currentJob.id);
+        deleted += 1;
+        currentJob = null;
+        startNextJob();
+      }
+      for (let index = completedJobs.length - 1; index >= 0; index -= 1) {
+        const job = completedJobs[index];
+        if (!purgeableJob(job, cutoff)) {
+          continue;
+        }
+        completedJobs.splice(index, 1);
+        if (job.artifactDirectory) {
+          removeArtifactDirectory(job.artifactDirectory);
+          artifactDirectories.delete(job.artifactDirectory);
+        }
+        deletedIds.add(job.id);
+        deleted += 1;
+      }
+      persistedJobs = persistedJobs.filter((job) => {
+        if (deletedIds.has(job.id)) {
+          return false;
+        }
+        if (!purgeableJob(job, cutoff)) {
+          return true;
+        }
+        deletedIds.add(job.id);
+        deleted += 1;
+        return false;
+      });
+      persistDashboardState();
+      sendJson(response, 200, {
+        deleted,
+        olderThanDays,
+        job: publicJob(currentJob),
+        queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
         history: dashboardHistory()
       });
       return;
@@ -3273,6 +3782,7 @@ export function createDashboardServer({
         mode: body.mode,
         status: shouldQueue ? "queued" : "running",
         startedAt: shouldQueue ? null : new Date().toISOString(),
+        heldAt: null,
         finishedAt: null,
         lastActivityAt: shouldQueue ? null : new Date().toISOString(),
         error: null,
@@ -3299,6 +3809,8 @@ export function createDashboardServer({
         cacheContext: createCacheContext(resolvedRepository),
         partial: { stdout: "", stderr: "" }
       };
+      job.holdRequested = false;
+      job.resumeSession = false;
       job.initialPrompt = buildJobPrompt({
         request: requestText,
         mode: body.mode,
@@ -3338,7 +3850,9 @@ export function createDashboardServer({
         job: publicJob(currentJob),
         queued: shouldQueue,
         queuedJob: shouldQueue ? publicQueue([job])[0] : null,
-        queue: publicQueue(queuedJobs)
+        queue: publicQueue(queuedJobs),
+        held: publicHeld(heldJobs),
+        history: dashboardHistory()
       });
       return;
     }
