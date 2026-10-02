@@ -1361,7 +1361,12 @@ jobInputSubmit.addEventListener("click", async () => {
   formError.textContent = "";
   jobInputSubmit.disabled = true;
   try {
-    const details = jobInputDetails.value.trim();
+    const action = jobInputAction.value;
+    const details =
+      jobInputDetails.value.trim() ||
+      (action === "continue"
+        ? "Resume the same FixLab session from its retained workflow state and continue the remaining required stages."
+        : "");
     if (!details) {
       throw new Error("Enter the additional details or manual result.");
     }
@@ -1369,7 +1374,7 @@ jobInputSubmit.addEventListener("click", async () => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        action: jobInputAction.value,
+        action,
         details
       })
     });

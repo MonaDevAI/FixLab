@@ -2279,7 +2279,9 @@ function resetJobForResume(job) {
       : Math.max(
           0,
           FIXLAB_STAGES.findIndex((stage) =>
-            ["blocked", "failed"].includes(job.stages[stage].status)
+            ["blocked", "failed", "running"].includes(
+              job.stages[stage].status
+            )
           )
         );
   for (const stage of FIXLAB_STAGES.slice(restartIndex)) {
@@ -3019,13 +3021,17 @@ export function createDashboardServer({
       }
       const submittedDetails =
         typeof body.details === "string" ? body.details.trim() : "";
+      const defaultDetails =
+        action === "continue"
+          ? "Resume the same FixLab session from its retained workflow state and continue the remaining required stages."
+          : "";
       const details = manualResult
         ? `The user completed manual React localhost validation and explicitly marked it ${
             action === "manual-pass" ? "passed" : "failed"
           }. Record the live-test stage as ${
             action === "manual-pass" ? "passed" : "failed"
           }, stop only the FixLab-owned frontend process, preserve this manual result in the job evidence, and continue the remaining gated outcome without rerunning Playwright.`
-        : submittedDetails;
+        : submittedDetails || defaultDetails;
       if (!details || details.length > 10000) {
         sendJson(response, 400, {
           error: "details must be a non-empty string of at most 10000 characters"

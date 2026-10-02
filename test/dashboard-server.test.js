@@ -2564,20 +2564,36 @@ test("dashboard stops an executor that exceeds the output idle timeout", async (
   const repository = createRepository();
   let resolveCompletion;
   let terminated = 0;
-  const executor = () => ({
-    completion: new Promise((resolve) => {
-      resolveCompletion = resolve;
-    }),
-    terminate() {
-      terminated += 1;
-      resolveCompletion({ code: null, signal: "SIGTERM" });
+  let executorCalls = 0;
+  let resumedPrompt = "";
+  const executor = ({ onOutput, prompt }) => {
+    executorCalls += 1;
+    if (executorCalls === 2) {
+      resumedPrompt = prompt;
     }
-  });
+    if (executorCalls === 1) {
+      onOutput("stdout", "FIXLAB_STAGE|intake|passed|Intake complete.\n");
+      onOutput(
+        "stdout",
+        "FIXLAB_STAGE|diagnosis|passed|Diagnosis complete.\n"
+      );
+    }
+    onOutput("stdout", "FIXLAB_STAGE|fix|running|Fix in progress.\n");
+    return {
+      completion: new Promise((resolve) => {
+        resolveCompletion = resolve;
+      }),
+      terminate() {
+        terminated += 1;
+        resolveCompletion({ code: null, signal: "SIGTERM" });
+      }
+    };
+  };
   const { dashboard, url } = await startDashboard(
     repository,
     executor,
     null,
-    { executionIdleTimeoutMs: 25 }
+    { executionIdleTimeoutMs: 100 }
   );
 
   try {
@@ -2604,6 +2620,19 @@ test("dashboard stops an executor that exceeds the output idle timeout", async (
     assert.equal(status.body.job.canResume, true);
     assert.match(status.body.job.error, /produced no output/);
     assert.ok(status.body.job.lastActivityAt);
+
+    const resumed = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "continue" })
+    });
+    assert.equal(resumed.response.status, 202);
+    assert.equal(executorCalls, 2);
+    assert.equal(resumed.body.job.status, "running");
+    assert.equal(resumed.body.job.stages.intake.status, "passed");
+    assert.equal(resumed.body.job.stages.diagnosis.status, "passed");
+    assert.equal(resumed.body.job.stages.fix.status, "running");
+    assert.match(resumedPrompt, /retained workflow state/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
