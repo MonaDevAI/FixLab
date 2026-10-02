@@ -332,6 +332,20 @@ Defines:
 Preserves structured test results, API assertions, screenshots, decisions,
 skipped gates, remaining risks, and pull request links.
 
+`fixlab exec` is the command-output boundary between validation tools and the
+agent context. It captures stdout and stderr separately, redacts credential
+patterns before persistence, and returns only bounded unique diagnostics,
+test counts, tail failures, timing, and byte-reduction metadata. Full redacted
+evidence and `result.json` are stored under the worktree's Git-private
+`fixlab/command-evidence` path, never in tracked source.
+
+Successful deterministic local validations may be reused only by explicit
+request. Their fingerprint includes platform, command and arguments, stage,
+working directory, Git `HEAD`, content hashes for every tracked and untracked
+file, worktree status, and repository-profile content. A changed input causes execution;
+failed results are never cached. Evidence and cache records are capped at 100
+entries and seven days, and each output stream is capped at 50 MiB.
+
 ## Workflow stages
 
 1. Intake
