@@ -56,7 +56,6 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /fixlab init/);
   assert.match(result.stdout, /fixlab prepare/);
   assert.match(result.stdout, /fixlab authenticate/);
-  assert.match(result.stdout, /fixlab exec/);
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
   assert.match(result.stdout, /fixlab chat/);

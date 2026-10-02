@@ -68,17 +68,6 @@ operations. Treat every runner as privileged engineering infrastructure.
   source contents.
 - Cache reuse is keyed by repository identity, `HEAD`, and profile-content
   hash. Current diffs and repository instructions remain authoritative.
-- Structured command evidence is written under the repository's Git-private
-  `fixlab/command-evidence` path. Credential-like values and credential-bearing
-  URLs are redacted before stdout, stderr, summaries, or metadata are written.
-- Each structured stdout/stderr stream is capped at 50 MiB. Evidence and
-  successful-result cache records are retained for at most seven days and 100
-  entries. Failed commands are never reusable.
-- Structured-result reuse is opt-in and limited to deterministic local
-  validation. Its fingerprint includes command, arguments, stage, working
-  directory, platform, Git `HEAD`, tracked/untracked content and status, and
-  profile content. Startup, authentication, network/live-browser checks, installation,
-  deployment, and mutating commands are excluded.
 
 ## Supply chain
 

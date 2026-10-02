@@ -26,7 +26,6 @@ import {
   validatePort
 } from "../dashboard/server.js";
 import { runChat } from "../dashboard/chat.js";
-import { runStructuredCommand } from "./structured-command.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -76,7 +75,6 @@ Usage:
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
   fixlab authenticate [repository] [--yes]
-  fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
   fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
@@ -94,7 +92,6 @@ Commands:
             Plan or install the repository-local Playwright package and browser.
   authenticate
             Plan or run the repository-owned browser authentication command.
-  exec      Run a command with compact structured output and private evidence.
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
   dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
@@ -1489,10 +1486,6 @@ async function main(args) {
       resolveRepository(repositoryArgument),
       rest.includes("--yes")
     );
-  }
-
-  if (command === "exec") {
-    return runStructuredCommand(rest, process.cwd());
   }
 
   if (command === "run") {
