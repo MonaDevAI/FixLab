@@ -1781,6 +1781,342 @@ test("dashboard cancels waiting jobs without interrupting the active job", async
   }
 });
 
+test("dashboard holds queued and active jobs and resumes the same session", async () => {
+  const repository = createGitRepository();
+  const executions = [];
+  const executor = (options) => {
+    let resolveCompletion;
+    const completion = new Promise((resolve) => {
+      resolveCompletion = resolve;
+    });
+    const execution = {
+      options,
+      resolveCompletion,
+      terminate() {
+        resolveCompletion({ code: null, signal: "SIGTERM" });
+      }
+    };
+    executions.push(execution);
+    return {
+      completion,
+      terminate: execution.terminate
+    };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const first = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Hold the active lifecycle job.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    const second = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Hold the queued lifecycle job.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    const firstId = first.body.job.id;
+    const firstSessionId = executions[0].options.sessionId;
+    const secondId = second.body.queuedJob.id;
+
+    const heldQueued = await jsonRequest(url, "/api/jobs/hold", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: secondId })
+    });
+    assert.equal(heldQueued.response.status, 202);
+    assert.equal(heldQueued.body.heldJob.status, "held");
+    assert.deepEqual(
+      heldQueued.body.held.map((job) => job.id),
+      [secondId]
+    );
+
+    const historyPath = join(
+      dirname(createCacheContext(repository).cachePath),
+      "dashboard-jobs.json"
+    );
+    const persisted = JSON.parse(readFileSync(historyPath, "utf8"));
+    const persistedHeldJob = persisted.jobs.find(
+      (job) => job.id === secondId
+    );
+    assert.equal(persistedHeldJob.status, "held");
+
+    const resumedQueued = await jsonRequest(url, "/api/jobs/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: secondId })
+    });
+    assert.equal(resumedQueued.response.status, 202);
+    assert.deepEqual(
+      resumedQueued.body.queue.map((job) => job.id),
+      [secondId]
+    );
+
+    const holding = await jsonRequest(url, "/api/jobs/hold", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: firstId })
+    });
+    assert.equal(holding.response.status, 202);
+    assert.equal(holding.body.job.status, "holding");
+
+    for (
+      let attempt = 0;
+      attempt < 20 && executions.length < 2;
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(executions.length, 2);
+    const activeAfterHold = await jsonRequest(url, "/api/status");
+    assert.equal(activeAfterHold.body.job.id, secondId);
+    assert.deepEqual(
+      activeAfterHold.body.held.map((job) => job.id),
+      [firstId]
+    );
+
+    const resumedActive = await jsonRequest(url, "/api/jobs/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: firstId })
+    });
+    assert.equal(resumedActive.response.status, 202);
+    assert.deepEqual(
+      resumedActive.body.queue.map((job) => job.id),
+      [firstId]
+    );
+
+    for (const stage of FIXLAB_STAGES) {
+      executions[1].options.onOutput(
+        "stdout",
+        `FIXLAB_STAGE|${stage}|passed|${stage} completed\n`
+      );
+    }
+    executions[1].resolveCompletion({ code: 0 });
+
+    for (
+      let attempt = 0;
+      attempt < 20 && executions.length < 3;
+      attempt += 1
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(executions.length, 3);
+    assert.equal(executions[2].options.resume, true);
+    assert.equal(executions[2].options.sessionId, firstSessionId);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard restores held jobs after restart", async () => {
+  const repository = createGitRepository();
+  const first = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  }));
+  let heldJobId;
+
+  try {
+    await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Keep this job active during dashboard restart.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    const queued = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Restore this held job after dashboard restart.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    heldJobId = queued.body.queuedJob.id;
+    const held = await jsonRequest(first.url, "/api/jobs/hold", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: heldJobId })
+    });
+    assert.equal(held.response.status, 202);
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("executor should not run while restoring held jobs");
+  });
+  try {
+    const status = await jsonRequest(second.url, "/api/status");
+    assert.deepEqual(
+      status.body.held.map((job) => job.id),
+      [heldJobId]
+    );
+    assert.equal(status.body.held[0].status, "held");
+  } finally {
+    await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard restarts a completed job with a new id and session", async () => {
+  const repository = createGitRepository();
+  const executions = [];
+  const executor = (options) => {
+    executions.push(options);
+    if (executions.length === 1) {
+      for (const stage of FIXLAB_STAGES) {
+        options.onOutput(
+          "stdout",
+          `FIXLAB_STAGE|${stage}|passed|${stage} completed\n`
+        );
+      }
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Restart this completed lifecycle job.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    const originalId = started.body.job.id;
+    const originalSessionId = executions[0].sessionId;
+    let status;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      status = await jsonRequest(url, "/api/status");
+      if (status.body.job?.status === "passed") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(status.body.job.status, "passed");
+
+    const restarted = await jsonRequest(url, "/api/jobs/restart", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: originalId })
+    });
+    assert.equal(restarted.response.status, 202);
+    assert.notEqual(restarted.body.job.id, originalId);
+    assert.notEqual(executions[1].sessionId, originalSessionId);
+    assert.equal(restarted.body.job.status, "running");
+    assert.equal(restarted.body.history[0].id, originalId);
+    assert.equal(
+      restarted.body.job.request,
+      "Restart this completed lifecycle job."
+    );
+    assert.equal(executions[1].resume, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard purges only terminal history older than the selected age", async () => {
+  const repository = createGitRepository();
+  const executor = ({ onOutput }) => {
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|${stage} completed\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const first = await startDashboard(repository, executor);
+  let oldJobId;
+
+  try {
+    const started = await jsonRequest(first.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Create purgeable history.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    oldJobId = started.body.job.id;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      const status = await jsonRequest(first.url, "/api/status");
+      if (status.body.job?.status === "passed") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  } finally {
+    await first.dashboard.close();
+  }
+
+  const historyPath = join(
+    dirname(createCacheContext(repository).cachePath),
+    "dashboard-jobs.json"
+  );
+  const persisted = JSON.parse(readFileSync(historyPath, "utf8"));
+  const oldJob = persisted.jobs.find((job) => job.id === oldJobId);
+  oldJob.finishedAt = "2020-01-01T00:00:00.000Z";
+  const heldJobId = "11111111-2222-4333-8444-555555555555";
+  persisted.jobs.push({
+    ...oldJob,
+    id: heldJobId,
+    sessionId: heldJobId,
+    request: "Never purge this held job.",
+    status: "held",
+    startedAt: null,
+    heldAt: "2020-01-01T00:00:00.000Z",
+    finishedAt: null
+  });
+  writeFileSync(historyPath, JSON.stringify(persisted, null, 2));
+
+  const second = await startDashboard(repository, () => {
+    throw new Error("executor should not run while purging history");
+  });
+  try {
+    const invalid = await jsonRequest(second.url, "/api/history/purge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ olderThanDays: 0 })
+    });
+    assert.equal(invalid.response.status, 400);
+
+    const purged = await jsonRequest(second.url, "/api/history/purge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ olderThanDays: 30 })
+    });
+    assert.equal(purged.response.status, 200);
+    assert.equal(purged.body.deleted, 1);
+    assert.equal(purged.body.history.length, 0);
+    assert.equal(purged.body.job, null);
+    assert.equal(purged.body.queue.length, 0);
+    assert.deepEqual(
+      purged.body.held.map((job) => job.id),
+      [heldJobId]
+    );
+  } finally {
+    await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard dismisses a failed job and starts the next queued job", async () => {
   const repository = createRepository();
   let executorCalls = 0;
@@ -2230,20 +2566,36 @@ test("dashboard stops an executor that exceeds the output idle timeout", async (
   const repository = createRepository();
   let resolveCompletion;
   let terminated = 0;
-  const executor = () => ({
-    completion: new Promise((resolve) => {
-      resolveCompletion = resolve;
-    }),
-    terminate() {
-      terminated += 1;
-      resolveCompletion({ code: null, signal: "SIGTERM" });
+  let executorCalls = 0;
+  let resumedPrompt = "";
+  const executor = ({ onOutput, prompt }) => {
+    executorCalls += 1;
+    if (executorCalls === 2) {
+      resumedPrompt = prompt;
     }
-  });
+    if (executorCalls === 1) {
+      onOutput("stdout", "FIXLAB_STAGE|intake|passed|Intake complete.\n");
+      onOutput(
+        "stdout",
+        "FIXLAB_STAGE|diagnosis|passed|Diagnosis complete.\n"
+      );
+    }
+    onOutput("stdout", "FIXLAB_STAGE|fix|running|Fix in progress.\n");
+    return {
+      completion: new Promise((resolve) => {
+        resolveCompletion = resolve;
+      }),
+      terminate() {
+        terminated += 1;
+        resolveCompletion({ code: null, signal: "SIGTERM" });
+      }
+    };
+  };
   const { dashboard, url } = await startDashboard(
     repository,
     executor,
     null,
-    { executionIdleTimeoutMs: 25 }
+    { executionIdleTimeoutMs: 100 }
   );
 
   try {
@@ -2270,6 +2622,19 @@ test("dashboard stops an executor that exceeds the output idle timeout", async (
     assert.equal(status.body.job.canResume, true);
     assert.match(status.body.job.error, /produced no output/);
     assert.ok(status.body.job.lastActivityAt);
+
+    const resumed = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "continue" })
+    });
+    assert.equal(resumed.response.status, 202);
+    assert.equal(executorCalls, 2);
+    assert.equal(resumed.body.job.status, "running");
+    assert.equal(resumed.body.job.stages.intake.status, "passed");
+    assert.equal(resumed.body.job.stages.diagnosis.status, "passed");
+    assert.equal(resumed.body.job.stages.fix.status, "running");
+    assert.match(resumedPrompt, /retained workflow state/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

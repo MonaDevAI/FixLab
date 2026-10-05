@@ -136,6 +136,24 @@
           </div>
           <ol id="queue-list"></ol>
         </div>
+        <div class="job-controls">
+          <div class="section-heading">
+            <h3>Lifecycle controls</h3>
+            <span id="job-lifecycle-status">0 waiting · 0 held · 0 recent</span>
+          </div>
+          <div class="button-row">
+            <button id="hold-job" type="button" class="secondary" hidden>Hold selected job</button>
+            <button id="resume-held-job" type="button" hidden>Resume held job</button>
+            <button id="restart-job" type="button" class="secondary" hidden>Restart selected job</button>
+          </div>
+          <div class="history-cleanup">
+            <label for="history-retention-days">Delete completed job history older than</label>
+            <input id="history-retention-days" type="number" min="1" max="3650" step="1" value="30">
+            <span>days</span>
+            <button id="purge-job-history" type="button" class="secondary">Delete old jobs</button>
+          </div>
+          <p id="job-controls-message" class="guidance" role="status" aria-live="polite"></p>
+        </div>
       </section>
 
       <section class="panel">
