@@ -158,6 +158,24 @@ fixlab dashboard --runtime copilot
 
 The same selection can be made with `FIXLAB_RUNTIME=copilot`.
 
+For verbose local validation, execute the repository-owned command through the
+structured evidence boundary:
+
+```powershell
+fixlab exec --stage validation -- npm test
+fixlab exec --stage build --reuse -- dotnet build .\src\Application.csproj
+fixlab exec --cwd .\frontend --stage typecheck --reuse -- npm run type-check
+```
+
+The terminal receives a compact pass/fail summary, unique diagnostics, test
+counts, duration, and a private evidence path instead of the complete command
+stream. The child command's exit code is preserved. `--reuse` skips a prior
+successful deterministic validation only when its command, arguments, stage,
+working directory, Git `HEAD`, tracked and untracked content, worktree status,
+and FixLab profile are
+identical. Omit it for startup, health, authentication, browser, environment,
+installation, deployment, and mutating commands.
+
 To enable the dashboard authentication controls, define the repository-owned
 login command and the local files or directories that prove the session is
 ready:
@@ -261,10 +279,11 @@ Select **Create a separate PR per bug** to isolate each bug's changes,
 validation evidence, and PR. Select **Run UI tests for all scenarios at the
 end** when the final gate must execute the repository's complete Playwright
 scenario set instead of only focused journeys.
-Select **Hold after Playwright for manual local testing** when the automated
-journey should leave the FixLab-owned local frontend running and pause before
-PR creation. Provide the manual result through the same dashboard job to stop
-the owned process and continue.
+Select **Open React localhost for manual validation** to add an optional manual
+React check independently of Playwright. After the profile-defined frontend
+passes its health check, FixLab opens it in the default browser, keeps only its
+owned process running, and pauses before completion. Confirm **Passed** or
+**Failed** in the same dashboard job to stop the frontend and continue.
 
 Set `pullRequests.branchNaming.userId` during onboarding. With
 `"prefixTemplate": "users/{userId}"`, a configured user ID of `mobiswal`

@@ -3,6 +3,31 @@
 Run FixLab commands from the root of the local application repository unless a
 command explicitly accepts another path.
 
+## Structured command output or reuse is unexpected
+
+Run the command after `--`; use `--cwd` only for a directory inside the
+repository:
+
+```powershell
+fixlab exec --cwd .\frontend --stage test -- npm test
+```
+
+The `Evidence:` path is Git-private and contains redacted `stdout.log`,
+`stderr.log`, and `result.json`. A missing stream file means that stream was
+empty. `--reuse` applies only to supported deterministic validation commands.
+If it reports that reuse was ignored, run normally or select an eligible local
+test, build, lint, type-check, or validation command.
+
+A cache miss is expected after any command, argument, stage, working-directory,
+Git `HEAD`, tracked/untracked worktree, or FixLab-profile change. Timeouts
+return exit code 124 after terminating the child; increase
+`--timeout-seconds` only when the repository-owned command legitimately needs
+more time; values above 2,147,483 seconds are rejected. On Windows, `.cmd` and
+`.bat` wrapper arguments containing shell metacharacters are rejected instead
+of being interpreted or silently changed. Invoke the underlying executable
+directly when such an argument is required. Never use reuse for live or
+external checks.
+
 ## `fixlab` is not recognized
 
 Verify the global npm prefix and command:

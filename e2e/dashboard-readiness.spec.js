@@ -197,7 +197,7 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     page.getByLabel("Run UI tests for all scenarios at the end")
   ).not.toBeChecked();
   await expect(
-    page.getByLabel("Hold after Playwright for manual local testing")
+    page.getByLabel("Open React localhost for manual validation")
   ).not.toBeChecked();
   await page.getByLabel("Load from Azure DevOps").check();
   await expect(page.getByText("Load bugs")).toBeVisible();
@@ -670,6 +670,8 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
     request: "Validate grouped details",
     requestType: "bug-fix",
     status: "blocked",
+    manualLocalhostTest: true,
+    manualLocalhostPending: false,
     durationMs: 1000,
     stages: Object.fromEntries(
       [
@@ -746,6 +748,92 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
   );
   expect(submittedInput.details).toContain("save at least one");
   expect(submittedInput.details).toContain("Do not skip");
+});
+
+test("dashboard requires explicit manual localhost confirmation", async ({
+  page
+}) => {
+  let submittedInput;
+  const stages = Object.fromEntries(
+    [
+      "intake",
+      "diagnosis",
+      "reproduce",
+      "fix",
+      "review",
+      "local-stack",
+      "live-test",
+      "pr"
+    ].map((stage) => [
+      stage,
+      {
+        status: stage === "live-test" ? "blocked" : "passed",
+        message: ""
+      }
+    ])
+  );
+  const blockedJob = {
+    id: "manual-localhost-job",
+    request: "Manually validate the React app",
+    requestType: "bug-fix",
+    status: "blocked",
+    durationMs: 1000,
+    manualLocalhostTest: true,
+    manualLocalhostUrl: "http://127.0.0.1:3000",
+    manualLocalhostPending: true,
+    stages,
+    bugs: [],
+    logs: [],
+    canComment: false,
+    canResume: true,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "Manual localhost test",
+          error: null
+        },
+        job: blockedJob,
+        queue: [],
+        history: []
+      })
+    });
+  });
+  await page.route("**/api/job/input", async (route) => {
+    submittedInput = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          ...blockedJob,
+          status: "running",
+          canResume: false
+        },
+        queued: false
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+  await expect(
+    page.getByRole("button", { name: "Open React localhost" })
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Passed" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Failed" })).toBeVisible();
+  await expect(page.locator("#job-input-guidance")).toContainText(
+    "confirm Passed or Failed"
+  );
+
+  await page.getByRole("button", { name: "Passed" }).click();
+  expect(submittedInput).toEqual({ action: "manual-pass" });
 });
 
 test("dashboard exposes explicit pull-request approval when validation is complete", async ({

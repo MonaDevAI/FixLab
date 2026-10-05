@@ -67,6 +67,22 @@ skipLiveTestButton.type = "button";
 skipLiveTestButton.className = "secondary";
 skipLiveTestButton.textContent = "Skip Playwright live test";
 skipLiveTestButton.hidden = true;
+const openManualLocalhostButton = document.createElement("button");
+openManualLocalhostButton.id = "open-manual-localhost";
+openManualLocalhostButton.type = "button";
+openManualLocalhostButton.textContent = "Open React localhost";
+openManualLocalhostButton.hidden = true;
+const passManualLocalhostButton = document.createElement("button");
+passManualLocalhostButton.id = "pass-manual-localhost";
+passManualLocalhostButton.type = "button";
+passManualLocalhostButton.textContent = "Passed";
+passManualLocalhostButton.hidden = true;
+const failManualLocalhostButton = document.createElement("button");
+failManualLocalhostButton.id = "fail-manual-localhost";
+failManualLocalhostButton.type = "button";
+failManualLocalhostButton.className = "secondary";
+failManualLocalhostButton.textContent = "Failed";
+failManualLocalhostButton.hidden = true;
 const approvePullRequestButton = document.createElement("button");
 approvePullRequestButton.id = "approve-pull-request";
 approvePullRequestButton.type = "button";
@@ -85,6 +101,9 @@ cancelQueuedJobButton.className = "secondary";
 cancelQueuedJobButton.textContent = "Remove from queue";
 cancelQueuedJobButton.hidden = true;
 jobInputSubmit.before(
+  openManualLocalhostButton,
+  passManualLocalhostButton,
+  failManualLocalhostButton,
   retryLiveTestButton,
   skipLiveTestButton,
   approvePullRequestButton,
@@ -413,7 +432,12 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.status === "blocked" &&
     job?.stages?.["live-test"]?.status === "blocked" &&
-    !job?.holdForManualLiveTest;
+    !job?.manualLocalhostPending;
+  const canConfirmManualLocalhost =
+    canResume &&
+    job?.status === "blocked" &&
+    job?.manualLocalhostPending &&
+    job?.stages?.["live-test"]?.status === "blocked";
   const canApprovePullRequest =
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
@@ -423,11 +447,19 @@ function renderJob(job, currentActiveJob = job) {
     !isActive && job?.status === "queued";
   jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob);
   jobInputSubmit.disabled = !(canResume || canComment);
-  jobInputSubmit.hidden = canCancelQueuedJob;
-  jobInputAction.hidden = canCancelQueuedJob;
-  jobInputActionLabel.hidden = canCancelQueuedJob;
-  jobInputDetails.hidden = canCancelQueuedJob;
-  jobInputDetailsLabel.hidden = canCancelQueuedJob;
+  jobInputSubmit.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
+  jobInputAction.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
+  jobInputActionLabel.hidden =
+    canCancelQueuedJob || canConfirmManualLocalhost;
+  jobInputDetails.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
+  jobInputDetailsLabel.hidden =
+    canCancelQueuedJob || canConfirmManualLocalhost;
+  openManualLocalhostButton.hidden = !canConfirmManualLocalhost;
+  openManualLocalhostButton.disabled = !canConfirmManualLocalhost;
+  passManualLocalhostButton.hidden = !canConfirmManualLocalhost;
+  passManualLocalhostButton.disabled = !canConfirmManualLocalhost;
+  failManualLocalhostButton.hidden = !canConfirmManualLocalhost;
+  failManualLocalhostButton.disabled = !canConfirmManualLocalhost;
   retryLiveTestButton.hidden = !canRetryLiveTest;
   retryLiveTestButton.disabled = !canRetryLiveTest;
   skipLiveTestButton.hidden = !canRetryLiveTest;
@@ -459,9 +491,9 @@ function renderJob(job, currentActiveJob = job) {
       jobInputGuidance.textContent =
         canApprovePullRequest
           ? "All required validation gates passed. Explicit approval is required before FixLab creates or updates the pull request."
-          : job?.holdForManualLiveTest &&
+          : job?.manualLocalhostPending &&
               job?.stages?.["live-test"]?.status === "blocked"
-            ? `Automated Playwright is complete. Test the local application at ${job.manualLiveTestUrl || "the profile-defined URL"}, then select Continue and provide the manual result.`
+            ? `The React app is running at ${job.manualLocalhostUrl || "the profile-defined localhost URL"}. Validate it in the browser, then confirm Passed or Failed before FixLab closes the job.`
           : job?.stages?.["live-test"]?.status === "blocked"
           ? "The browser gate could not finish. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
           : "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
@@ -1133,8 +1165,8 @@ form.addEventListener("submit", async (event) => {
         targetEnvironment: data.get("targetEnvironment"),
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",
-        holdForManualLiveTest:
-          data.get("holdForManualLiveTest") === "on",
+        manualLocalhostTest:
+          data.get("manualLocalhostTest") === "on",
         intakeSource,
         workItems: intakeSource === "azure-devops" ? loadedWorkItems : [],
         screenshots
@@ -1220,6 +1252,55 @@ dismissFailedJobButton.addEventListener("click", async () => {
     dismissFailedJobButton.disabled = false;
   }
 });
+
+openManualLocalhostButton.addEventListener("click", () => {
+  formError.textContent = "";
+  const url = activeJob?.manualLocalhostUrl;
+  if (!url) {
+    formError.textContent =
+      "The repository profile does not provide a React localhost URL.";
+    return;
+  }
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) {
+    formError.textContent =
+      "The browser blocked the localhost tab. Allow pop-ups and try again.";
+  }
+});
+
+async function submitManualLocalhostResult(passed) {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  passManualLocalhostButton.disabled = true;
+  failManualLocalhostButton.disabled = true;
+  try {
+    const body = await fetchJson("/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: passed ? "manual-pass" : "manual-fail"
+      })
+    });
+    jobInputMessage.textContent = passed
+      ? "Manual localhost validation passed. FixLab is closing the gate."
+      : "Manual localhost validation failed. FixLab is recording the failure and stopping its frontend.";
+    activeJob = body.job;
+    selectedJobId = body.job?.id ?? selectedJobId;
+    rememberJob(body.job);
+    renderJob(body.job, activeJob);
+  } catch (error) {
+    formError.textContent = error.message;
+    passManualLocalhostButton.disabled = false;
+    failManualLocalhostButton.disabled = false;
+  }
+}
+
+passManualLocalhostButton.addEventListener("click", () =>
+  submitManualLocalhostResult(true)
+);
+failManualLocalhostButton.addEventListener("click", () =>
+  submitManualLocalhostResult(false)
+);
 
 retryLiveTestButton.addEventListener("click", async () => {
   jobInputMessage.textContent = "";

@@ -43,6 +43,54 @@ export const MAX_METRICS_ENTRIES = 500;
 export const MAX_DASHBOARD_HISTORY_ENTRIES = 20;
 export const MAX_QUEUED_JOBS = 20;
 export const MAX_PLAYWRIGHT_ARTIFACTS = 20;
+
+function validatedManualLocalhostUrl(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("manual localhost URL is required");
+  }
+  const trimmed = value.trim();
+  const url = new URL(trimmed);
+  if (
+    !["http:", "https:"].includes(url.protocol) ||
+    !["localhost", "127.0.0.1"].includes(url.hostname) ||
+    url.username ||
+    url.password
+  ) {
+    throw new Error(
+      "manual localhost URL must use credential-free HTTP(S) on loopback"
+    );
+  }
+  return trimmed;
+}
+
+export function openLocalUrl(
+  value,
+  { platform = process.platform, spawnImpl = spawn } = {}
+) {
+  const url = new URL(validatedManualLocalhostUrl(value));
+
+  const launchers = {
+    win32: ["explorer.exe", [url.href]],
+    darwin: ["open", [url.href]],
+    linux: ["xdg-open", [url.href]]
+  };
+  const launcher = launchers[platform];
+  if (!launcher) {
+    throw new Error(`opening a browser is not supported on ${platform}`);
+  }
+  return new Promise((resolveLaunch, rejectLaunch) => {
+    const child = spawnImpl(launcher[0], launcher[1], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true
+    });
+    child.once("spawn", () => {
+      child.unref?.();
+      resolveLaunch();
+    });
+    child.once("error", rejectLaunch);
+  });
+}
 export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 export const DEFAULT_EXECUTION_HEARTBEAT_MS = 2 * 60 * 1000;
@@ -155,15 +203,11 @@ export function validateLiveTestProfile(profile, repository) {
       missing.push("applications.frontend.healthUrl");
     } else {
       try {
-        const healthUrl = new URL(frontend.healthUrl);
-        if (
-          !["http:", "https:"].includes(healthUrl.protocol) ||
-          !["localhost", "127.0.0.1"].includes(healthUrl.hostname)
-        ) {
-          missing.push("applications.frontend.healthUrl (loopback URL required)");
-        }
+        validatedManualLocalhostUrl(frontend.healthUrl);
       } catch {
-        missing.push("applications.frontend.healthUrl (valid URL required)");
+        missing.push(
+          "applications.frontend.healthUrl (credential-free loopback URL required)"
+        );
       }
     }
   }
@@ -318,8 +362,11 @@ function publicQueue(jobs) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
-    holdForManualLiveTest: job.holdForManualLiveTest,
-    manualLiveTestUrl: job.manualLiveTestUrl,
+    manualLocalhostTest: job.manualLocalhostTest,
+    manualLocalhostUrl: job.manualLocalhostUrl,
+    manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
+    manualLocalhostPending: job.manualLocalhostPending,
+    manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     mode: job.mode,
@@ -354,8 +401,11 @@ function dashboardSnapshot(job) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
-    holdForManualLiveTest: job.holdForManualLiveTest,
-    manualLiveTestUrl: "",
+    manualLocalhostTest: job.manualLocalhostTest,
+    manualLocalhostUrl: "",
+    manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
+    manualLocalhostPending: job.manualLocalhostPending,
+    manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: {
       enabled: job.testEvidence.enabled,
       source: job.testEvidence.source,
@@ -397,8 +447,35 @@ function dashboardSnapshot(job) {
 
 function restoreDashboardJob(snapshot, repository) {
   const profile = loadRepositoryProfile(repository);
+  let manualLocalhostUrl = "";
+  let manualLocalhostProfileError = false;
+  try {
+    manualLocalhostUrl = validatedManualLocalhostUrl(
+      profile.applications?.frontend?.healthUrl
+    );
+  } catch {
+    manualLocalhostProfileError =
+      snapshot.manualLocalhostTest ??
+      snapshot.holdForManualLiveTest ??
+      false;
+  }
   const restored = {
     ...snapshot,
+    manualLocalhostTest:
+      snapshot.manualLocalhostTest ??
+      snapshot.holdForManualLiveTest ??
+      false,
+    manualLocalhostUrl,
+    manualLocalhostOpenedAt: snapshot.manualLocalhostOpenedAt ?? null,
+    manualLocalhostPending:
+      snapshot.manualLocalhostPending ??
+      (Boolean(
+        snapshot.manualLocalhostTest ??
+        snapshot.holdForManualLiveTest
+      ) &&
+        snapshot.stages?.["live-test"]?.status === "blocked" &&
+        !snapshot.manualLocalhostResult),
+    manualLocalhostResult: snapshot.manualLocalhostResult ?? null,
     workItem: snapshot.workItem ?? null,
     workItems: snapshot.workItems ?? [],
     screenshots: [],
@@ -419,6 +496,17 @@ function restoreDashboardJob(snapshot, repository) {
     cacheContext: createCacheContext(repository),
     partial: { stdout: "", stderr: "" }
   };
+  if (manualLocalhostProfileError) {
+    restored.resumeDisabled = true;
+    restored.manualLocalhostPending = false;
+    if (!restored.manualLocalhostResult) {
+      const message =
+        "Manual localhost validation cannot resume because the profile frontend health URL is no longer a safe credential-free loopback URL.";
+      restored.status = "failed";
+      restored.error = message;
+      restored.stages["live-test"] = { status: "failed", message };
+    }
+  }
   restored.initialPrompt = buildJobPrompt({
     request: restored.request,
     mode: restored.mode,
@@ -427,9 +515,8 @@ function restoreDashboardJob(snapshot, repository) {
     runAllUiScenarios: restored.runAllUiScenarios,
     targetEnvironment: restored.targetEnvironment,
     recordPlaywrightVideo: restored.recordPlaywrightVideo,
-    holdForManualLiveTest: restored.holdForManualLiveTest,
-    manualLiveTestUrl:
-      profile.applications?.frontend?.healthUrl ?? "",
+    manualLocalhostTest: restored.manualLocalhostTest,
+    manualLocalhostUrl: restored.manualLocalhostUrl,
     testEvidence: restored.testEvidence,
     branchNaming: restored.branchNaming,
     intakeSource: restored.intakeSource,
@@ -626,8 +713,8 @@ export function buildJobPrompt({
   runAllUiScenarios = false,
   targetEnvironment = "",
   recordPlaywrightVideo = false,
-  holdForManualLiveTest = false,
-  manualLiveTestUrl = "",
+  manualLocalhostTest = false,
+  manualLocalhostUrl = "",
   testEvidence = {
     enabled: true,
     source: "profile-defined",
@@ -702,10 +789,12 @@ export function buildJobPrompt({
 - Save the recording as WebM or MP4 under the repository-owned test-results, playwright-report, or artifacts directory. Keep it under 50 MiB and capture only the application surface: no credentials, browser profiles, personal windows, or unrelated data.
 - Keep the required screenshot evidence as the lightweight review artifact. If recording is unavailable, report that limitation explicitly instead of claiming video evidence exists.`
     : "- Playwright video recording was not requested. Preserve the required screenshot evidence and any repository-default traces.";
-  const manualLiveTestGuidance = holdForManualLiveTest
-    ? `- After automated Playwright finishes successfully, keep the FixLab-owned frontend running at ${manualLiveTestUrl || "the profile-defined local health URL"} for manual local-mode testing.
-- The user explicitly requested this hold, so the owned frontend process may remain running after the agent turn. Record its process identity and never stop an unrelated process.
-- Emit live-test blocked with the successful Playwright result and local URL. If an authorized draft PR already exists, update it with the pending manual gate and keep it draft; otherwise emit pr skipped because manual confirmation is pending.
+  const manualLocalhostGuidance = manualLocalhostTest
+    ? `- Manual React localhost validation is enabled independently of Playwright. After required automated validation finishes, start or reuse only the profile-defined frontend and wait for its health check at ${manualLocalhostUrl || "the profile-defined local health URL"}.
+- Emit local-stack passed only after the React frontend is healthy. The dashboard will then open the localhost URL in the user's default browser.
+- After every required automated browser gate is terminal, emit FIXLAB_MANUAL|localhost|pending immediately before live-test blocked. Keep the FixLab-owned frontend running and request that the user confirm Passed or Failed. Do not emit this marker for a Playwright, authentication, test-data, or other automated blocker.
+- Do not run or rerun Playwright solely because this manual option is enabled.
+- If an authorized draft PR already exists, keep it draft with the manual gate pending; otherwise emit pr skipped because manual confirmation is pending.
 - When the dashboard resumes this session with the user's manual result, mark live-test passed or failed accordingly, stop only the retained FixLab-owned frontend process, and continue to the gated PR outcome.`
     : "- Stop FixLab-owned applications after automated browser validation unless another explicit workflow requirement needs them.";
   const branchNamingGuidance = branchNaming
@@ -731,7 +820,7 @@ Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
 Selected validation environment: ${targetEnvironment || "profile-defined"}
 Record Playwright video evidence: ${recordPlaywrightVideo ? "yes" : "no"}
-Hold for manual local testing after Playwright: ${holdForManualLiveTest ? "yes" : "no"}
+Open React localhost for manual validation: ${manualLocalhostTest ? "yes" : "no"}
 Test synthesis: ${testEvidence.enabled ? "enabled" : "disabled"}
 Configured test data source: ${testEvidence.source}
 Configured mutation mode: ${testEvidence.mutationMode}
@@ -761,12 +850,14 @@ ${pullRequestGuidance}
 ${uiScenarioGuidance}
 ${environmentGuidance}
 ${videoGuidance}
-${manualLiveTestGuidance}
+${manualLocalhostGuidance}
 ${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
 - ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
+- Run verbose repository-owned tests, builds, linters, type checks, and package validation through \`fixlab exec --stage <stage> -- <command> [args...]\`. Keep its compact result in context and inspect the private evidence path only when an exact diagnostic is needed.
+- Add \`--reuse\` only for deterministic local validation when command, arguments, Git state, working directory, profile, and stage are unchanged. Never reuse startup, health, authentication, Playwright or live-environment validation, external-data checks, dependency installation, deployments, or mutating commands.
 - Do not skip Playwright merely because an unrelated non-browser test, build, or backend startup is failed or blocked. If frontend startup, authentication, safe data, and the selected browser journey are independently ready, run the live-test gate and preserve the other blocker separately.
 - Use local-stack only for profile-defined application startup and health. Do not mark local-stack failed because a separate test, type-check, lint, or production build reports unrelated baseline diagnostics; preserve that exact validation limitation separately and continue browser execution when startup is healthy.
 - Before browser execution, synthesize the smallest focused Playwright scenario and measurable assertions from the reported behavior and expected outcome when an equivalent repository-owned scenario does not already exist.
@@ -1438,8 +1529,11 @@ function publicJob(job) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
-    holdForManualLiveTest: job.holdForManualLiveTest,
-    manualLiveTestUrl: job.manualLiveTestUrl,
+    manualLocalhostTest: job.manualLocalhostTest,
+    manualLocalhostUrl: job.manualLocalhostUrl,
+    manualLocalhostOpenedAt: job.manualLocalhostOpenedAt,
+    manualLocalhostPending: job.manualLocalhostPending,
+    manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: job.testEvidence,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
@@ -1455,7 +1549,9 @@ function publicJob(job) {
     finishedAt: job.finishedAt,
     lastActivityAt: job.lastActivityAt,
     error: job.error,
-    canResume: ["blocked", "failed", "passed"].includes(job.status),
+    canResume:
+      !job.resumeDisabled &&
+      ["blocked", "failed", "passed"].includes(job.status),
     canComment: job.status === "running",
     inputCount: job.inputs.length,
     pendingInputCount: job.pendingInputs.length,
@@ -1746,6 +1842,21 @@ function appendLine(job, stream, line) {
     return;
   }
 
+  if (line === "FIXLAB_MANUAL|localhost|pending") {
+    if (!job.manualLocalhostTest) {
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: "Ignored manual localhost marker for a job without that option."
+      });
+      return;
+    }
+    job.manualLocalhostPending = true;
+    job.manualLocalhostResult = null;
+    return;
+  }
+
   const marker =
     line.match(/^FIXLAB_STAGE\|([^|]+)\|([^|]+)\|(.*)$/) ??
     line.match(/^FIXLAB_STAGE\s+(\S+)\s+(\S+)\s+-\s+(.*)$/);
@@ -1804,6 +1915,19 @@ function finishJob(job, result) {
     job.error = job.error ? `${job.error}; ${message}` : message;
   }
 
+  if (job.manualLocalhostPending) {
+    job.stages["live-test"] = {
+      status: "blocked",
+      message:
+        "Manual React localhost validation requires an explicit Passed or Failed result."
+    };
+  }
+  if (job.manualLocalhostResult === "failed") {
+    const message = "Manual React localhost validation failed.";
+    job.stages["live-test"] = { status: "failed", message };
+    job.error = job.error ? `${job.error}; ${message}` : message;
+  }
+
   const missing = FIXLAB_STAGES.filter(
     (stage) => !terminalStatuses.has(job.stages[stage].status)
   );
@@ -1852,10 +1976,16 @@ function finishJob(job, result) {
 
 function buildResumePrompt(job, { action, details }) {
   const expectedBugs = job.bugs.map((bug) => bug.id).join(", ");
+  const manualResult = job.manualLocalhostResult
+    ? `Persisted manual React localhost result: ${job.manualLocalhostResult}.
+- Preserve this accepted result as job evidence across retries or dashboard restarts.
+- Do not ask for another manual result unless a new frontend change invalidates it.`
+    : "No persisted manual React localhost result is available.";
   return `Resume the existing FixLab dashboard session for job ${job.id}.
 User action: ${action}
 User input:
 ${details}
+${manualResult}
 
 Resume requirements:
 - Reuse the completed diagnosis, current worktree, validation evidence, branch, and pull request from this session.
@@ -2120,6 +2250,7 @@ export function createDashboardServer({
   publicDirectory = join(packageRoot, "dashboard", "public"),
   executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader(),
+  browserOpener = openLocalUrl,
   executionIdleTimeoutMs,
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
@@ -2297,7 +2428,40 @@ export function createDashboardServer({
       onOutput(stream, text) {
         job.lastActivityAt = new Date().toISOString();
         armIdleWatchdog();
+        const localStackWasReady =
+          job.stages["local-stack"].status === "passed";
         appendOutput(job, stream, text);
+        if (
+          job.manualLocalhostTest &&
+          !job.manualLocalhostOpenedAt &&
+          !job.manualLocalhostOpening &&
+          !localStackWasReady &&
+          job.stages["local-stack"].status === "passed"
+        ) {
+          job.manualLocalhostOpening = true;
+          Promise.resolve()
+            .then(() => browserOpener(job.manualLocalhostUrl))
+            .then(() => {
+              job.manualLocalhostOpenedAt = new Date().toISOString();
+              pushLog(job, {
+                index: job.nextLogIndex,
+                timestamp: job.manualLocalhostOpenedAt,
+                stream: "dashboard",
+                message: "Opened the React localhost URL for manual validation."
+              });
+            })
+            .catch((error) => {
+              pushLog(job, {
+                index: job.nextLogIndex,
+                timestamp: new Date().toISOString(),
+                stream: "dashboard",
+                message: `Could not open React localhost automatically: ${error.message}`
+              });
+            })
+            .finally(() => {
+              job.manualLocalhostOpening = false;
+            });
+        }
       }
     });
     activeHandle = handle;
@@ -2617,6 +2781,12 @@ export function createDashboardServer({
         sendJson(response, 404, { error: "no FixLab job is available" });
         return;
       }
+      if (currentJob.resumeDisabled) {
+        sendJson(response, 409, {
+          error: "this FixLab job cannot be resumed safely"
+        });
+        return;
+      }
       const running = currentJob.status === "running" && Boolean(activeHandle);
       if (
         !running &&
@@ -2649,18 +2819,49 @@ export function createDashboardServer({
         sendJson(response, 400, { error: error.message });
         return;
       }
-      const details =
-        typeof body.details === "string" ? body.details.trim() : "";
-      if (!details || details.length > 10000) {
+      const action = body.action ?? "continue";
+      if (
+        ![
+          "comment",
+          "continue",
+          "retry",
+          "skip",
+          "manual-pass",
+          "manual-fail"
+        ].includes(action)
+      ) {
         sendJson(response, 400, {
-          error: "details must be a non-empty string of at most 10000 characters"
+          error:
+            "action must be comment, continue, retry, skip, manual-pass, or manual-fail"
         });
         return;
       }
-      const action = body.action ?? "continue";
-      if (!["comment", "continue", "retry", "skip"].includes(action)) {
+      const manualResult = ["manual-pass", "manual-fail"].includes(action);
+      if (manualResult && !currentJob.manualLocalhostPending) {
+        sendJson(response, 409, {
+          error: "manual localhost confirmation is not pending"
+        });
+        return;
+      }
+      if (currentJob.manualLocalhostPending && !manualResult) {
+        sendJson(response, 409, {
+          error:
+            "manual localhost confirmation requires an explicit manual-pass or manual-fail action"
+        });
+        return;
+      }
+      const submittedDetails =
+        typeof body.details === "string" ? body.details.trim() : "";
+      const details = manualResult
+        ? `The user completed manual React localhost validation and explicitly marked it ${
+            action === "manual-pass" ? "passed" : "failed"
+          }. Record the live-test stage as ${
+            action === "manual-pass" ? "passed" : "failed"
+          }, stop only the FixLab-owned frontend process, preserve this manual result in the job evidence, and continue the remaining gated outcome without rerunning Playwright.`
+        : submittedDetails;
+      if (!details || details.length > 10000) {
         sendJson(response, 400, {
-          error: "action must be comment, continue, retry, or skip"
+          error: "details must be a non-empty string of at most 10000 characters"
         });
         return;
       }
@@ -2677,6 +2878,11 @@ export function createDashboardServer({
         createdAt: new Date().toISOString()
       };
       currentJob.inputs.push(input);
+      if (manualResult) {
+        currentJob.manualLocalhostPending = false;
+        currentJob.manualLocalhostResult =
+          action === "manual-pass" ? "passed" : "failed";
+      }
       if (running) {
         currentJob.pendingInputs.push(input);
         pushLog(currentJob, {
@@ -2917,15 +3123,17 @@ export function createDashboardServer({
         sendJson(response, 400, { error: error.message });
         return;
       }
-      const holdForManualLiveTest =
-        body.holdForManualLiveTest ?? false;
-      if (typeof holdForManualLiveTest !== "boolean") {
+      const manualLocalhostTest =
+        body.manualLocalhostTest ??
+        body.holdForManualLiveTest ??
+        false;
+      if (typeof manualLocalhostTest !== "boolean") {
         sendJson(response, 400, {
-          error: "holdForManualLiveTest must be a boolean"
+          error: "manualLocalhostTest must be a boolean"
         });
         return;
       }
-      const manualLiveTestUrl =
+      const manualLocalhostUrl =
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       const testEvidence = configuredTestSynthesis(repositoryProfile);
       const configuredBranchNaming =
@@ -3051,8 +3259,12 @@ export function createDashboardServer({
         runAllUiScenarios,
         targetEnvironment,
         recordPlaywrightVideo,
-        holdForManualLiveTest,
-        manualLiveTestUrl,
+        manualLocalhostTest,
+        manualLocalhostUrl,
+        manualLocalhostOpenedAt: null,
+        manualLocalhostOpening: false,
+        manualLocalhostPending: false,
+        manualLocalhostResult: null,
         testEvidence,
         branchNaming,
         intakeSource,
@@ -3097,8 +3309,8 @@ export function createDashboardServer({
         runAllUiScenarios,
         targetEnvironment,
         recordPlaywrightVideo,
-        holdForManualLiveTest,
-        manualLiveTestUrl,
+        manualLocalhostTest,
+        manualLocalhostUrl,
         testEvidence,
         branchNaming,
         intakeSource,
