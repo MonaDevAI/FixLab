@@ -4,6 +4,11 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.7.1 - 2026-10-05
+
+- Refresh plugin discovery metadata for the GitHub Copilot marketplace with
+  product-neutral React/.NET positioning and focused agent-tooling keywords.
+
 ## 0.7.0 - 2026-10-05
 
 - Add an Agency-like `fixlab <repository>` interactive entry point for
