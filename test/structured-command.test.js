@@ -80,6 +80,11 @@ test("structured execution keeps compact diagnostics and redacted evidence", asy
             "console.log('token=super-secret-value');",
             "console.log('Authorization: Bearer bearer-secret-value');",
             "console.log(JSON.stringify({token:'json-secret-value'}));",
+            "console.log('# tests 116');",
+            "console.log('# pass 114');",
+            "console.log('# fail 1');",
+            "console.log('# cancelled 1');",
+            "console.log('# skipped 0');",
             "console.error('error TS1234: expected value');",
             "process.exitCode=2;"
           ].join("")
@@ -93,6 +98,14 @@ test("structured execution keeps compact diagnostics and redacted evidence", asy
     assert.match(errors.text(), /FAIL fixlab exec/);
     assert.match(errors.text(), /error TS1234/);
     assert.match(errors.text(), /Unique warnings retained: 1/);
+    assert.match(
+      errors.text(),
+      /Tests: 114 passed, 1 failed, 1 cancelled, 0 skipped, 116 total/
+    );
+    assert.match(
+      errors.text(),
+      /Context: \d+ raw lines \/ \d+ bytes \(~\d+ tokens\) -> \d+ summary lines \/ \d+ bytes \(~\d+ tokens\), \d+\.\d% reduction; \d+ lines omitted/
+    );
     assert.doesNotMatch(errors.text(), /super-secret-value/);
     assert.doesNotMatch(errors.text(), /bearer-secret-value|json-secret-value/);
     assert.doesNotMatch(errors.text(), /warning repeated warning.*warning repeated warning/su);
@@ -101,6 +114,31 @@ test("structured execution keeps compact diagnostics and redacted evidence", asy
     assert.ok(evidenceMatch);
     const evidenceDirectory = evidenceMatch[1];
     assert.equal(existsSync(join(evidenceDirectory, "result.json")), true);
+    const result = JSON.parse(
+      readFileSync(join(evidenceDirectory, "result.json"), "utf8")
+    );
+    assert.equal(result.version, 2);
+    assert.equal(result.tool, "Node.js");
+    assert.deepEqual(result.stdout.tests, {
+      failed: 1,
+      passed: 114,
+      skipped: 0,
+      cancelled: 1,
+      total: 116,
+      suites: null,
+      durationMs: null
+    });
+    assert.equal(result.context.rawLines > result.context.structuredLines, true);
+    assert.equal(result.context.reductionPercent > 80, true);
+    assert.equal(
+      Buffer.byteLength(errors.text()),
+      result.context.structuredBytes
+    );
+    assert.equal(
+      result.context.estimatedRawTokens >
+        result.context.estimatedStructuredTokens,
+      true
+    );
     const stdoutEvidence = readFileSync(
       join(evidenceDirectory, "stdout.log"),
       "utf8"
@@ -157,6 +195,11 @@ test("successful deterministic validation is reused only for identical repositor
       firstErrors.text()
     );
     assert.match(firstOutput.text(), /^PASS fixlab exec/mu);
+    assert.match(firstOutput.text(), /Tool: Node\.js test/mu);
+    assert.match(
+      firstOutput.text(),
+      /Tests: 1 passed, 0 failed, 0 cancelled, 0 skipped, 1 total/mu
+    );
     assert.equal(executions, 1);
 
     const secondOutput = capture();
@@ -290,6 +333,45 @@ test("unsupported commands are never reused", async () => {
   }
 });
 
+test("tool labels redact secret-shaped executable names", async () => {
+  const repository = createRepository();
+  const output = capture();
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end("done\n");
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+
+  try {
+    assert.equal(
+      await executeStructuredCommand(
+        {
+          repository,
+          cwd: repository,
+          stage: "validation",
+          reuse: false,
+          timeoutSeconds: 0,
+          command: "token=tool-secret",
+          commandArgs: []
+        },
+        { stdout: output.stream, stderr: capture().stream, spawn }
+      ),
+      0
+    );
+    assert.match(output.text(), /Tool: token=\[REDACTED\]/u);
+    assert.doesNotMatch(output.text(), /tool-secret/u);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("timed out commands return exit code 124", async () => {
   const repository = createRepository();
   const errors = capture();
@@ -297,18 +379,12 @@ test("timed out commands return exit code 124", async () => {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = (signal) => {
-      queueMicrotask(() => {
-        child.stdout.end();
-        child.stderr.end();
-        child.emit("close", null, signal);
-      });
-      return true;
-    };
+    child.kill = () => true;
     return child;
   };
 
   try {
+    const startedAt = Date.now();
     const status = await executeStructuredCommand(
       {
         repository,
@@ -319,9 +395,15 @@ test("timed out commands return exit code 124", async () => {
         command: process.execPath,
         commandArgs: ["-e", "setTimeout(() => {}, 10000)"]
       },
-      { stdout: capture().stream, stderr: errors.stream, spawn }
+      {
+        stdout: capture().stream,
+        stderr: errors.stream,
+        spawn,
+        terminationGraceMs: 10
+      }
     );
     assert.equal(status, 124);
+    assert.equal(Date.now() - startedAt < 2000, true);
     assert.match(errors.text(), /exceeded.*terminated/is);
   } finally {
     rmSync(repository, { recursive: true, force: true });
