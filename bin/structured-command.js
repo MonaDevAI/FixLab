@@ -177,6 +177,34 @@ function reusableValidationCommand(command, args) {
   return false;
 }
 
+function describeTool(command, args) {
+  const executable = basename(command)
+    .toLowerCase()
+    .replace(/\.(?:cmd|exe)$/gu, "");
+  const first = String(args[0] ?? "").toLowerCase();
+  const second = String(args[1] ?? "").toLowerCase();
+
+  if (executable === "dotnet") {
+    return first ? `dotnet ${first}` : "dotnet";
+  }
+  if (executable === "node") {
+    return first === "--test" ? "Node.js test" : "Node.js";
+  }
+  if (["npm", "pnpm", "yarn"].includes(executable)) {
+    if (first === "run" && second) {
+      return `${executable} run ${second}`;
+    }
+    return first ? `${executable} ${first}` : executable;
+  }
+  if (
+    (executable === "npx" && first === "playwright") ||
+    executable === "playwright"
+  ) {
+    return "Playwright";
+  }
+  return executable || "command";
+}
+
 function requiresWindowsCommandShell(command) {
   if (process.platform !== "win32") {
     return false;
@@ -382,7 +410,10 @@ function createCollector(path) {
   let failed = null;
   let passed = null;
   let skipped = null;
+  let cancelled = 0;
   let total = null;
+  let suites = null;
+  let durationMs = null;
 
   const appendSanitized = (value) => {
     if (capturedBytes >= MAX_CAPTURE_BYTES_PER_STREAM) {
@@ -449,6 +480,36 @@ function createCollector(path) {
       skipped = Number(playwright[2] ?? 0);
       passed = Number(playwright[3]);
       total = failed + skipped + passed;
+      return;
+    }
+    const tap = line.match(
+      /^(?:#|\u2139)?\s*(tests|suites|pass|fail|cancelled|skipped|duration_ms)\s+([\d.]+)$/iu
+    );
+    if (tap) {
+      const value = Number(tap[2]);
+      switch (tap[1].toLowerCase()) {
+        case "tests":
+          total = value;
+          break;
+        case "suites":
+          suites = value;
+          break;
+        case "pass":
+          passed = value;
+          break;
+        case "fail":
+          failed = value;
+          break;
+        case "cancelled":
+          cancelled = value;
+          break;
+        case "skipped":
+          skipped = value;
+          break;
+        case "duration_ms":
+          durationMs = value;
+          break;
+      }
     }
   };
 
@@ -483,7 +544,15 @@ function createCollector(path) {
       tests:
         total === null
           ? null
-          : { failed, passed, skipped, total }
+          : {
+              failed: failed ?? 0,
+              passed: passed ?? 0,
+              skipped: skipped ?? 0,
+              cancelled,
+              total,
+              suites,
+              durationMs
+            }
     };
   };
 
@@ -493,7 +562,7 @@ function createCollector(path) {
 function cacheFingerprint(options, state) {
   return sha256(
     JSON.stringify({
-      version: 2,
+      version: 3,
       platform: process.platform,
       command: options.command,
       commandArgs: options.commandArgs,
@@ -507,12 +576,13 @@ function cacheFingerprint(options, state) {
 
 function formatSummary(result, reused = false) {
   const lines = [
-    `${reused ? "REUSED" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${result.displayCommand} (${(result.durationMs / 1000).toFixed(1)}s)`
+    `${reused ? "REUSED" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${result.displayCommand} (${(result.durationMs / 1000).toFixed(1)}s)`,
+    `Tool: ${result.tool ?? "command"}`
   ];
   const tests = result.stdout.tests ?? result.stderr.tests;
   if (tests) {
     lines.push(
-      `Tests: ${tests.passed} passed, ${tests.failed} failed, ${tests.skipped} skipped, ${tests.total} total`
+      `Tests: ${tests.passed} passed, ${tests.failed} failed, ${tests.cancelled ?? 0} cancelled, ${tests.skipped} skipped, ${tests.total} total`
     );
   }
   const errors = [
@@ -543,16 +613,39 @@ function formatSummary(result, reused = false) {
   }
   lines.push(`Evidence: ${result.evidenceDirectory}`);
   const rawBytes = result.stdout.totalBytes + result.stderr.totalBytes;
-  const provisional = lines.join("\n");
-  const structuredBytes = Buffer.byteLength(provisional);
-  const reduction =
-    rawBytes > 0
-      ? Math.max(0, 100 - (structuredBytes / rawBytes) * 100).toFixed(1)
-      : "0.0";
-  lines.push(
-    `Context: ${rawBytes} raw bytes -> ${structuredBytes} structured bytes (${reduction}% reduction)`
-  );
-  return `${lines.join("\n")}\n`;
+  const rawLines = result.stdout.lineCount + result.stderr.lineCount;
+  const structuredLines = lines.length + 1;
+  let structuredBytes = Buffer.byteLength(`${lines.join("\n")}\n`);
+  let text = "";
+  let metrics = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const reductionPercent =
+      rawBytes > 0
+        ? Math.max(0, 100 - (structuredBytes / rawBytes) * 100)
+        : 0;
+    metrics = {
+      rawBytes,
+      structuredBytes,
+      estimatedRawTokens: Math.ceil(rawBytes / 4),
+      estimatedStructuredTokens: Math.ceil(structuredBytes / 4),
+      reductionPercent: Number(reductionPercent.toFixed(1)),
+      rawLines,
+      structuredLines,
+      omittedLines: Math.max(0, rawLines - structuredLines)
+    };
+    const contextLine =
+      `Context: ${metrics.rawLines} raw lines / ${metrics.rawBytes} bytes ` +
+      `(~${metrics.estimatedRawTokens} tokens) -> ${metrics.structuredLines} summary lines / ` +
+      `${metrics.structuredBytes} bytes (~${metrics.estimatedStructuredTokens} tokens), ` +
+      `${metrics.reductionPercent.toFixed(1)}% reduction; ${metrics.omittedLines} lines omitted`;
+    text = `${[...lines, contextLine].join("\n")}\n`;
+    const nextStructuredBytes = Buffer.byteLength(text);
+    if (nextStructuredBytes === structuredBytes) {
+      break;
+    }
+    structuredBytes = nextStructuredBytes;
+  }
+  return { text, metrics };
 }
 
 function readReusableResult(cachePath) {
@@ -588,7 +681,7 @@ export async function executeStructuredCommand(options, io = {}) {
   if (reusable) {
     const cached = readReusableResult(cachePath);
     if (cached) {
-      stdout.write(formatSummary(cached, true));
+      stdout.write(formatSummary(cached, true).text);
       return 0;
     }
   } else if (options.reuse) {
@@ -711,20 +804,18 @@ export async function executeStructuredCommand(options, io = {}) {
                 resolveStatus(124);
               }
             }, 5000);
-            abandonTimeout.unref();
           }
         }, 5000);
-        forceTimeout.unref();
       }, options.timeoutSeconds * 1000);
-      timeout.unref();
     }
   });
 
   const result = {
-    version: 1,
+    version: 2,
     status,
     stage: options.stage,
     displayCommand,
+    tool: describeTool(options.command, options.commandArgs),
     cwd: relative(options.repository, options.cwd) || ".",
     startedAt: new Date(startedAt).toISOString(),
     finishedAt: new Date(now()).toISOString(),
@@ -735,6 +826,8 @@ export async function executeStructuredCommand(options, io = {}) {
     stdout: stdoutCollector.finish(),
     stderr: stderrCollector.finish()
   };
+  const summary = formatSummary(result);
+  result.context = summary.metrics;
   writeFileSync(
     join(evidenceDirectory, "result.json"),
     `${JSON.stringify(result, null, 2)}\n`,
@@ -746,8 +839,7 @@ export async function executeStructuredCommand(options, io = {}) {
       mode: 0o600
     });
   }
-  const summary = formatSummary(result);
-  (status === 0 ? stdout : stderr).write(summary);
+  (status === 0 ? stdout : stderr).write(summary.text);
   return status;
 }
 

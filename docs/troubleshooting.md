@@ -14,7 +14,11 @@ fixlab exec --cwd .\frontend --stage test -- npm test
 
 The `Evidence:` path is Git-private and contains redacted `stdout.log`,
 `stderr.log`, and `result.json`. A missing stream file means that stream was
-empty. `--reuse` applies only to supported deterministic validation commands.
+empty. The terminal `Context:` line and `result.json.context` report raw and
+structured lines, bytes, estimated tokens, omitted lines, and reduction
+percentage. These estimates measure command-output reduction only; they do not
+represent the complete session context or provider billing. `--reuse` applies
+only to supported deterministic validation commands.
 If it reports that reuse was ignored, run normally or select an eligible local
 test, build, lint, type-check, or validation command.
 

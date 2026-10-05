@@ -169,7 +169,12 @@ fixlab exec --cwd .\frontend --stage typecheck --reuse -- npm run type-check
 
 The terminal receives a compact pass/fail summary, unique diagnostics, test
 counts, duration, and a private evidence path instead of the complete command
-stream. The child command's exit code is preserved. `--reuse` skips a prior
+stream. Its `Context:` line shows raw versus retained lines, bytes, estimated
+tokens, omitted lines, and reduction percentage. Open the private
+`result.json` and inspect its `context` object to compare those measurements
+across runs. Estimated tokens use `bytes / 4`; they show relative context
+reduction, not exact provider billing. The child command's exit code is
+preserved. `--reuse` skips a prior
 successful deterministic validation only when its command, arguments, stage,
 working directory, Git `HEAD`, tracked and untracked content, worktree status,
 and FixLab profile are
