@@ -2689,7 +2689,7 @@ test("terminal chat confirms and switches the connected repository", async () =>
     const alternate = url.startsWith("http://127.0.0.1:4318");
     return new Response(JSON.stringify({
       readiness: {
-        repository: alternate ? "C:\\repos\\admin-ui" : "C:\\repos\\fmdm",
+        repository: alternate ? "C:\\repos\\admin-ui" : "C:\\repos\\storefront",
         repositoryReady: true,
         profileReady: true
       },
@@ -2708,7 +2708,7 @@ test("terminal chat confirms and switches the connected repository", async () =>
     fetchImpl,
     pollIntervalMs: 10000,
     selectRepository: async ({ readiness }) => {
-      assert.equal(readiness.repository, "C:\\repos\\fmdm");
+      assert.equal(readiness.repository, "C:\\repos\\storefront");
       return "http://127.0.0.1:4318";
     }
   });
@@ -2782,7 +2782,7 @@ test("terminal chat opens the dashboard from natural language", async () => {
   const fetchImpl = async () =>
     new Response(JSON.stringify({
       readiness: {
-        repository: "C:\\repos\\fmdm",
+        repository: "C:\\repos\\storefront",
         repositoryReady: true,
         profileReady: true
       },
@@ -2827,7 +2827,7 @@ test("terminal chat creates a separate bug job from natural language", async () 
     if (url.endsWith("/api/status")) {
       return new Response(JSON.stringify({
         readiness: {
-          repository: "C:\\repos\\fmdm",
+          repository: "C:\\repos\\storefront",
           repositoryReady: true,
           profileReady: true
         },
@@ -2900,7 +2900,7 @@ test("terminal chat cancels a waiting job by queue position", async () => {
     if (url.endsWith("/api/status")) {
       return new Response(JSON.stringify({
         readiness: {
-          repository: "C:\\repos\\fmdm",
+          repository: "C:\\repos\\storefront",
           repositoryReady: true,
           profileReady: true
         },

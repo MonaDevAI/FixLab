@@ -375,7 +375,9 @@ test("tool labels redact secret-shaped executable names", async () => {
 test("timed out commands return exit code 124", async () => {
   const repository = createRepository();
   const errors = capture();
+  let spawnedAt;
   const spawn = () => {
+    spawnedAt = Date.now();
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
@@ -384,7 +386,6 @@ test("timed out commands return exit code 124", async () => {
   };
 
   try {
-    const startedAt = Date.now();
     const status = await executeStructuredCommand(
       {
         repository,
@@ -403,7 +404,7 @@ test("timed out commands return exit code 124", async () => {
       }
     );
     assert.equal(status, 124);
-    assert.equal(Date.now() - startedAt < 2000, true);
+    assert.equal(Date.now() - spawnedAt < 2000, true);
     assert.match(errors.text(), /exceeded.*terminated/is);
   } finally {
     rmSync(repository, { recursive: true, force: true });

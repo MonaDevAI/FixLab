@@ -4,6 +4,8 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.7.0 - 2026-10-05
+
 - Add an Agency-like `fixlab <repository>` interactive entry point for
   conversational setup, diagnosis, repair, and validation.
 - Add `fixlab chat` as a terminal client for the active dashboard session,
@@ -51,6 +53,12 @@ All notable changes to FixLab are documented in this file.
   administrator bypass for the repository owner's own validated changes.
 - Clarify that request-bearing CLI runs forward prompts through stdin while
   request-free runs inherit terminal input and remain interactive.
+- Add command-aware Node/TAP summaries with persisted context metrics so
+  agents receive compact results while redacted raw evidence remains available.
+- Sanitize command labels, report exact emitted-summary bytes, and keep timeout
+  enforcement reliable when a child process never closes its output streams.
+- Replace pilot-specific documentation and test fixtures with reusable
+  React/.NET examples suitable for the public repository.
 
 ## 0.6.1 - 2026-09-21
 

@@ -221,7 +221,7 @@ Read the complete [security model](docs/security.md).
 
 ## Current availability
 
-The current GitHub release is **v0.6.1**. It includes:
+The current GitHub release is **v0.7.0**. It includes:
 
 - The dependency-free FixLab CLI.
 - An Agent Plugins 1.0 package for GitHub Copilot CLI.
@@ -230,6 +230,8 @@ The current GitHub release is **v0.6.1**. It includes:
 - Repository onboarding templates and React/.NET examples.
 - Manual and Azure DevOps work-item intake.
 - Focused validation, browser evidence, queueing, metrics, and recovery.
+- Command-aware summaries that retain redacted evidence while reducing the
+  output sent back into an agent session.
 
 The dashboard is local and bound to `127.0.0.1`. FixLab does not currently
 provide a hosted multi-user broker, shared dashboard, or managed runner

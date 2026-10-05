@@ -53,9 +53,9 @@ language for bugs.
 For a UI bug:
 
 ```text
-The Product Hierarchy Excel template is missing the PFAM formatting. Reproduce
-the issue in the React UI, make the smallest fix, run focused tests and
-type-check/build, start the required local applications, validate with
+The exported inventory spreadsheet is missing the configured date formatting.
+Reproduce the issue in the React UI, make the smallest fix, run focused tests
+and type-check/build, start the required local applications, validate with
 Playwright, capture evidence, and create or update the PR.
 ```
 
@@ -291,8 +291,8 @@ owned process running, and pauses before completion. Confirm **Passed** or
 **Failed** in the same dashboard job to stop the frontend and continue.
 
 Set `pullRequests.branchNaming.userId` during onboarding. With
-`"prefixTemplate": "users/{userId}"`, a configured user ID of `mobiswal`
-produces branches beneath `users/mobiswal/`.
+`"prefixTemplate": "users/{userId}"`, a configured user ID of `developer`
+produces branches beneath `users/developer/`.
 
 The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
 IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,
