@@ -131,6 +131,10 @@ test("structured execution keeps compact diagnostics and redacted evidence", asy
     assert.equal(result.context.rawLines > result.context.structuredLines, true);
     assert.equal(result.context.reductionPercent > 80, true);
     assert.equal(
+      Buffer.byteLength(errors.text()),
+      result.context.structuredBytes
+    );
+    assert.equal(
       result.context.estimatedRawTokens >
         result.context.estimatedStructuredTokens,
       true
@@ -329,6 +333,45 @@ test("unsupported commands are never reused", async () => {
   }
 });
 
+test("tool labels redact secret-shaped executable names", async () => {
+  const repository = createRepository();
+  const output = capture();
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end("done\n");
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+
+  try {
+    assert.equal(
+      await executeStructuredCommand(
+        {
+          repository,
+          cwd: repository,
+          stage: "validation",
+          reuse: false,
+          timeoutSeconds: 0,
+          command: "token=tool-secret",
+          commandArgs: []
+        },
+        { stdout: output.stream, stderr: capture().stream, spawn }
+      ),
+      0
+    );
+    assert.match(output.text(), /Tool: token=\[REDACTED\]/u);
+    assert.doesNotMatch(output.text(), /tool-secret/u);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("timed out commands return exit code 124", async () => {
   const repository = createRepository();
   const errors = capture();
@@ -336,18 +379,12 @@ test("timed out commands return exit code 124", async () => {
     const child = new EventEmitter();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
-    child.kill = (signal) => {
-      queueMicrotask(() => {
-        child.stdout.end();
-        child.stderr.end();
-        child.emit("close", null, signal);
-      });
-      return true;
-    };
+    child.kill = () => true;
     return child;
   };
 
   try {
+    const startedAt = Date.now();
     const status = await executeStructuredCommand(
       {
         repository,
@@ -358,9 +395,15 @@ test("timed out commands return exit code 124", async () => {
         command: process.execPath,
         commandArgs: ["-e", "setTimeout(() => {}, 10000)"]
       },
-      { stdout: capture().stream, stderr: errors.stream, spawn }
+      {
+        stdout: capture().stream,
+        stderr: errors.stream,
+        spawn,
+        terminationGraceMs: 10
+      }
     );
     assert.equal(status, 124);
+    assert.equal(Date.now() - startedAt < 2000, true);
     assert.match(errors.text(), /exceeded.*terminated/is);
   } finally {
     rmSync(repository, { recursive: true, force: true });

@@ -577,7 +577,7 @@ function cacheFingerprint(options, state) {
 function formatSummary(result, reused = false) {
   const lines = [
     `${reused ? "REUSED" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${result.displayCommand} (${(result.durationMs / 1000).toFixed(1)}s)`,
-    `Tool: ${result.tool ?? "command"}`
+    `Tool: ${sanitize(result.tool ?? "command")}`
   ];
   const tests = result.stdout.tests ?? result.stderr.tests;
   if (tests) {
@@ -618,7 +618,7 @@ function formatSummary(result, reused = false) {
   let structuredBytes = Buffer.byteLength(`${lines.join("\n")}\n`);
   let text = "";
   let metrics = null;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
     const reductionPercent =
       rawBytes > 0
         ? Math.max(0, 100 - (structuredBytes / rawBytes) * 100)
@@ -641,6 +641,8 @@ function formatSummary(result, reused = false) {
     text = `${[...lines, contextLine].join("\n")}\n`;
     const nextStructuredBytes = Buffer.byteLength(text);
     if (nextStructuredBytes === structuredBytes) {
+      metrics.structuredBytes = nextStructuredBytes;
+      metrics.estimatedStructuredTokens = Math.ceil(nextStructuredBytes / 4);
       break;
     }
     structuredBytes = nextStructuredBytes;
@@ -667,6 +669,7 @@ export async function executeStructuredCommand(options, io = {}) {
   const stderr = io.stderr ?? process.stderr;
   const now = io.now ?? Date.now;
   const spawnProcess = io.spawn ?? spawn;
+  const terminationGraceMs = io.terminationGraceMs ?? 5000;
   const evidenceRoot = resolveEvidenceRoot(options.repository);
   mkdirSync(evidenceRoot, { recursive: true, mode: 0o700 });
   pruneEvidence(evidenceRoot, now());
@@ -803,9 +806,9 @@ export async function executeStructuredCommand(options, io = {}) {
                 child.stderr.destroy();
                 resolveStatus(124);
               }
-            }, 5000);
+            }, terminationGraceMs);
           }
-        }, 5000);
+        }, terminationGraceMs);
       }, options.timeoutSeconds * 1000);
     }
   });
@@ -815,7 +818,7 @@ export async function executeStructuredCommand(options, io = {}) {
     status,
     stage: options.stage,
     displayCommand,
-    tool: describeTool(options.command, options.commandArgs),
+    tool: sanitize(describeTool(options.command, options.commandArgs)),
     cwd: relative(options.repository, options.cwd) || ".",
     startedAt: new Date(startedAt).toISOString(),
     finishedAt: new Date(now()).toISOString(),
