@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import {
   chmodSync,
   existsSync,
@@ -805,25 +806,27 @@ test("keep-awake validates bounded timers", () => {
   assert.match(result.stderr, /integer between 1 and 1440/);
 });
 
-test("keep-awake uses an owned Windows execution-state process", () => {
+test("keep-awake uses an owned Windows execution-state process", async () => {
   let invocation;
-  const child = {
-    exitCode: null,
-    kill(signal) {
-      invocation.signal = signal;
-      this.exitCode = 0;
-      return true;
-    }
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.kill = (signal) => {
+    invocation.signal = signal;
+    child.exitCode = 0;
+    return true;
   };
   const handle = startKeepAwake(30, {
     platform: "win32",
     stdio: "ignore",
+    startupDelayMs: 0,
     spawnProcess(command, args, options) {
       invocation = { command, args, options };
+      queueMicrotask(() => child.emit("spawn"));
       return child;
     }
   });
 
+  await handle.ready;
   assert.equal(invocation.command, "pwsh");
   assert.deepEqual(invocation.args.slice(0, 3), [
     "-NoProfile",
@@ -831,10 +834,32 @@ test("keep-awake uses an owned Windows execution-state process", () => {
     "-Command"
   ]);
   assert.match(invocation.args[3], /SetThreadExecutionState/);
+  assert.match(invocation.args[3], /executionState -eq 0/);
   assert.match(invocation.args[3], /Start-Sleep -Seconds 1800/);
   assert.equal(invocation.options.shell, false);
   stopKeepAwake(handle);
   assert.equal(invocation.signal, "SIGTERM");
+});
+
+test("keep-awake rejects startup failures before reporting success", async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.kill = () => true;
+  const handle = startKeepAwake(30, {
+    platform: "linux",
+    stdio: "ignore",
+    startupDelayMs: 0,
+    spawnProcess() {
+      queueMicrotask(() => {
+        const error = new Error("systemd-inhibit was not found");
+        error.code = "ENOENT";
+        child.emit("error", error);
+      });
+      return child;
+    }
+  });
+
+  await assert.rejects(handle.ready, /systemd-inhibit was not found/);
 });
 
 test("dashboard rejects invalid keep-awake timers before starting", () => {
