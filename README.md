@@ -221,7 +221,7 @@ Read the complete [security model](docs/security.md).
 
 ## Current availability
 
-The current GitHub release is **v0.7.2**. It includes:
+The current GitHub release is **v0.7.3**. It includes:
 
 - The dependency-free FixLab CLI.
 - An Agent Plugins 1.0 package for GitHub Copilot CLI.

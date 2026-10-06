@@ -4,6 +4,12 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.7.3 - 2026-10-05
+
+- Wait for the native keep-awake inhibitor to become ready before reporting
+  success, and fail explicitly when Windows cannot acquire or release its
+  execution-state request.
+
 ## 0.7.2 - 2026-10-05
 
 - Add a bounded `fixlab keep-awake --minutes <minutes>` command and

@@ -1290,6 +1290,7 @@ async function dashboard(
   if (keepAwakeMinutes > 0) {
     try {
       keepAwakeHandle = startKeepAwake(keepAwakeMinutes);
+      await keepAwakeHandle.ready;
       keepAwakeHandle.child.once("error", (error) => {
         console.error(`Keep-awake timer failed: ${error.message}`);
       });
@@ -1297,6 +1298,7 @@ async function dashboard(
         `Keep-awake timer: ${keepAwakeMinutes} minute(s); screen locking is allowed, but interactive browser steps may require an unlocked desktop.`
       );
     } catch (error) {
+      stopKeepAwake(keepAwakeHandle);
       await dashboardServer.close();
       console.error(`Cannot start keep-awake timer: ${error.message}`);
       return 1;

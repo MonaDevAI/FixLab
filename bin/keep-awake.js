@@ -25,8 +25,9 @@ function keepAwakeInvocation(minutes, platform) {
       "Add-Type -MemberDefinition $signature -Name NativeMethods -Namespace FixLab",
       "$continuous = [uint32]2147483648",
       "$systemRequired = [uint32]1",
-      "[FixLab.NativeMethods]::SetThreadExecutionState($continuous -bor $systemRequired) | Out-Null",
-      `try { Start-Sleep -Seconds ${seconds} } finally { [FixLab.NativeMethods]::SetThreadExecutionState($continuous) | Out-Null }`
+      "$executionState = [FixLab.NativeMethods]::SetThreadExecutionState($continuous -bor $systemRequired)",
+      "if ($executionState -eq 0) { throw 'SetThreadExecutionState failed to enable the keep-awake request.' }",
+      `try { Start-Sleep -Seconds ${seconds} } finally { $released = [FixLab.NativeMethods]::SetThreadExecutionState($continuous); if ($released -eq 0) { throw 'SetThreadExecutionState failed to release the keep-awake request.' } }`
     ].join("; ");
     return {
       command: "pwsh",
@@ -59,7 +60,8 @@ export function startKeepAwake(
   {
     platform = process.platform,
     spawnProcess = spawn,
-    stdio = "inherit"
+    stdio = "inherit",
+    startupDelayMs = 250
   } = {}
 ) {
   const duration = parseKeepAwakeMinutes(minutes);
@@ -69,8 +71,48 @@ export function startKeepAwake(
     stdio,
     windowsHide: true
   });
+  const ready = new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      reject(error);
+    };
+    child.once("error", fail);
+    child.once("close", (code, signal) => {
+      fail(
+        new Error(
+          signal
+            ? `keep-awake process terminated by ${signal} during startup`
+            : `keep-awake process exited with code ${
+                Number.isInteger(code) ? code : "unknown"
+              } during startup`
+        )
+      );
+    });
+    child.once("spawn", () => {
+      setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        if (child.exitCode !== null) {
+          fail(
+            new Error(
+              `keep-awake process exited with code ${child.exitCode} during startup`
+            )
+          );
+          return;
+        }
+        settled = true;
+        resolve();
+      }, startupDelayMs);
+    });
+  });
   return {
     child,
+    ready,
     minutes: duration,
     command: invocation.command,
     args: invocation.args
@@ -85,6 +127,7 @@ export function stopKeepAwake(handle) {
 
 export async function runKeepAwake(minutes, options = {}) {
   const handle = startKeepAwake(minutes, options);
+  await handle.ready;
   console.log(
     `FixLab will keep this machine awake for ${handle.minutes} minute(s).`
   );
