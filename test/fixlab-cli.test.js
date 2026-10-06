@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { EventEmitter } from "node:events";
 import {
   chmodSync,
   existsSync,
@@ -13,6 +14,11 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
+import {
+  parseKeepAwakeMinutes,
+  startKeepAwake,
+  stopKeepAwake
+} from "../bin/keep-awake.js";
 
 const cli = fileURLToPath(new URL("../bin/fixlab.js", import.meta.url));
 
@@ -60,6 +66,8 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /fixlab validate/);
   assert.match(result.stdout, /fixlab dashboard/);
   assert.match(result.stdout, /fixlab chat/);
+  assert.match(result.stdout, /fixlab keep-awake/);
+  assert.match(result.stdout, /--keep-awake-minutes <minutes>/);
   assert.match(result.stdout, /chat \[repository\]/);
   assert.match(result.stdout, /fixlab <repository>/);
   assert.match(result.stdout, /--runtime <agency\|copilot>/);
@@ -780,6 +788,88 @@ test("dashboard rejects unknown options before starting", () => {
 
   assert.equal(result.status, 1);
   assert.match(result.stderr, /unknown dashboard option/);
+});
+
+test("keep-awake validates bounded timers", () => {
+  assert.equal(parseKeepAwakeMinutes("90"), 90);
+  assert.throws(
+    () => parseKeepAwakeMinutes("0"),
+    /integer between 1 and 1440/
+  );
+  assert.throws(
+    () => parseKeepAwakeMinutes("1441"),
+    /integer between 1 and 1440/
+  );
+
+  const result = run(["keep-awake", "--minutes", "0"], process.cwd());
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /integer between 1 and 1440/);
+});
+
+test("keep-awake uses an owned Windows execution-state process", async () => {
+  let invocation;
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.kill = (signal) => {
+    invocation.signal = signal;
+    child.exitCode = 0;
+    return true;
+  };
+  const handle = startKeepAwake(30, {
+    platform: "win32",
+    stdio: "ignore",
+    startupDelayMs: 0,
+    spawnProcess(command, args, options) {
+      invocation = { command, args, options };
+      queueMicrotask(() => child.emit("spawn"));
+      return child;
+    }
+  });
+
+  await handle.ready;
+  assert.equal(invocation.command, "pwsh");
+  assert.deepEqual(invocation.args.slice(0, 3), [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command"
+  ]);
+  assert.match(invocation.args[3], /SetThreadExecutionState/);
+  assert.match(invocation.args[3], /executionState -eq 0/);
+  assert.match(invocation.args[3], /Start-Sleep -Seconds 1800/);
+  assert.equal(invocation.options.shell, false);
+  stopKeepAwake(handle);
+  assert.equal(invocation.signal, "SIGTERM");
+});
+
+test("keep-awake rejects startup failures before reporting success", async () => {
+  const child = new EventEmitter();
+  child.exitCode = null;
+  child.kill = () => true;
+  const handle = startKeepAwake(30, {
+    platform: "linux",
+    stdio: "ignore",
+    startupDelayMs: 0,
+    spawnProcess() {
+      queueMicrotask(() => {
+        const error = new Error("systemd-inhibit was not found");
+        error.code = "ENOENT";
+        child.emit("error", error);
+      });
+      return child;
+    }
+  });
+
+  await assert.rejects(handle.ready, /systemd-inhibit was not found/);
+});
+
+test("dashboard rejects invalid keep-awake timers before starting", () => {
+  const result = run(
+    ["dashboard", "--keep-awake-minutes", "forever"],
+    process.cwd()
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /integer between 1 and 1440/);
 });
 
 test("dashboard rejects a missing repository before starting", () => {

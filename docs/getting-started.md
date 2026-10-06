@@ -53,9 +53,9 @@ language for bugs.
 For a UI bug:
 
 ```text
-The Product Hierarchy Excel template is missing the PFAM formatting. Reproduce
-the issue in the React UI, make the smallest fix, run focused tests and
-type-check/build, start the required local applications, validate with
+The exported inventory spreadsheet is missing the configured date formatting.
+Reproduce the issue in the React UI, make the smallest fix, run focused tests
+and type-check/build, start the required local applications, validate with
 Playwright, capture evidence, and create or update the PR.
 ```
 
@@ -169,7 +169,12 @@ fixlab exec --cwd .\frontend --stage typecheck --reuse -- npm run type-check
 
 The terminal receives a compact pass/fail summary, unique diagnostics, test
 counts, duration, and a private evidence path instead of the complete command
-stream. The child command's exit code is preserved. `--reuse` skips a prior
+stream. Its `Context:` line shows raw versus retained lines, bytes, estimated
+tokens, omitted lines, and reduction percentage. Open the private
+`result.json` and inspect its `context` object to compare those measurements
+across runs. Estimated tokens use `bytes / 4`; they show relative context
+reduction, not exact provider billing. The child command's exit code is
+preserved. `--reuse` skips a prior
 successful deterministic validation only when its command, arguments, stage,
 working directory, Git `HEAD`, tracked and untracked content, worktree status,
 and FixLab profile are
@@ -286,8 +291,8 @@ owned process running, and pauses before completion. Confirm **Passed** or
 **Failed** in the same dashboard job to stop the frontend and continue.
 
 Set `pullRequests.branchNaming.userId` during onboarding. With
-`"prefixTemplate": "users/{userId}"`, a configured user ID of `mobiswal`
-produces branches beneath `users/mobiswal/`.
+`"prefixTemplate": "users/{userId}"`, a configured user ID of `developer`
+produces branches beneath `users/developer/`.
 
 The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
 IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,

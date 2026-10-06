@@ -74,7 +74,7 @@ read credentials, or make network requests.
 ## Local dashboard command
 
 ```text
-fixlab dashboard [repository] [--port <number>] [--no-open]
+fixlab dashboard [repository] [--port <number>] [--no-open] [--keep-awake-minutes <minutes>]
 ```
 
 The command starts the packaged local UI on `127.0.0.1:4317` by default and
@@ -82,6 +82,24 @@ opens the system browser unless `--no-open` is supplied. It does not run during
 installation or `fixlab init`. The UI starts one selected-runtime job at a time
 and displays the intake, diagnosis, reproduce, fix, review, local-stack,
 live-test, and pull-request stages with polled logs.
+
+Use `--keep-awake-minutes` to prevent system sleep temporarily while the
+dashboard is running:
+
+```text
+fixlab dashboard C:\source\application --keep-awake-minutes 180
+```
+
+For a standalone timer without starting the dashboard:
+
+```text
+fixlab keep-awake --minutes 180
+```
+
+The timer releases automatically when its duration ends or its FixLab process
+stops. It does not change permanent power-plan settings or unlock the desktop;
+interactive browser and authentication steps may still require an unlocked
+screen.
 
 The user supplies only the bug or required enhancement. The agent loads
 validation context from the repository profile and autonomously owns contract
