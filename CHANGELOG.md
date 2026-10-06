@@ -4,6 +4,8 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+## 0.7.2 - 2026-10-05
+
 - Add a bounded `fixlab keep-awake --minutes <minutes>` command and
   `dashboard --keep-awake-minutes <minutes>` option that prevent system sleep
   without permanently changing the machine power plan.
