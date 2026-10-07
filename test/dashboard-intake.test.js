@@ -43,6 +43,16 @@ test("parses Azure DevOps URL and ID profile fallback", () => {
     }
   );
   assert.deepEqual(
+    parseAzureDevOpsWorkItem(
+      "https://microsoftit.visualstudio.com/OneITVSO/_workitems/edit/17300458"
+    ),
+    {
+      organization: "microsoftit",
+      project: "OneITVSO",
+      id: 17300458
+    }
+  );
+  assert.deepEqual(
     parseAzureDevOpsWorkItem("456", {
       azureDevOps: {
         organization: "profile-org",
@@ -61,7 +71,7 @@ test("parses Azure DevOps URL and ID profile fallback", () => {
   );
   assert.throws(
     () => parseAzureDevOpsWorkItem("https://example.com/item/1"),
-    /dev\.azure\.com/
+    /dev\.azure\.com or https:\/\/\{organization\}\.visualstudio\.com/
   );
 });
 

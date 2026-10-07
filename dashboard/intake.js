@@ -258,10 +258,19 @@ export function parseAzureDevOpsWorkItem(value, profile = {}) {
   try {
     url = new URL(input);
   } catch {
-    throw new Error("work item must be a numeric ID or full dev.azure.com URL");
+    throw new Error(
+      "work item must be a numeric ID or full dev.azure.com or visualstudio.com URL"
+    );
   }
-  if (url.protocol !== "https:" || url.hostname.toLowerCase() !== "dev.azure.com") {
-    throw new Error("work item URL must use https://dev.azure.com");
+  const hostname = url.hostname.toLowerCase();
+  const legacyHost = hostname.match(/^([a-z0-9][a-z0-9-]*)\.visualstudio\.com$/i);
+  if (
+    url.protocol !== "https:" ||
+    (hostname !== "dev.azure.com" && !legacyHost)
+  ) {
+    throw new Error(
+      "work item URL must use https://dev.azure.com or https://{organization}.visualstudio.com"
+    );
   }
   const segments = url.pathname
     .split("/")
@@ -273,13 +282,14 @@ export function parseAzureDevOpsWorkItem(value, profile = {}) {
       segments[index + 1]?.toLowerCase() === "edit"
   );
   const id = editIndex >= 0 ? segments[editIndex + 2] : null;
+  const expectedEditIndex = legacyHost ? 1 : 2;
   if (
-    segments.length < 5 ||
-    editIndex !== 2 ||
+    segments.length < expectedEditIndex + 3 ||
+    editIndex !== expectedEditIndex ||
     !/^\d+$/.test(id ?? "")
   ) {
     throw new Error(
-      "work item URL must match https://dev.azure.com/{organization}/{project}/_workitems/edit/{id}"
+      "work item URL must match https://dev.azure.com/{organization}/{project}/_workitems/edit/{id} or https://{organization}.visualstudio.com/{project}/_workitems/edit/{id}"
     );
   }
   const numericId = Number(id);
@@ -287,8 +297,8 @@ export function parseAzureDevOpsWorkItem(value, profile = {}) {
     throw new Error("work item ID must be a positive safe integer");
   }
   return {
-    organization: segments[0],
-    project: segments[1],
+    organization: legacyHost ? legacyHost[1] : segments[0],
+    project: legacyHost ? segments[0] : segments[1],
     id: numericId
   };
 }

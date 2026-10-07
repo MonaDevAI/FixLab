@@ -144,9 +144,10 @@ profile upgrades without exposing credentials or Azure CLI tokens.
 ### Intake sources
 
 Manual text is the default and permanently available intake path. Azure DevOps
-intake accepts a full `dev.azure.com` work-item URL, or an ID when
-`azureDevOps.organization` and `azureDevOps.project` are configured in the
-repository profile. Up to 20 unique IDs or URLs can be loaded as one batch.
+intake accepts a full `dev.azure.com` work-item URL, the equivalent legacy
+`{organization}.visualstudio.com` URL, or an ID when `azureDevOps.organization`
+and `azureDevOps.project` are configured in the repository profile. Up to 20
+unique IDs or URLs can be loaded as one batch.
 The local server asks Azure CLI for one Azure DevOps resource token using the
 developer's authenticated identity, loads the items concurrently, uses the
 token only in outbound HTTPS authorization headers, and does not expose it to
