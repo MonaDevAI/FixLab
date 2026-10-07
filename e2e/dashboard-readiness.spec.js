@@ -177,14 +177,14 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     page.getByRole("heading", { name: "Playwright authentication" })
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Repository onboarding" })
+    page.getByRole("heading", { name: "Azure DevOps intake (optional)" })
   ).toBeVisible();
   await page
     .getByLabel("Azure DevOps organization")
     .fill("example");
   await page.getByLabel("Azure DevOps project").fill("Example");
   await page
-    .getByRole("button", { name: "Save onboarding settings" })
+    .getByRole("button", { name: "Save Azure DevOps settings" })
     .click();
   await expect(page.locator("#onboarding-message")).toContainText(
     "Numeric bug loading is ready"

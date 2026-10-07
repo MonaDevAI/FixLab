@@ -469,6 +469,8 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.match(pageText, /Enter manually/);
     assert.match(pageText, /Load from Azure DevOps/);
     assert.match(pageText, /Load bugs/);
+    assert.match(pageText, /Azure DevOps intake/);
+    assert.match(pageText, /\(optional\)/);
     assert.match(pageText, /Continue this job/);
     assert.match(pageText, /Screenshots \(optional\)/);
     assert.match(pageText, /Repository-defined validation context is loaded automatically/);
@@ -485,6 +487,11 @@ test("dashboard reports readiness and serves only known static assets", async ()
       applicationText,
       /localStorage\.setItem\("fixlab\.loading-demo\.dismissed", "true"\)/
     );
+
+    const playwrightStatus = await jsonRequest(url, "/api/playwright/status");
+    assert.equal(playwrightStatus.response.status, 200);
+    assert.equal(playwrightStatus.body.required, false);
+    assert.equal(playwrightStatus.body.ready, true);
 
     const traversal = await fetch(`${url}/..%2fpackage.json`);
     assert.equal(traversal.status, 404);
@@ -1463,6 +1470,7 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     const initial = await jsonRequest(url, "/api/playwright/status");
     assert.equal(initial.response.status, 200);
     assert.equal(initial.body.configured, true);
+    assert.equal(initial.body.required, true);
     assert.equal(initial.body.ready, false);
 
     const started = await jsonRequest(url, "/api/playwright/connect", {

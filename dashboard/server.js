@@ -2080,6 +2080,7 @@ function playwrightAuthenticationConfig(repository) {
   return {
     command,
     environment,
+    required: authentication.required === true,
     statusPaths,
     workingDirectory
   };
@@ -2092,6 +2093,7 @@ function playwrightAuthenticationStatus(repository, connection) {
   } catch (error) {
     return {
       configured: false,
+      required: false,
       ready: false,
       running: Boolean(connection.handle),
       error: error.message,
@@ -2114,10 +2116,12 @@ function playwrightAuthenticationStatus(repository, connection) {
     configured: Boolean(
       configuration.command && configuration.statusPaths.length > 0
     ),
+    required: configuration.required,
     ready:
-      Boolean(configuration.command) &&
-      paths.length > 0 &&
-      paths.every((entry) => entry.ready),
+      !configuration.required ||
+      (Boolean(configuration.command) &&
+        paths.length > 0 &&
+        paths.every((entry) => entry.ready)),
     running: Boolean(connection.handle),
     error: "",
     lastResult: connection.lastResult,

@@ -720,6 +720,14 @@ function renderJob(job, currentActiveJob = job) {
 }
 
 function renderPlaywrightStatus(status) {
+  if (!status.required) {
+    playwrightStatus.className = "badge passed";
+    playwrightStatus.textContent = "Not required";
+    playwrightConnect.disabled = true;
+    playwrightGuidance.textContent =
+      "The repository profile does not require browser authentication.";
+    return;
+  }
   playwrightStatus.className = `badge ${
     status.running ? "running" : status.ready ? "passed" : "blocked"
   }`;
