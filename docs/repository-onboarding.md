@@ -10,6 +10,10 @@ markers, startup ports, Playwright dependencies, and the Git default branch.
 The generated profile remains repository-owned and must be reviewed. Existing
 profiles are never overwritten, and unresolved paths or commands remain an
 explicit onboarding blocker rather than receiving success-shaped defaults.
+If the repository has no exact Node.js declaration, the active version is
+written only as a review-required proposal. For .NET repositories, discovery
+keeps application startup targeted at the detected web project while running
+restore, build, and test commands from the containing solution directory.
 
 ## Required information
 

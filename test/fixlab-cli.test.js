@@ -115,8 +115,11 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
   try {
     const frontend = join(repository, "client");
     const backend = join(repository, "api");
+    const backendProject = join(backend, "Src", "Application.Api");
+    const backendTests = join(backend, "Tests", "Application.Api.Tests");
     mkdirSync(join(frontend, "src"), { recursive: true });
-    mkdirSync(backend, { recursive: true });
+    mkdirSync(backendProject, { recursive: true });
+    mkdirSync(backendTests, { recursive: true });
     writeFileSync(join(repository, ".nvmrc"), "22.14.0\n");
     writeFileSync(join(frontend, "package-lock.json"), "{}");
     writeFileSync(
@@ -139,11 +142,32 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
         }
       })
     );
+    writeFileSync(join(backend, "Application.sln"), "");
     writeFileSync(
-      join(backend, "Application.Api.csproj"),
+      join(backendProject, "Application.Api.csproj"),
       '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>'
     );
-    writeFileSync(join(backend, "Program.cs"), "var app = WebApplication.Create();");
+    writeFileSync(
+      join(backendProject, "Program.cs"),
+      "var app = WebApplication.Create();"
+    );
+    mkdirSync(join(backendProject, "Properties"), { recursive: true });
+    writeFileSync(
+      join(backendProject, "Properties", "launchSettings.json"),
+      `\uFEFF${JSON.stringify({
+        profiles: {
+          "Application.Api": {
+            commandName: "Project",
+            applicationUrl: "https://localhost:5051;http://localhost:5050",
+            launchUrl: "swagger"
+          }
+        }
+      })}`
+    );
+    writeFileSync(
+      join(backendTests, "Application.Api.Tests.csproj"),
+      '<Project Sdk="Microsoft.NET.Sdk"></Project>'
+    );
 
     const result = run(["init", repository], repository);
     const profile = JSON.parse(
@@ -160,7 +184,7 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /Detected frontend client/);
-    assert.match(result.stdout, /Detected backend api/);
+    assert.match(result.stdout, /Detected backend api\/Src\/Application\.Api/);
     assert.equal(profile.name, "detected-application");
     assert.equal(profile.toolchain.nodeVersion, "22.14.0");
     assert.equal(profile.applications.frontend.workingDirectory, "client");
@@ -171,6 +195,18 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
       "http://127.0.0.1:4173"
     );
     assert.equal(profile.applications.backend.workingDirectory, "api");
+    assert.equal(
+      profile.applications.backend.command,
+      "dotnet run --project Src/Application.Api/Application.Api.csproj"
+    );
+    assert.equal(profile.applications.backend.port, 5050);
+    assert.equal(
+      profile.applications.backend.healthUrl,
+      "http://127.0.0.1:5050/swagger"
+    );
+    assert.deepEqual(profile.components[1].testPatterns, [
+      "api/Tests/**/*.cs"
+    ]);
     assert.equal(profile.validation.commands.frontendRestore, "npm ci");
     assert.equal(profile.validation.commands.frontendTest, "npm run test");
     assert.equal(
@@ -189,6 +225,37 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
   }
 });
 
+test("init uses the checked-out default branch when the remote head is unavailable", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    const git = spawnSync(
+      "git",
+      ["init", "--initial-branch=develop", repository],
+      { encoding: "utf8" }
+    );
+    assert.equal(git.status, 0, git.stderr);
+
+    const result = run(["init", repository], repository);
+    const profile = JSON.parse(
+      readFileSync(
+        join(
+          repository,
+          ".github",
+          "fixlab",
+          "repository-profile.json"
+        ),
+        "utf8"
+      )
+    );
+
+    assert.equal(result.status, 0);
+    assert.equal(profile.pullRequests.defaultTargetBranch, "develop");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("onboard plans setup immediately when discovery produces usable paths", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 
@@ -197,6 +264,7 @@ test("onboard plans setup immediately when discovery produces usable paths", () 
     const backend = join(repository, "backend");
     mkdirSync(frontend, { recursive: true });
     mkdirSync(backend, { recursive: true });
+    writeFileSync(join(repository, ".nvmrc"), "22.14.0\n");
     writeFileSync(join(frontend, "package-lock.json"), "{}");
     writeFileSync(
       join(frontend, "package.json"),
@@ -876,6 +944,40 @@ test("setup-playwright plans approved repository-local commands without changing
     assert.match(result.stdout, /npx playwright install chromium/);
     assert.match(result.stdout, /No changes made/);
     assert.equal(existsSync(join(frontend, "node_modules")), false);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("setup-playwright does not reinstall a package already declared by the repository", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const frontend = join(repository, "frontend");
+    mkdirSync(frontend, { recursive: true });
+    writeFileSync(join(frontend, "package-lock.json"), "{}");
+    writeFileSync(
+      join(frontend, "package.json"),
+      JSON.stringify({
+        devDependencies: {
+          "@playwright/test": "1.48.0"
+        }
+      })
+    );
+
+    const result = run(
+      ["setup-playwright", repository],
+      repository,
+      createPackageManagerShims(repository)
+    );
+
+    assert.equal(result.status, 0);
+    assert.doesNotMatch(
+      result.stdout,
+      /npm install --save-dev @playwright\/test/
+    );
+    assert.match(result.stdout, /npx playwright install chromium/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

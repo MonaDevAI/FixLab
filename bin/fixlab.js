@@ -414,7 +414,7 @@ function repositoryPath(repository, path) {
 
 function readJson(path) {
   try {
-    return JSON.parse(readFileSync(path, "utf8"));
+    return JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
   } catch {
     return null;
   }
@@ -464,18 +464,27 @@ function detectNodeVersion(repository, frontendDirectory, packageJson) {
       if (existsSync(path)) {
         const version = exactNodeVersion(readFileSync(path, "utf8"));
         if (version) {
-          return { version, source: repositoryPath(repository, path) };
+          return {
+            version,
+            source: repositoryPath(repository, path),
+            reviewRequired: false
+          };
         }
       }
     }
   }
   const packageVersion = exactNodeVersion(packageJson?.engines?.node);
   if (packageVersion) {
-    return { version: packageVersion, source: "package.json engines.node" };
+    return {
+      version: packageVersion,
+      source: "package.json engines.node",
+      reviewRequired: false
+    };
   }
   return {
     version: exactNodeVersion(process.version),
-    source: "active Node.js runtime"
+    source: "active Node.js runtime",
+    reviewRequired: true
   };
 }
 
@@ -544,10 +553,35 @@ function detectBackend(repository) {
       if (/api|backend|server/i.test(repositoryPath(repository, directory))) {
         score += 20;
       }
+      const solutionDirectories = discoverFiles(
+        repository,
+        (name) => name.endsWith(".sln"),
+        3
+      )
+        .map((solutionPath) => dirname(solutionPath))
+        .filter((solutionDirectory) => {
+          const projectRelativePath = relative(solutionDirectory, projectPath);
+          return (
+            projectRelativePath &&
+            !projectRelativePath.startsWith("..") &&
+            !projectRelativePath.startsWith(sep)
+          );
+        })
+        .sort((left, right) => right.length - left.length);
+      const workingDirectory = solutionDirectories[0] ?? directory;
       return {
         directory,
+        workingDirectory,
         projectPath,
         relativeDirectory: repositoryPath(repository, directory),
+        relativeWorkingDirectory: repositoryPath(
+          repository,
+          workingDirectory
+        ),
+        projectFromWorkingDirectory: repositoryPath(
+          workingDirectory,
+          projectPath
+        ),
         score
       };
     })
@@ -555,7 +589,100 @@ function detectBackend(repository) {
   return candidates[0] ?? null;
 }
 
+function detectBackendTestPattern(repository, backend) {
+  const testProject = discoverFiles(
+    repository,
+    (name, path) =>
+      name.endsWith(".csproj") &&
+      (/test/i.test(name) || /(?:^|[\\/])Tests?(?:[\\/]|$)/i.test(path)),
+    4
+  )[0];
+  if (!testProject) {
+    return `${backend.relativeWorkingDirectory}/**/*Test*.cs`;
+  }
+  const parts = repositoryPath(repository, testProject).split("/");
+  const testDirectoryIndex = parts.findIndex((part) => /^tests?$/i.test(part));
+  if (testDirectoryIndex >= 0) {
+    return `${parts.slice(0, testDirectoryIndex + 1).join("/")}/**/*.cs`;
+  }
+  return `${repositoryPath(repository, dirname(testProject))}/**/*.cs`;
+}
+
+function detectBackendLaunch(backend) {
+  const launchSettings = readJson(
+    join(backend.directory, "Properties", "launchSettings.json")
+  );
+  const projectProfile = Object.values(launchSettings?.profiles ?? {}).find(
+    (profile) =>
+      profile?.commandName === "Project" &&
+      typeof profile.applicationUrl === "string"
+  );
+  const applicationUrls = projectProfile?.applicationUrl
+    ?.split(";")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  const selectedUrl =
+    applicationUrls?.find((value) => value.startsWith("http://")) ??
+    applicationUrls?.[0];
+  if (!selectedUrl) {
+    return {
+      port: 5000,
+      healthUrl: "http://127.0.0.1:5000"
+    };
+  }
+  try {
+    const url = new URL(selectedUrl);
+    url.hostname = "127.0.0.1";
+    const launchPath =
+      typeof projectProfile.launchUrl === "string"
+        ? projectProfile.launchUrl.trim()
+        : "";
+    if (launchPath) {
+      url.pathname = `/${launchPath.replace(/^\/+/, "")}`;
+    }
+    return {
+      port: Number(url.port) || (url.protocol === "https:" ? 443 : 80),
+      healthUrl: url.toString().replace(/\/$/, "")
+    };
+  } catch {
+    return {
+      port: 5000,
+      healthUrl: "http://127.0.0.1:5000"
+    };
+  }
+}
+
 function detectDefaultBranch(repository) {
+  const currentBranch = spawnSync("git", ["branch", "--show-current"], {
+    cwd: repository,
+    encoding: "utf8",
+    shell: false
+  }).stdout?.trim();
+  if (["main", "develop", "master"].includes(currentBranch)) {
+    return currentBranch;
+  }
+
+  const headName = spawnSync(
+    "git",
+    [
+      "name-rev",
+      "--name-only",
+      "--refs=refs/remotes/origin/*",
+      "HEAD"
+    ],
+    { cwd: repository, encoding: "utf8", shell: false }
+  );
+  if (headName.status === 0) {
+    const branch = headName.stdout
+      .trim()
+      .replace(/^remotes\/origin\//, "")
+      .replace(/^origin\//, "")
+      .replace(/~\d+$/, "");
+    if (branch && branch !== "undefined") {
+      return branch;
+    }
+  }
+
   const remoteHead = spawnSync(
     "git",
     ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
@@ -599,7 +726,12 @@ function createDetectedProfile(repository) {
   if (frontend) {
     const scripts = frontend.packageJson.scripts ?? {};
     const packageManager = detectPackageManager(frontend.directory);
-    const startScript = firstScript(scripts, ["start", "dev", "serve"]);
+    const startScript = firstScript(scripts, [
+      "start:local",
+      "start",
+      "dev",
+      "serve"
+    ]);
     const testScript = firstScript(scripts, ["test", "test:unit"]);
     const typeCheckScript = firstScript(scripts, [
       "type-check",
@@ -657,6 +789,26 @@ function createDetectedProfile(repository) {
       port,
       healthUrl: `http://127.0.0.1:${port}`
     };
+    const environments = new Set();
+    for (const scriptName of Object.keys(scripts)) {
+      const match = scriptName.match(
+        /^start:(local|dev|development|sit|uat|integration)$/i
+      );
+      if (!match) {
+        continue;
+      }
+      environments.add(
+        match[1].toLowerCase() === "dev"
+          ? "development"
+          : match[1].toLowerCase()
+      );
+    }
+    if (/dev/i.test(scripts.start ?? "")) {
+      environments.add("development");
+    }
+    if (environments.size > 0) {
+      template.environments = [...environments];
+    }
     template.browserAutomation.workingDirectory =
       frontend.relativeDirectory;
     template.browserAutomation.package =
@@ -677,6 +829,11 @@ function createDetectedProfile(repository) {
     findings.push(
       `frontend ${frontend.relativeDirectory} (${packageManager}, Node.js ${node.version} from ${node.source})`
     );
+    if (node.reviewRequired) {
+      unresolved.push(
+        `confirm that Node.js ${node.version} is repository-supported or replace toolchain.nodeVersion with the exact supported version`
+      );
+    }
     if (!startCommand) {
       unresolved.push(
         `add a start, dev, or serve script for ${frontend.relativeDirectory}/package.json`
@@ -693,12 +850,17 @@ function createDetectedProfile(repository) {
     template.components[1] = {
       name: "backend",
       paths: [sourceDirectory],
-      testPatterns: [
-        `${backend.relativeDirectory === "." ? "" : `${backend.relativeDirectory}/`}**/*Tests/**/*.cs`
-      ]
+      testPatterns: [detectBackendTestPattern(repository, backend)]
     };
     template.applications.backend.workingDirectory =
-      backend.relativeDirectory;
+      backend.relativeWorkingDirectory;
+    template.applications.backend.command =
+      backend.projectFromWorkingDirectory === basename(backend.projectPath)
+        ? "dotnet run"
+        : `dotnet run --project ${backend.projectFromWorkingDirectory}`;
+    const backendLaunch = detectBackendLaunch(backend);
+    template.applications.backend.port = backendLaunch.port;
+    template.applications.backend.healthUrl = backendLaunch.healthUrl;
     template.validation.commands.backendRestore = "dotnet restore";
     template.validation.commands.backendTest = "dotnet test";
     template.validation.commands.backendBuild = "dotnet build";
@@ -1082,6 +1244,15 @@ function formatCommand(command, args) {
   return [command, ...args].join(" ");
 }
 
+function packageIsDeclared(workingDirectory, packageName) {
+  const packageJson = readJson(join(workingDirectory, "package.json"));
+  return Boolean(
+    packageJson?.dependencies?.[packageName] ||
+      packageJson?.devDependencies?.[packageName] ||
+      packageJson?.optionalDependencies?.[packageName]
+  );
+}
+
 function setupPlaywright(repository, approved) {
   const { profile, error } = loadProfile(repository);
   if (error) {
@@ -1123,7 +1294,12 @@ function setupPlaywright(repository, approved) {
     packageManager,
     packageName,
     browserTarget
-  ).filter((_, index) => index > 0 || !current.packageCheck.ok);
+  ).filter(
+    (_, index) =>
+      index > 0 ||
+      (!current.packageCheck.ok &&
+        !packageIsDeclared(workingDirectory, packageName))
+  );
 
   console.log(`Playwright setup directory: ${workingDirectory}`);
   console.log(`Detected package manager: ${packageManager}`);

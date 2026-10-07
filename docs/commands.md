@@ -26,6 +26,10 @@ package manager and scripts, exact Node.js version, ASP.NET project location,
 Playwright command, startup port, and default branch. FixLab writes those
 values to the initial repository profile and reports anything it could not
 resolve. It never overwrites an existing profile.
+When no exact repository Node.js version is declared, FixLab records the active
+version as a proposal and requires the user to confirm or replace it before
+setup. A package already declared in `package.json` is not added again during
+the Playwright plan.
 
 When discovery produces usable paths, onboarding immediately prints the
 repository-owned restore and Playwright plans. In an interactive terminal it
