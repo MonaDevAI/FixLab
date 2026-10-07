@@ -343,6 +343,14 @@ successful test line. Full redacted evidence and `result.json` are stored under
 the worktree's Git-private
 `fixlab/command-evidence` path, never in tracked source.
 
+Matching commands compare diagnostic fingerprints with the most recent local
+result. Diagnostics that are unchanged are counted and omitted from the next
+agent-visible summary while new diagnostics remain visible. Summary limits
+adapt to compiler, linter, test, and general command output. The agent can
+expand only the bounded redacted stream it needs with
+`fixlab evidence show <evidence-id> --stream <stdout|stderr> --lines <count>`;
+this keeps progressive disclosure explicit instead of reinjecting full logs.
+
 Each compact summary reports raw and retained line counts, byte counts,
 estimated tokens, omitted lines, and the reduction percentage. The same
 measurements are persisted in `result.json.context` so reductions can be

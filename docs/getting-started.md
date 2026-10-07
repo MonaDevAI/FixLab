@@ -188,6 +188,16 @@ and FixLab profile are
 identical. Omit it for startup, health, authentication, browser, environment,
 installation, deployment, and mutating commands.
 
+Repeated matching diagnostics are omitted from later summaries and reported as
+an unchanged count. Expand only the redacted stream needed for diagnosis:
+
+```powershell
+fixlab evidence show <evidence-id> --stream stderr --lines 120
+```
+
+The evidence identifier and an equivalent inspection command are printed by
+`fixlab exec`. Evidence expansion is capped at 500 lines.
+
 To enable the dashboard authentication controls, define the repository-owned
 login command and the local files or directories that prove the session is
 ready:

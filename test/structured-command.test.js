@@ -10,12 +10,13 @@ import {
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
   executeStructuredCommand,
-  parseStructuredCommandArguments
+  parseStructuredCommandArguments,
+  showStructuredEvidence
 } from "../bin/structured-command.js";
 
 function git(repository, args) {
@@ -117,7 +118,7 @@ test("structured execution keeps compact diagnostics and redacted evidence", asy
     const result = JSON.parse(
       readFileSync(join(evidenceDirectory, "result.json"), "utf8")
     );
-    assert.equal(result.version, 2);
+    assert.equal(result.version, 3);
     assert.equal(result.tool, "Node.js");
     assert.deepEqual(result.stdout.tests, {
       failed: 1,
@@ -150,6 +151,72 @@ test("structured execution keeps compact diagnostics and redacted evidence", asy
     assert.match(stdoutEvidence, /token=\[REDACTED\]/);
     assert.match(stdoutEvidence, /Authorization: \[REDACTED\]/);
     assert.match(stdoutEvidence, /"token":\[REDACTED\]/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("repeated diagnostics are omitted and available through bounded evidence", async () => {
+  const repository = createRepository();
+  const options = {
+    repository,
+    cwd: repository,
+    stage: "typecheck",
+    reuse: false,
+    timeoutSeconds: 0,
+    command: process.execPath,
+    commandArgs: [
+      "-e",
+      "console.error('src/example.ts(4,2): error TS9999: repeated failure'); process.exitCode=2;"
+    ]
+  };
+
+  try {
+    const firstErrors = capture();
+    assert.equal(
+      await executeStructuredCommand(options, {
+        stdout: capture().stream,
+        stderr: firstErrors.stream
+      }),
+      2
+    );
+    assert.match(firstErrors.text(), /error TS9999: repeated failure/);
+
+    const secondErrors = capture();
+    assert.equal(
+      await executeStructuredCommand(options, {
+        stdout: capture().stream,
+        stderr: secondErrors.stream
+      }),
+      2
+    );
+    assert.match(
+      secondErrors.text(),
+      /Diagnostics: 1 unchanged from the previous matching command/
+    );
+    assert.doesNotMatch(secondErrors.text(), /^- .*TS9999/mu);
+
+    const evidencePath = secondErrors.text().match(/^Evidence: (.+)$/mu)?.[1];
+    const evidenceId = evidencePath ? basename(evidencePath.trim()) : "";
+    assert.ok(evidenceId);
+    const evidenceOutput = capture();
+    assert.equal(
+      showStructuredEvidence(
+        [
+          repository,
+          "show",
+          evidenceId,
+          "--stream",
+          "stderr",
+          "--lines",
+          "1"
+        ],
+        repository,
+        { stdout: evidenceOutput.stream }
+      ),
+      0
+    );
+    assert.match(evidenceOutput.text(), /error TS9999: repeated failure/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

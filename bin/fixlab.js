@@ -34,7 +34,10 @@ import {
   startKeepAwake,
   stopKeepAwake
 } from "./keep-awake.js";
-import { runStructuredCommand } from "./structured-command.js";
+import {
+  runStructuredCommand,
+  showStructuredEvidence
+} from "./structured-command.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -85,6 +88,7 @@ Usage:
   fixlab setup-playwright [repository] [--yes]
   fixlab authenticate [repository] [--yes]
   fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]
+  fixlab evidence [repository] show <evidence-id> [--stream <summary|stdout|stderr>] [--lines <count>]
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
   fixlab dashboard [repository] [--port <number>] [--no-open] [--keep-awake-minutes <minutes>] [--runtime <agency|copilot>]
@@ -104,6 +108,7 @@ Commands:
   authenticate
             Plan or run the repository-owned browser authentication command.
   exec      Run a command with compact structured output and private evidence.
+  evidence  Inspect a bounded portion of redacted structured-command evidence.
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
   dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
@@ -2132,6 +2137,10 @@ async function main(args) {
 
   if (command === "exec") {
     return runStructuredCommand(rest, process.cwd());
+  }
+
+  if (command === "evidence") {
+    return showStructuredEvidence(rest, process.cwd());
   }
 
   if (command === "run") {

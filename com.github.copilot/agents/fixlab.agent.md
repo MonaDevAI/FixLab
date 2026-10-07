@@ -50,14 +50,18 @@ instructions provide authoritative commands.
 9. Stop only processes owned by the current FixLab job.
 10. Present evidence, skipped gates, and remaining risks.
 
-Run verbose repository-owned tests, builds, linters, type checks, and package
-validation through `fixlab exec --stage <stage> -- <command> [args...]`. Use
-its compact result in agent context and refer to the private evidence path only
-when an exact diagnostic is needed. Add `--reuse` only for deterministic local
+Treat `fixlab exec` as the default boundary for verbose repository-owned tests,
+builds, linters, type checks, and package validation; do not invoke those
+commands directly. Use
+`fixlab exec --stage <stage> -- <command> [args...]`, keep only its compact
+result in agent context, and expand exact redacted output only through the
+printed `fixlab evidence show <evidence-id> --stream <stdout|stderr> --lines
+<count>` command. Direct execution is reserved for interactive programs,
+application startup, health checks, authentication, browser or
+live-environment validation, external-data checks, dependency installation,
+deployments, and mutating commands. Add `--reuse` only for deterministic local
 validation when the command, arguments, Git state, working directory, profile,
-and stage are unchanged. Never reuse application startup, health checks,
-authentication, browser or live-environment validation, external-data checks,
-dependency installation, deployments, or mutating commands.
+and stage are unchanged.
 
 When pull-request publication is already authorized, do not wait for every
 independent validation command to finish before creating review visibility.

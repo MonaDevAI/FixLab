@@ -74,13 +74,17 @@ only for information that cannot be established safely from the repository.
    skipped or blocked checks, and remaining risk. Do not commit, push, deploy,
    or create a pull request unless the developer explicitly requests it.
 
-Run verbose repository-owned tests, builds, linters, type checks, and package
-validation through `fixlab exec --stage <stage> -- <command> [args...]`. Keep
-the compact result in context and inspect its private evidence only when an
-exact diagnostic is needed. Use `--reuse` only for deterministic local
-validation with identical command and repository state. Never reuse startup,
+Treat `fixlab exec` as the default boundary for verbose repository-owned tests,
+builds, linters, type checks, and package validation; do not invoke those
+commands directly. Use
+`fixlab exec --stage <stage> -- <command> [args...]`, keep only its compact
+result in context, and expand exact redacted output only through the printed
+`fixlab evidence show <evidence-id> --stream <stdout|stderr> --lines <count>`
+command. Direct execution is reserved for interactive programs, startup,
 health, authentication, browser or live-environment checks, external-data
-checks, dependency installation, deployments, or mutating commands.
+checks, dependency installation, deployments, and mutating commands. Use
+`--reuse` only for deterministic local validation with identical command and
+repository state.
 
 When the developer authorizes pull-request publication, do not wait for every
 independent validation command to finish before creating review visibility.

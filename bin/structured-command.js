@@ -15,6 +15,8 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 const MAX_CAPTURE_BYTES_PER_STREAM = 50 * 1024 * 1024;
 const MAX_DIAGNOSTICS = 20;
 const MAX_TAIL_LINES = 20;
+const MAX_EVIDENCE_SHOW_LINES = 500;
+const DEFAULT_EVIDENCE_SHOW_LINES = 120;
 const MAX_EVIDENCE_DIRECTORIES = 100;
 const EVIDENCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TIMEOUT_SECONDS = 2_147_483;
@@ -202,7 +204,24 @@ function describeTool(command, args) {
   ) {
     return "Playwright";
   }
+  if (executable === "npx" && ["eslint", "jest", "tsc", "vitest"].includes(first)) {
+    return first === "tsc" ? "TypeScript" : first;
+  }
   return executable || "command";
+}
+
+function summaryBudget(tool, status) {
+  const value = String(tool).toLowerCase();
+  if (/(?:typescript|eslint|dotnet build)/u.test(value)) {
+    return { diagnostics: 30, tail: 12 };
+  }
+  if (/(?:test|jest|vitest|playwright)/u.test(value)) {
+    return { diagnostics: 12, tail: 12 };
+  }
+  return {
+    diagnostics: status === 0 ? 10 : MAX_DIAGNOSTICS,
+    tail: MAX_TAIL_LINES
+  };
 }
 
 function requiresWindowsCommandShell(command) {
@@ -574,6 +593,89 @@ function cacheFingerprint(options, state) {
   );
 }
 
+function diagnosticFingerprint(tool, line) {
+  return sha256(
+    `${String(tool).toLowerCase()}\0${String(line)
+      .trim()
+      .replace(/\s+/gu, " ")
+      .toLowerCase()}`
+  );
+}
+
+function resultErrors(result) {
+  return [...result.stderr.errors, ...result.stdout.errors];
+}
+
+function previousDiagnostics(evidenceRoot, result) {
+  const candidates = readdirSync(evidenceRoot, { withFileTypes: true })
+    .filter(
+      (entry) =>
+        entry.isDirectory() &&
+        /^\d{8}T\d{6}-[a-f0-9-]+$/u.test(entry.name)
+    )
+    .map((entry) => {
+      const directory = join(evidenceRoot, entry.name);
+      return { directory, mtimeMs: statSync(directory).mtimeMs };
+    })
+    .sort((left, right) => right.mtimeMs - left.mtimeMs)
+    .slice(0, 20);
+
+  for (const candidate of candidates) {
+    if (candidate.directory === result.evidenceDirectory) {
+      continue;
+    }
+    const resultPath = join(candidate.directory, "result.json");
+    if (!existsSync(resultPath)) {
+      continue;
+    }
+    try {
+      const previous = JSON.parse(readFileSync(resultPath, "utf8"));
+      if (
+        previous.displayCommand !== result.displayCommand ||
+        previous.cwd !== result.cwd ||
+        previous.stage !== result.stage
+      ) {
+        continue;
+      }
+      return {
+        evidenceDirectory: candidate.directory,
+        fingerprints: new Set(
+          resultErrors(previous).map((line) =>
+            diagnosticFingerprint(previous.tool, line)
+          )
+        )
+      };
+    } catch {
+      // Ignore incomplete evidence from an interrupted command.
+    }
+  }
+  return { evidenceDirectory: "", fingerprints: new Set() };
+}
+
+function summarizeDiagnostics(result, evidenceRoot) {
+  const errors = resultErrors(result);
+  const previous = previousDiagnostics(evidenceRoot, result);
+  const newLines = [];
+  const fingerprints = [];
+  let repeatedCount = 0;
+  for (const line of errors) {
+    const fingerprint = diagnosticFingerprint(result.tool, line);
+    fingerprints.push(fingerprint);
+    if (previous.fingerprints.has(fingerprint)) {
+      repeatedCount += 1;
+    } else {
+      newLines.push(line);
+    }
+  }
+  return {
+    fingerprints,
+    newLines,
+    newCount: newLines.length,
+    repeatedCount,
+    previousEvidenceDirectory: previous.evidenceDirectory
+  };
+}
+
 function formatSummary(result, reused = false) {
   const lines = [
     `${reused ? "REUSED" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${result.displayCommand} (${(result.durationMs / 1000).toFixed(1)}s)`,
@@ -585,16 +687,33 @@ function formatSummary(result, reused = false) {
       `Tests: ${tests.passed} passed, ${tests.failed} failed, ${tests.cancelled ?? 0} cancelled, ${tests.skipped} skipped, ${tests.total} total`
     );
   }
-  const errors = [
-    ...result.stderr.errors,
-    ...result.stdout.errors
-  ].slice(0, MAX_DIAGNOSTICS);
+  const budget = summaryBudget(result.tool, result.status);
+  const diagnosticSummary = result.diagnostics;
+  const errors = (
+    diagnosticSummary ? diagnosticSummary.newLines : resultErrors(result)
+  ).slice(0, budget.diagnostics);
   if (errors.length > 0) {
     lines.push("Errors:");
     lines.push(...errors.map((line) => `- ${line}`));
-  } else if (result.status !== 0) {
+    const omitted =
+      (diagnosticSummary?.newCount ?? resultErrors(result).length) -
+      errors.length;
+    if (omitted > 0) {
+      lines.push(`- ${omitted} additional new diagnostic(s) retained in evidence.`);
+    }
+  }
+  if (diagnosticSummary?.repeatedCount > 0) {
+    lines.push(
+      `Diagnostics: ${diagnosticSummary.repeatedCount} unchanged from the previous matching command; omitted from this summary.`
+    );
+  }
+  if (
+    errors.length === 0 &&
+    !diagnosticSummary?.repeatedCount &&
+    result.status !== 0
+  ) {
     const tail = [...result.stderr.tail, ...result.stdout.tail].slice(
-      -MAX_TAIL_LINES
+      -budget.tail
     );
     if (tail.length > 0) {
       lines.push("Failure tail:");
@@ -612,6 +731,9 @@ function formatSummary(result, reused = false) {
     );
   }
   lines.push(`Evidence: ${result.evidenceDirectory}`);
+  lines.push(
+    `Inspect: fixlab evidence show ${basename(result.evidenceDirectory)} --stream stderr --lines ${DEFAULT_EVIDENCE_SHOW_LINES}`
+  );
   const rawBytes = result.stdout.totalBytes + result.stderr.totalBytes;
   const rawLines = result.stdout.lineCount + result.stderr.lineCount;
   const structuredLines = lines.length + 1;
@@ -814,7 +936,7 @@ export async function executeStructuredCommand(options, io = {}) {
   });
 
   const result = {
-    version: 2,
+    version: 3,
     status,
     stage: options.stage,
     displayCommand,
@@ -829,6 +951,7 @@ export async function executeStructuredCommand(options, io = {}) {
     stdout: stdoutCollector.finish(),
     stderr: stderrCollector.finish()
   };
+  result.diagnostics = summarizeDiagnostics(result, evidenceRoot);
   const summary = formatSummary(result);
   result.context = summary.metrics;
   writeFileSync(
@@ -844,6 +967,105 @@ export async function executeStructuredCommand(options, io = {}) {
   }
   (status === 0 ? stdout : stderr).write(summary.text);
   return status;
+}
+
+export function parseStructuredEvidenceArguments(
+  args,
+  defaultRepository = process.cwd()
+) {
+  let index = 0;
+  let repositoryArgument = "";
+  if (args[index] !== "show") {
+    repositoryArgument = args[index] ?? "";
+    index += 1;
+  }
+  if (args[index] !== "show" || !args[index + 1]) {
+    throw new Error(
+      "usage: fixlab evidence [repository] show <evidence-id> [--stream <summary|stdout|stderr>] [--lines <count>]"
+    );
+  }
+  const evidenceId = args[index + 1];
+  if (!/^\d{8}T\d{6}-[a-f0-9-]+$/u.test(evidenceId)) {
+    throw new Error("evidence-id must be the identifier printed by fixlab exec");
+  }
+  index += 2;
+  let stream = "summary";
+  let lines = DEFAULT_EVIDENCE_SHOW_LINES;
+  while (index < args.length) {
+    const option = args[index];
+    const value = args[index + 1];
+    if (option === "--stream" && value) {
+      if (!["summary", "stdout", "stderr"].includes(value)) {
+        throw new Error("--stream must be summary, stdout, or stderr");
+      }
+      stream = value;
+      index += 2;
+      continue;
+    }
+    if (option === "--lines" && value) {
+      lines = parsePositiveInteger(value, "--lines");
+      if (lines > MAX_EVIDENCE_SHOW_LINES) {
+        throw new Error(
+          `--lines must be at most ${MAX_EVIDENCE_SHOW_LINES}`
+        );
+      }
+      index += 2;
+      continue;
+    }
+    throw new Error(`unknown fixlab evidence option: ${option}`);
+  }
+
+  const repositoryCandidate = resolve(repositoryArgument || defaultRepository);
+  if (
+    !existsSync(repositoryCandidate) ||
+    !statSync(repositoryCandidate).isDirectory()
+  ) {
+    throw new Error(
+      `repository does not exist or is not a directory: ${repositoryCandidate}`
+    );
+  }
+  const repository = realpathSync(repositoryCandidate);
+  const evidenceRoot = resolveEvidenceRoot(repository);
+  const evidenceDirectory = resolve(evidenceRoot, evidenceId);
+  if (
+    !isContained(evidenceRoot, evidenceDirectory) ||
+    !existsSync(evidenceDirectory) ||
+    !statSync(evidenceDirectory).isDirectory()
+  ) {
+    throw new Error(`structured command evidence was not found: ${evidenceId}`);
+  }
+  return { repository, evidenceDirectory, evidenceId, stream, lines };
+}
+
+export function showStructuredEvidence(
+  args,
+  defaultRepository = process.cwd(),
+  io = {}
+) {
+  const stdout = io.stdout ?? process.stdout;
+  const options = parseStructuredEvidenceArguments(args, defaultRepository);
+  const resultPath = join(options.evidenceDirectory, "result.json");
+  if (!existsSync(resultPath)) {
+    throw new Error(`structured command result is incomplete: ${options.evidenceId}`);
+  }
+  const result = JSON.parse(readFileSync(resultPath, "utf8"));
+  if (options.stream === "summary") {
+    stdout.write(formatSummary(result).text);
+    return 0;
+  }
+  const streamPath = join(options.evidenceDirectory, `${options.stream}.log`);
+  if (!existsSync(streamPath)) {
+    stdout.write(`${options.stream} evidence is empty.\n`);
+    return 0;
+  }
+  const content = readFileSync(streamPath, "utf8");
+  const available = content.split(/\r?\n/u);
+  while (available.at(-1) === "") {
+    available.pop();
+  }
+  const selected = available.slice(-options.lines);
+  stdout.write(`${selected.join("\n")}\n`);
+  return 0;
 }
 
 export async function runStructuredCommand(

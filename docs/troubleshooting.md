@@ -19,6 +19,16 @@ structured lines, bytes, estimated tokens, omitted lines, and reduction
 percentage. These estimates measure command-output reduction only; they do not
 represent the complete session context or provider billing. `--reuse` applies
 only to supported deterministic validation commands.
+
+Use the printed evidence identifier to inspect a bounded redacted stream:
+
+```powershell
+fixlab evidence show <evidence-id> --stream stderr --lines 120
+```
+
+FixLab caps expansion at 500 lines. Matching diagnostics repeated by a later
+execution are counted but omitted from its compact summary; use the evidence
+command when the exact prior text is needed.
 If it reports that reuse was ignored, run normally or select an eligible local
 test, build, lint, type-check, or validation command.
 
