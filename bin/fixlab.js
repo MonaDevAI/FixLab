@@ -6,10 +6,12 @@ import {
   copyFileSync,
   existsSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
-  statSync
+  statSync,
+  writeFileSync
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { createServer as createNetServer } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -94,7 +96,7 @@ Commands:
   <repository>
             Open an interactive FixLab shell for setup, fixes, and validation.
   onboard   Run the plan-first repository onboarding workflow.
-  init      Add the FixLab repository profile template.
+  init      Detect repository settings and add the initial FixLab profile.
   prepare   Plan or run repository-owned frontend and backend restore commands.
   doctor    Check required tools and repository configuration.
   setup-playwright
@@ -389,6 +391,352 @@ function checkPlaywright(repository, profile) {
   return { packageCheck, browserCheck };
 }
 
+const discoveryIgnoredDirectories = new Set([
+  ".git",
+  ".github",
+  ".next",
+  ".nuxt",
+  ".turbo",
+  "artifacts",
+  "bin",
+  "coverage",
+  "dist",
+  "node_modules",
+  "obj",
+  "playwright-report",
+  "test-results"
+]);
+
+function repositoryPath(repository, path) {
+  const value = relative(repository, path);
+  return value ? value.split(sep).join("/") : ".";
+}
+
+function readJson(path) {
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function discoverFiles(repository, predicate, maxDepth = 3) {
+  const files = [];
+  const visit = (directory, depth) => {
+    if (depth > maxDepth || files.length >= 200) {
+      return;
+    }
+    let entries;
+    try {
+      entries = readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.isSymbolicLink()) {
+        continue;
+      }
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) {
+        if (!discoveryIgnoredDirectories.has(entry.name)) {
+          visit(path, depth + 1);
+        }
+        continue;
+      }
+      if (entry.isFile() && predicate(entry.name, path)) {
+        files.push(path);
+      }
+    }
+  };
+  visit(repository, 0);
+  return files;
+}
+
+function exactNodeVersion(value) {
+  const normalized = String(value ?? "").trim().replace(/^v/i, "");
+  return /^\d+\.\d+\.\d+$/.test(normalized) ? normalized : "";
+}
+
+function detectNodeVersion(repository, frontendDirectory, packageJson) {
+  for (const directory of [repository, frontendDirectory]) {
+    for (const name of [".nvmrc", ".node-version"]) {
+      const path = join(directory, name);
+      if (existsSync(path)) {
+        const version = exactNodeVersion(readFileSync(path, "utf8"));
+        if (version) {
+          return { version, source: repositoryPath(repository, path) };
+        }
+      }
+    }
+  }
+  const packageVersion = exactNodeVersion(packageJson?.engines?.node);
+  if (packageVersion) {
+    return { version: packageVersion, source: "package.json engines.node" };
+  }
+  return {
+    version: exactNodeVersion(process.version),
+    source: "active Node.js runtime"
+  };
+}
+
+function packageScript(packageManager, name) {
+  return name ? `${packageManager} run ${name}` : "";
+}
+
+function firstScript(scripts, names) {
+  return names.find((name) => typeof scripts?.[name] === "string") ?? "";
+}
+
+function detectFrontend(repository) {
+  const candidates = discoverFiles(
+    repository,
+    (name) => name === "package.json",
+    3
+  )
+    .map((packagePath) => {
+      const packageJson = readJson(packagePath);
+      if (!packageJson) {
+        return null;
+      }
+      const directory = dirname(packagePath);
+      const scripts = packageJson.scripts ?? {};
+      const dependencies = {
+        ...(packageJson.dependencies ?? {}),
+        ...(packageJson.devDependencies ?? {})
+      };
+      const relativeDirectory = repositoryPath(repository, directory);
+      let score = relativeDirectory === "." ? 5 : 0;
+      if (dependencies.react || dependencies["react-dom"]) {
+        score += 100;
+      }
+      if (scripts.start || scripts.dev || scripts.serve) {
+        score += 30;
+      }
+      if (scripts.build) {
+        score += 15;
+      }
+      if (dependencies["@playwright/test"] || dependencies.playwright) {
+        score += 15;
+      }
+      if (/^(?:frontend|client|web|ui|apps\/(?:web|frontend))$/i.test(relativeDirectory)) {
+        score += 20;
+      }
+      return { directory, packageJson, relativeDirectory, score };
+    })
+    .filter(Boolean)
+    .sort((left, right) => right.score - left.score);
+  return candidates[0] ?? null;
+}
+
+function detectBackend(repository) {
+  const candidates = discoverFiles(
+    repository,
+    (name) => name.endsWith(".csproj"),
+    4
+  )
+    .map((projectPath) => {
+      const directory = dirname(projectPath);
+      const content = readFileSync(projectPath, "utf8");
+      let score = /Microsoft\.NET\.Sdk\.Web/i.test(content) ? 100 : 0;
+      if (existsSync(join(directory, "Program.cs"))) {
+        score += 40;
+      }
+      if (/api|backend|server/i.test(repositoryPath(repository, directory))) {
+        score += 20;
+      }
+      return {
+        directory,
+        projectPath,
+        relativeDirectory: repositoryPath(repository, directory),
+        score
+      };
+    })
+    .sort((left, right) => right.score - left.score);
+  return candidates[0] ?? null;
+}
+
+function detectDefaultBranch(repository) {
+  const remoteHead = spawnSync(
+    "git",
+    ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+    { cwd: repository, encoding: "utf8", shell: false }
+  );
+  if (remoteHead.status === 0) {
+    return remoteHead.stdout.trim().replace(/^origin\//, "") || "main";
+  }
+  for (const branch of ["main", "develop", "master"]) {
+    const result = spawnSync(
+      "git",
+      ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+      { cwd: repository, shell: false }
+    );
+    if (result.status === 0) {
+      return branch;
+    }
+  }
+  return "main";
+}
+
+function createDetectedProfile(repository) {
+  const template = JSON.parse(
+    readFileSync(
+      join(packageRoot, "templates", "repository-profile.json"),
+      "utf8"
+    )
+  );
+  const frontend = detectFrontend(repository);
+  const backend = detectBackend(repository);
+  const findings = [];
+  const unresolved = [];
+
+  template.name =
+    frontend?.packageJson?.displayName ??
+    frontend?.packageJson?.name ??
+    basename(repository);
+  template.pullRequests.defaultTargetBranch =
+    detectDefaultBranch(repository);
+
+  if (frontend) {
+    const scripts = frontend.packageJson.scripts ?? {};
+    const packageManager = detectPackageManager(frontend.directory);
+    const startScript = firstScript(scripts, ["start", "dev", "serve"]);
+    const testScript = firstScript(scripts, ["test", "test:unit"]);
+    const typeCheckScript = firstScript(scripts, [
+      "type-check",
+      "typecheck",
+      "check:types"
+    ]);
+    const e2eScript = firstScript(scripts, [
+      "test:e2e",
+      "e2e",
+      "test:playwright",
+      "playwright"
+    ]);
+    const sourceDirectory = existsSync(join(frontend.directory, "src"))
+      ? `${frontend.relativeDirectory === "." ? "" : `${frontend.relativeDirectory}/`}src`
+      : frontend.relativeDirectory;
+    const startCommand = packageScript(packageManager, startScript);
+    const startSource = scripts[startScript] ?? "";
+    const portMatch = startSource.match(/(?:--port(?:=|\s+)|PORT=)(\d{2,5})/i);
+    const isVite =
+      Boolean(frontend.packageJson.dependencies?.vite) ||
+      Boolean(frontend.packageJson.devDependencies?.vite);
+    const port = portMatch ? Number(portMatch[1]) : isVite ? 5173 : 3000;
+    const node = detectNodeVersion(
+      repository,
+      frontend.directory,
+      frontend.packageJson
+    );
+
+    template.toolchain = { nodeVersion: node.version };
+    template.components[0] = {
+      name: "frontend",
+      paths: [sourceDirectory],
+      testPatterns: [
+        `${sourceDirectory}/**/*.test.ts`,
+        `${sourceDirectory}/**/*.test.tsx`
+      ]
+    };
+    template.validation.commands.frontendRestore =
+      packageManager === "npm" && existsSync(join(frontend.directory, "package-lock.json"))
+        ? "npm ci"
+        : packageManager === "pnpm"
+          ? "pnpm install --frozen-lockfile"
+          : packageManager === "yarn"
+            ? "yarn install --frozen-lockfile"
+            : "npm install";
+    template.validation.commands.frontendTest =
+      packageScript(packageManager, testScript);
+    template.validation.commands.frontendTypeCheck =
+      packageScript(packageManager, typeCheckScript);
+    template.validation.commands.frontendBuild =
+      packageScript(packageManager, firstScript(scripts, ["build"]));
+    template.applications.frontend = {
+      workingDirectory: frontend.relativeDirectory,
+      command: startCommand,
+      port,
+      healthUrl: `http://127.0.0.1:${port}`
+    };
+    template.browserAutomation.workingDirectory =
+      frontend.relativeDirectory;
+    template.browserAutomation.package =
+      frontend.packageJson.dependencies?.["@playwright/test"] ||
+      frontend.packageJson.devDependencies?.["@playwright/test"]
+        ? "@playwright/test"
+        : frontend.packageJson.dependencies?.playwright ||
+            frontend.packageJson.devDependencies?.playwright
+          ? "playwright"
+          : "@playwright/test";
+    template.browserAutomation.testCommand =
+      packageScript(packageManager, e2eScript) ||
+      (packageManager === "pnpm"
+        ? "pnpm exec playwright test"
+        : packageManager === "yarn"
+          ? "yarn playwright test"
+          : "npx playwright test");
+    findings.push(
+      `frontend ${frontend.relativeDirectory} (${packageManager}, Node.js ${node.version} from ${node.source})`
+    );
+    if (!startCommand) {
+      unresolved.push(
+        `add a start, dev, or serve script for ${frontend.relativeDirectory}/package.json`
+      );
+    }
+  } else {
+    unresolved.push("set the frontend package path and commands");
+  }
+
+  if (backend) {
+    const sourceDirectory = existsSync(join(backend.directory, "src"))
+      ? `${backend.relativeDirectory === "." ? "" : `${backend.relativeDirectory}/`}src`
+      : backend.relativeDirectory;
+    template.components[1] = {
+      name: "backend",
+      paths: [sourceDirectory],
+      testPatterns: [
+        `${backend.relativeDirectory === "." ? "" : `${backend.relativeDirectory}/`}**/*Tests/**/*.cs`
+      ]
+    };
+    template.applications.backend.workingDirectory =
+      backend.relativeDirectory;
+    template.validation.commands.backendRestore = "dotnet restore";
+    template.validation.commands.backendTest = "dotnet test";
+    template.validation.commands.backendBuild = "dotnet build";
+    findings.push(
+      `backend ${backend.relativeDirectory} (${basename(backend.projectPath)})`
+    );
+  } else {
+    unresolved.push("set the ASP.NET project path and commands");
+  }
+
+  return { profile: template, findings, unresolved };
+}
+
+function profileSetupIssues(repository, profile) {
+  const issues = [];
+  const frontendDirectory = resolve(
+    repository,
+    profile?.applications?.frontend?.workingDirectory ?? ""
+  );
+  const backendDirectory = resolve(
+    repository,
+    profile?.applications?.backend?.workingDirectory ?? ""
+  );
+  if (!existsSync(frontendDirectory)) {
+    issues.push("frontend working directory does not exist");
+  }
+  if (!profile?.applications?.frontend?.command?.trim()) {
+    issues.push("frontend startup command is missing");
+  }
+  if (
+    profile?.validation?.commands?.backendRestore?.trim() &&
+    !existsSync(backendDirectory)
+  ) {
+    issues.push("backend working directory does not exist");
+  }
+  return issues;
+}
+
 function init(repository) {
   const destination = join(repository, profileRelativePath);
   let created = 0;
@@ -411,11 +759,18 @@ function init(repository) {
     }
   } else {
     mkdirSync(dirname(destination), { recursive: true });
-    copyFileSync(
-      join(packageRoot, "templates", "repository-profile.json"),
-      destination
+    const discovery = createDetectedProfile(repository);
+    writeFileSync(
+      destination,
+      `${JSON.stringify(discovery.profile, null, 2)}\n`
     );
     console.log(`Created ${destination}`);
+    for (const finding of discovery.findings) {
+      console.log(`Detected ${finding}.`);
+    }
+    for (const unresolved of discovery.unresolved) {
+      console.log(`Review required: ${unresolved}.`);
+    }
     created += 1;
   }
 
@@ -451,7 +806,9 @@ function init(repository) {
       ? `Created ${created} FixLab repository file(s).`
       : "FixLab repository setup is already present."
   );
-  console.log("Update its paths, commands, ports, and allowed environments.");
+  console.log(
+    "Review the detected paths, commands, ports, allowed environments, authentication, and branch ownership before approving setup."
+  );
   return 0;
 }
 
@@ -1149,6 +1506,24 @@ function parseOnboardArguments(args) {
   };
 }
 
+async function promptForApproval(question) {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) {
+    return false;
+  }
+  const readline = createInterface({
+    input: process.stdin,
+    output: process.stdout
+  });
+  try {
+    const answer = (await readline.question(`${question} [y/N]: `))
+      .trim()
+      .toLowerCase();
+    return answer === "y" || answer === "yes";
+  } finally {
+    readline.close();
+  }
+}
+
 async function onboard({
   repository,
   runtime,
@@ -1174,12 +1549,28 @@ async function onboard({
   console.log("");
 
   if (!profileExisted) {
-    console.log("FixLab created a new example profile.");
+    const loaded = loadProfile(repository);
+    if (loaded.error) {
+      console.error(`Cannot continue onboarding because ${loaded.error}.`);
+      return 1;
+    }
+    const discovery = createDetectedProfile(repository);
+    const setupIssues = [
+      ...discovery.unresolved,
+      ...profileSetupIssues(repository, loaded.profile)
+    ];
+    if (setupIssues.length > 0) {
+      console.log("FixLab generated a profile from repository discovery.");
+      console.log("Complete these repository-specific fields before setup:");
+      for (const issue of setupIssues) {
+        console.log(`  - ${issue}`);
+      }
+      console.log("Then rerun fixlab onboard for this repository.");
+      return 0;
+    }
     console.log(
-      "Update its frontend/backend paths, commands, ports, environments, and authentication settings."
+      "FixLab generated a usable initial profile from the detected repository structure."
     );
-    console.log("Then rerun fixlab onboard for this repository.");
-    return 0;
   }
 
   const preparationPlan = prepare(repository, false);
@@ -1192,16 +1583,21 @@ async function onboard({
   }
 
   if (!approved) {
-    console.log("");
-    console.log("No restore or Playwright installation commands were executed.");
-    console.log("After reviewing the profile and plans, rerun with --yes.");
-    console.log(
-      "Add --authenticate to perform repository-owned browser sign-in."
+    approved = await promptForApproval(
+      "Run the displayed restore and Playwright installation commands now?"
     );
-    console.log(
-      "Add --start-dashboard to start the dashboard after Doctor passes."
-    );
-    return 0;
+    if (!approved) {
+      console.log("");
+      console.log("No restore or Playwright installation commands were executed.");
+      console.log("After reviewing the profile and plans, rerun with --yes.");
+      console.log(
+        "Add --authenticate to perform repository-owned browser sign-in."
+      );
+      console.log(
+        "Add --start-dashboard to start the dashboard after Doctor passes."
+      );
+      return 0;
+    }
   }
 
   const preparationResult = prepare(repository, true);
@@ -1211,6 +1607,15 @@ async function onboard({
   const playwrightResult = setupPlaywright(repository, true);
   if (playwrightResult !== 0) {
     return playwrightResult;
+  }
+  const loaded = loadProfile(repository);
+  if (
+    !authenticateBrowser &&
+    loaded.profile?.browserAutomation?.authentication?.required === true
+  ) {
+    authenticateBrowser = await promptForApproval(
+      "Run the repository-owned interactive browser authentication command?"
+    );
   }
   if (authenticateBrowser) {
     const authenticationResult = authenticate(repository, true);
@@ -1222,6 +1627,11 @@ async function onboard({
   const doctorResult = doctor(repository, runtime);
   if (doctorResult !== 0) {
     return doctorResult;
+  }
+  if (!startDashboard) {
+    startDashboard = await promptForApproval(
+      "Doctor passed. Start the FixLab dashboard now?"
+    );
   }
   if (startDashboard) {
     return dashboard(repository, DEFAULT_DASHBOARD_PORT, true, runtime);

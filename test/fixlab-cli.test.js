@@ -77,7 +77,7 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /docs\/troubleshooting\.md/);
 });
 
-test("onboard creates a new profile and stops before placeholder setup", () => {
+test("onboard reports fields that discovery cannot resolve", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 
   try {
@@ -89,7 +89,8 @@ test("onboard creates a new profile and stops before placeholder setup", () => {
 
     assert.equal(result.status, 0);
     assert.match(result.stdout, /FixLab onboarding/);
-    assert.match(result.stdout, /created a new example profile/i);
+    assert.match(result.stdout, /generated a profile from repository discovery/i);
+    assert.match(result.stdout, /frontend working directory does not exist/i);
     assert.match(result.stdout, /Then rerun fixlab onboard/);
     assert.doesNotMatch(result.stderr, /restore directory is missing/);
     assert.equal(
@@ -102,6 +103,132 @@ test("onboard creates a new profile and stops before placeholder setup", () => {
         )
       ),
       true
+    );
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    const frontend = join(repository, "client");
+    const backend = join(repository, "api");
+    mkdirSync(join(frontend, "src"), { recursive: true });
+    mkdirSync(backend, { recursive: true });
+    writeFileSync(join(repository, ".nvmrc"), "22.14.0\n");
+    writeFileSync(join(frontend, "package-lock.json"), "{}");
+    writeFileSync(
+      join(frontend, "package.json"),
+      JSON.stringify({
+        name: "detected-application",
+        scripts: {
+          dev: "vite --port 4173",
+          test: "vitest run",
+          typecheck: "tsc --noEmit",
+          build: "vite build",
+          "test:e2e": "playwright test"
+        },
+        dependencies: {
+          react: "^19.0.0"
+        },
+        devDependencies: {
+          "@playwright/test": "^1.55.0",
+          vite: "^7.0.0"
+        }
+      })
+    );
+    writeFileSync(
+      join(backend, "Application.Api.csproj"),
+      '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>'
+    );
+    writeFileSync(join(backend, "Program.cs"), "var app = WebApplication.Create();");
+
+    const result = run(["init", repository], repository);
+    const profile = JSON.parse(
+      readFileSync(
+        join(
+          repository,
+          ".github",
+          "fixlab",
+          "repository-profile.json"
+        ),
+        "utf8"
+      )
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /Detected frontend client/);
+    assert.match(result.stdout, /Detected backend api/);
+    assert.equal(profile.name, "detected-application");
+    assert.equal(profile.toolchain.nodeVersion, "22.14.0");
+    assert.equal(profile.applications.frontend.workingDirectory, "client");
+    assert.equal(profile.applications.frontend.command, "npm run dev");
+    assert.equal(profile.applications.frontend.port, 4173);
+    assert.equal(
+      profile.applications.frontend.healthUrl,
+      "http://127.0.0.1:4173"
+    );
+    assert.equal(profile.applications.backend.workingDirectory, "api");
+    assert.equal(profile.validation.commands.frontendRestore, "npm ci");
+    assert.equal(profile.validation.commands.frontendTest, "npm run test");
+    assert.equal(
+      profile.validation.commands.frontendTypeCheck,
+      "npm run typecheck"
+    );
+    assert.equal(profile.validation.commands.frontendBuild, "npm run build");
+    assert.equal(profile.browserAutomation.workingDirectory, "client");
+    assert.equal(
+      profile.browserAutomation.testCommand,
+      "npm run test:e2e"
+    );
+    assert.equal(profile.pullRequests.defaultTargetBranch, "main");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("onboard plans setup immediately when discovery produces usable paths", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+
+  try {
+    const frontend = join(repository, "frontend");
+    const backend = join(repository, "backend");
+    mkdirSync(frontend, { recursive: true });
+    mkdirSync(backend, { recursive: true });
+    writeFileSync(join(frontend, "package-lock.json"), "{}");
+    writeFileSync(
+      join(frontend, "package.json"),
+      JSON.stringify({
+        name: "onboarding-fixture",
+        scripts: {
+          start: "vite",
+          build: "vite build",
+          "test:e2e": "playwright test"
+        },
+        dependencies: { react: "^19.0.0" }
+      })
+    );
+    writeFileSync(
+      join(backend, "Fixture.Api.csproj"),
+      '<Project Sdk="Microsoft.NET.Sdk.Web"></Project>'
+    );
+    writeFileSync(join(backend, "Program.cs"), "var app = WebApplication.Create();");
+
+    const result = run(
+      ["onboard", repository, "--runtime", "copilot"],
+      repository,
+      createPackageManagerShims(repository)
+    );
+
+    assert.equal(result.status, 0);
+    assert.match(result.stdout, /generated a usable initial profile/i);
+    assert.match(result.stdout, /Repository preparation plan/);
+    assert.match(result.stdout, /Playwright setup directory/);
+    assert.match(
+      result.stdout,
+      /No restore or Playwright installation commands were executed/
     );
   } finally {
     rmSync(repository, { recursive: true, force: true });

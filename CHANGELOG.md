@@ -4,6 +4,15 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Generate the initial repository profile from bounded React, Node.js,
+  Playwright, ASP.NET, package-manager, port, and Git branch discovery, while
+  preserving explicit review and plan-first setup.
+- Prompt interactive first-time users before dependency setup, browser
+  authentication, and dashboard startup without changing non-interactive
+  approval behavior.
+- Add a local loading-bug product tour to the dashboard and let users close it
+  persistently.
+
 ## 0.7.3 - 2026-10-05
 
 - Wait for the native keep-awake inhibitor to become ready before reporting

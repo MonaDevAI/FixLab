@@ -9,6 +9,81 @@ const stageNames = [
   "pr"
 ];
 
+const loadingDemoStages = [
+  {
+    name: "intake",
+    title: "Bug loaded",
+    detail:
+      "FixLab captures the report: navigating away during a slow request leaves the Orders page loading forever.",
+    surfaceTitle: "Loading order data…",
+    surfaceMessage: "A slow request starts while the user changes filters.",
+    surfaceState: "loading"
+  },
+  {
+    name: "diagnosis",
+    title: "Race condition found",
+    detail:
+      "The previous request can settle after the new view mounts, so its stale cleanup never clears the active loading state.",
+    surfaceTitle: "Stale response owns the spinner",
+    surfaceMessage: "The request lifecycle is tied to the wrong render.",
+    surfaceState: "stuck"
+  },
+  {
+    name: "reproduce",
+    title: "Failure reproduced",
+    detail:
+      "A focused test delays the first response, changes the filter, and proves the loading indicator remains visible.",
+    surfaceTitle: "Reproduction: spinner never settles",
+    surfaceMessage: "Slow response + filter change reliably triggers the bug.",
+    surfaceState: "stuck"
+  },
+  {
+    name: "fix",
+    title: "Smallest fix applied",
+    detail:
+      "FixLab cancels the stale request and settles loading only for the latest request, preserving existing success and error behavior.",
+    surfaceTitle: "Guarding the active request",
+    surfaceMessage: "Stale work is cancelled; current work owns loading state.",
+    surfaceState: "repairing"
+  },
+  {
+    name: "review",
+    title: "Effective diff reviewed",
+    detail:
+      "The review confirms the change is limited to request ownership and the focused regression test.",
+    surfaceTitle: "Repair reviewed",
+    surfaceMessage: "No unrelated UI or data behavior changed.",
+    surfaceState: "repairing"
+  },
+  {
+    name: "local-stack",
+    title: "Application started",
+    detail:
+      "FixLab starts repository-defined local services on owned loopback ports and waits for health checks.",
+    surfaceTitle: "Testing the repaired application",
+    surfaceMessage: "The local Orders page is healthy and ready.",
+    surfaceState: "loading"
+  },
+  {
+    name: "live-test",
+    title: "Browser journey passed",
+    detail:
+      "Playwright repeats the slow-response journey and verifies the spinner disappears before the latest order results render.",
+    surfaceTitle: "Latest orders loaded",
+    surfaceMessage: "The loading indicator settles and current results remain visible.",
+    surfaceState: "fixed"
+  },
+  {
+    name: "pr",
+    title: "Evidence ready",
+    detail:
+      "The pull-request outcome includes the reproduction, focused test, reviewed diff, browser assertion, and screenshot evidence.",
+    surfaceTitle: "Loading bug fixed",
+    surfaceMessage: "All required stages passed with review-ready evidence.",
+    surfaceState: "fixed"
+  }
+];
+
 const form = document.querySelector("#job-form");
 const startButton = document.querySelector("#start-button");
 const formError = document.querySelector("#form-error");
@@ -150,6 +225,25 @@ const metricCompleted = document.querySelector("#metric-completed");
 const metricDuration = document.querySelector("#metric-duration");
 const metricCacheReuse = document.querySelector("#metric-cache-reuse");
 const metricStatuses = document.querySelector("#metric-statuses");
+const loadingDemoPanel = document.querySelector("#loading-demo-panel");
+const loadingDemoStatus = document.querySelector("#loading-demo-status");
+const loadingDemoSurface = document.querySelector("#loading-demo-surface");
+const loadingDemoSurfaceTitle = document.querySelector(
+  "#loading-demo-surface-title"
+);
+const loadingDemoSurfaceMessage = document.querySelector(
+  "#loading-demo-surface-message"
+);
+const loadingDemoSpinner = document.querySelector("#loading-demo-spinner");
+const loadingDemoResults = document.querySelector("#loading-demo-results");
+const loadingDemoStagesElement = document.querySelector(
+  "#loading-demo-stages"
+);
+const loadingDemoDetail = document.querySelector("#loading-demo-detail");
+const loadingDemoStart = document.querySelector("#loading-demo-start");
+const loadingDemoNext = document.querySelector("#loading-demo-next");
+const loadingDemoReset = document.querySelector("#loading-demo-reset");
+const loadingDemoClose = document.querySelector("#loading-demo-close");
 let loadedWorkItems = [];
 let selectedScreenshots = [];
 let activeJob = null;
@@ -157,6 +251,8 @@ let selectedJobId = null;
 const observedJobs = new Map();
 const expandedJobIds = new Set();
 let renderedEvidenceJobId = null;
+let loadingDemoStep = -1;
+let loadingDemoTimer = null;
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -186,6 +282,116 @@ function formatDuration(milliseconds) {
   }
   const hours = Math.floor(minutes / 60);
   return `${hours}h ${minutes % 60}m`;
+}
+
+function stopLoadingDemoTimer() {
+  if (loadingDemoTimer !== null) {
+    clearTimeout(loadingDemoTimer);
+    loadingDemoTimer = null;
+  }
+}
+
+function renderLoadingDemo() {
+  const activeStage = loadingDemoStages[loadingDemoStep];
+  const complete = loadingDemoStep === loadingDemoStages.length - 1;
+  loadingDemoStagesElement.replaceChildren();
+  for (const [index, stage] of loadingDemoStages.entries()) {
+    const item = document.createElement("article");
+    const status =
+      loadingDemoStep < 0
+        ? "pending"
+        : index < loadingDemoStep || (complete && index === loadingDemoStep)
+          ? "passed"
+          : index === loadingDemoStep
+            ? "running"
+            : "pending";
+    item.className = `demo-stage ${status}`;
+    const marker = document.createElement("span");
+    marker.textContent = status === "passed" ? "✓" : String(index + 1);
+    const text = document.createElement("div");
+    const name = document.createElement("strong");
+    const summary = document.createElement("small");
+    name.textContent = stage.name;
+    summary.textContent = stage.title;
+    text.append(name, summary);
+    item.append(marker, text);
+    loadingDemoStagesElement.append(item);
+  }
+
+  loadingDemoStatus.className = `badge ${
+    complete ? "passed" : activeStage ? "running" : ""
+  }`;
+  loadingDemoStatus.textContent = complete
+    ? "Demo complete"
+    : activeStage
+      ? `${loadingDemoStep + 1} of ${loadingDemoStages.length} · ${activeStage.name}`
+      : "Ready to run";
+  loadingDemoStart.textContent = complete
+    ? "Replay demo"
+    : "Run loading bug demo";
+  loadingDemoNext.disabled = !activeStage || complete;
+  loadingDemoReset.disabled = !activeStage;
+  loadingDemoDetail.textContent =
+    activeStage?.detail ??
+    "The walkthrough keeps real jobs, logs, and evidence untouched.";
+  loadingDemoSurfaceTitle.textContent =
+    activeStage?.surfaceTitle ?? "Orders are waiting to load";
+  loadingDemoSurfaceMessage.textContent =
+    activeStage?.surfaceMessage ??
+    "Start the demo to load the bug report and trace the repair.";
+  loadingDemoSurface.className =
+    `demo-surface ${activeStage?.surfaceState ?? "idle"}`;
+  loadingDemoSpinner.hidden =
+    !["loading", "stuck", "repairing"].includes(activeStage?.surfaceState);
+  loadingDemoResults.hidden = activeStage?.surfaceState !== "fixed";
+}
+
+function scheduleLoadingDemo() {
+  stopLoadingDemoTimer();
+  if (loadingDemoStep >= 0 && loadingDemoStep < loadingDemoStages.length - 1) {
+    loadingDemoTimer = setTimeout(() => {
+      advanceLoadingDemo();
+    }, 1400);
+  }
+}
+
+function advanceLoadingDemo() {
+  if (loadingDemoStep < loadingDemoStages.length - 1) {
+    loadingDemoStep += 1;
+  }
+  renderLoadingDemo();
+  scheduleLoadingDemo();
+}
+
+function startLoadingDemo() {
+  stopLoadingDemoTimer();
+  loadingDemoStep = 0;
+  renderLoadingDemo();
+  scheduleLoadingDemo();
+}
+
+function resetLoadingDemo() {
+  stopLoadingDemoTimer();
+  loadingDemoStep = -1;
+  renderLoadingDemo();
+}
+
+function closeLoadingDemo() {
+  stopLoadingDemoTimer();
+  loadingDemoPanel.hidden = true;
+  try {
+    localStorage.setItem("fixlab.loading-demo.dismissed", "true");
+  } catch {
+    // The demo still closes when browser storage is unavailable.
+  }
+}
+
+function loadingDemoIsDismissed() {
+  try {
+    return localStorage.getItem("fixlab.loading-demo.dismissed") === "true";
+  } catch {
+    return false;
+  }
 }
 
 function renderReadiness(readiness) {
@@ -1137,6 +1343,13 @@ async function refreshMetrics() {
 }
 
 metricsPeriod.addEventListener("change", refreshMetrics);
+loadingDemoStart.addEventListener("click", startLoadingDemo);
+loadingDemoNext.addEventListener("click", () => {
+  stopLoadingDemoTimer();
+  advanceLoadingDemo();
+});
+loadingDemoReset.addEventListener("click", resetLoadingDemo);
+loadingDemoClose.addEventListener("click", closeLoadingDemo);
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -1432,6 +1645,11 @@ refreshMetrics();
 refreshPlaywrightStatus();
 refreshPlaywrightEvidence();
 refreshOnboarding();
+if (loadingDemoIsDismissed()) {
+  loadingDemoPanel.hidden = true;
+} else {
+  renderLoadingDemo();
+}
 setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);

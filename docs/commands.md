@@ -21,11 +21,18 @@ known and should execute without first entering the interactive conversation.
 fixlab onboard [repository] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>]
 ```
 
-The first run creates the repository profile and stops before using generic
-placeholder paths. After the profile is configured, a plan-only run prints the
-repository-owned restore and Playwright commands. `--yes` approves those
-commands, `--authenticate` runs the repository-owned interactive browser login,
-and `--start-dashboard` starts the dashboard only after Doctor passes.
+The first run detects bounded repository metadata: React package location,
+package manager and scripts, exact Node.js version, ASP.NET project location,
+Playwright command, startup port, and default branch. FixLab writes those
+values to the initial repository profile and reports anything it could not
+resolve. It never overwrites an existing profile.
+
+When discovery produces usable paths, onboarding immediately prints the
+repository-owned restore and Playwright plans. In an interactive terminal it
+offers to run those commands and, after Doctor passes, to start the dashboard.
+Non-interactive runs remain plan-first. `--yes` approves setup explicitly,
+`--authenticate` runs the repository-owned browser login, and
+`--start-dashboard` starts the dashboard only after Doctor passes.
 
 `fixlab init` installs these prompt files under `.github/prompts` without
 overwriting repository-owned versions.

@@ -219,7 +219,8 @@ and launches it through the existing `agency` executable.
 
 ## Onboard an application repository
 
-Open the React and .NET application repository, then create its FixLab profile:
+Open the React and .NET application repository, then discover its initial
+FixLab profile:
 
 ```powershell
 Set-Location <application-repository>
@@ -244,7 +245,10 @@ If Visual Studio Code is unavailable:
 notepad .github\fixlab\repository-profile.json
 ```
 
-Replace the template values with paths and commands owned by the application
+FixLab detects common package locations, lockfiles, scripts, an exact Node.js
+version, ASP.NET project files, startup ports, Playwright configuration, and
+the Git default branch. Review the generated values and replace any unresolved
+or incorrect value with paths and commands owned by the application
 repository. A React and .NET profile normally defines:
 
 ```json

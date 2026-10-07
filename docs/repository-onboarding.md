@@ -3,6 +3,14 @@
 FixLab must not assume that every React and .NET repository has the same layout.
 The target repository owns a versioned profile.
 
+`fixlab init` performs bounded discovery without reading source contents beyond
+package metadata and ASP.NET project declarations. It checks package files and
+lockfiles, common scripts, exact Node version files, `.csproj` web-project
+markers, startup ports, Playwright dependencies, and the Git default branch.
+The generated profile remains repository-owned and must be reviewed. Existing
+profiles are never overwritten, and unresolved paths or commands remain an
+explicit onboarding blocker rather than receiving success-shaped defaults.
+
 ## Required information
 
 ### Repository

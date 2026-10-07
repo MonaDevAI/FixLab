@@ -17,6 +17,50 @@
         <div id="readiness" class="readiness">Checking repository…</div>
       </header>
 
+      <section id="loading-demo-panel" class="panel demo-panel" aria-labelledby="loading-demo-title">
+        <div class="section-heading">
+          <div>
+            <p class="eyebrow">Guided product tour</p>
+            <h2 id="loading-demo-title">Loading bug repair demo</h2>
+          </div>
+          <div class="demo-heading-actions">
+            <span id="loading-demo-status" class="badge">Ready to run</span>
+            <button id="loading-demo-close" type="button" class="secondary" aria-label="Close guided demo">Close</button>
+          </div>
+        </div>
+        <p class="guidance">Watch a representative stuck-loading defect move through the same evidence-backed stages as a real FixLab job. This demonstration is local UI only and does not create a job or change the selected repository.</p>
+        <div class="demo-grid">
+          <article id="loading-demo-surface" class="demo-surface idle">
+            <div class="demo-browser-bar">
+              <span></span><span></span><span></span>
+              <strong>Orders</strong>
+            </div>
+            <div class="demo-app-content">
+              <div>
+                <p class="eyebrow">Application preview</p>
+                <h3 id="loading-demo-surface-title">Orders are waiting to load</h3>
+                <p id="loading-demo-surface-message">Start the demo to load the bug report and trace the repair.</p>
+              </div>
+              <div id="loading-demo-spinner" class="demo-spinner" hidden aria-label="Loading"></div>
+              <ul id="loading-demo-results" class="demo-results" hidden>
+                <li><span>Order 1048</span><strong>Ready</strong></li>
+                <li><span>Order 1049</span><strong>Review</strong></li>
+                <li><span>Order 1050</span><strong>Ready</strong></li>
+              </ul>
+            </div>
+          </article>
+          <div>
+            <div id="loading-demo-stages" class="demo-stages"></div>
+            <p id="loading-demo-detail" class="demo-detail">The walkthrough keeps real jobs, logs, and evidence untouched.</p>
+          </div>
+        </div>
+        <div class="button-row">
+          <button id="loading-demo-start" type="button">Run loading bug demo</button>
+          <button id="loading-demo-next" type="button" class="secondary" disabled>Next stage</button>
+          <button id="loading-demo-reset" type="button" class="secondary" disabled>Reset demo</button>
+        </div>
+      </section>
+
       <section class="panel connection-panel">
         <div class="section-heading">
           <h2>Playwright authentication</h2>

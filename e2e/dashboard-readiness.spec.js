@@ -154,6 +154,20 @@ test("dashboard exposes repository readiness through the running server", async 
   ).toBeVisible();
 });
 
+test("dashboard demo can be closed and stays dismissed after reload", async ({
+  page
+}) => {
+  await page.goto(baseUrl);
+
+  const demo = page.locator("#loading-demo-panel");
+  await expect(demo).toBeVisible();
+  await page.getByRole("button", { name: "Close guided demo" }).click();
+  await expect(demo).toBeHidden();
+
+  await page.reload();
+  await expect(demo).toBeHidden();
+});
+
 test("dashboard exposes multi-bug intake and resumable user input", async ({
   page
 }) => {

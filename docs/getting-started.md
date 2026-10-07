@@ -106,9 +106,15 @@ For the explicit plan-first workflow, run:
 fixlab onboard C:\path\to\application --runtime copilot
 ```
 
-The first run creates the profile and stops for repository-specific
-configuration. After reviewing the profile, rerun the same command to inspect
-the restore and Playwright plans. Approve the complete setup explicitly:
+The first run discovers common React and ASP.NET layouts and creates an initial
+profile using repository-owned package scripts, lockfiles, Node version files,
+project files, ports, and the Git default branch. Review every detected value.
+If required paths or startup commands cannot be resolved, FixLab lists only
+those remaining fields and stops before setup.
+
+When discovery is complete, an interactive terminal displays the restore and
+Playwright plans and asks whether to execute them. Non-interactive use remains
+plan-first. The complete setup can also be approved explicitly:
 
 ```powershell
 fixlab onboard C:\path\to\application `
@@ -120,10 +126,11 @@ fixlab onboard C:\path\to\application `
 
 The equivalent manual steps are:
 
-1. Run `fixlab init` to create
+1. Run `fixlab init` to discover repository settings and create
    `.github/fixlab/repository-profile.json` and the FixLab prompt commands
    under `.github/prompts`.
-2. Declare the frontend and backend paths.
+2. Review the detected frontend and backend paths and fill any unresolved
+   fields.
 3. Add deterministic restore, test, lint, build, and startup commands.
 4. Define safe validation environments.
 5. Add browser journeys that use non-sensitive test data.

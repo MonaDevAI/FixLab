@@ -473,6 +473,18 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.match(pageText, /Screenshots \(optional\)/);
     assert.match(pageText, /Repository-defined validation context is loaded automatically/);
     assert.match(pageText, /proceeds autonomously/);
+    assert.match(pageText, /Loading bug repair demo/);
+    assert.match(pageText, /id="loading-demo-close"/);
+    assert.match(pageText, /aria-label="Close guided demo"/);
+
+    const application = await fetch(`${url}/app.js`);
+    assert.equal(application.status, 200);
+    const applicationText = await application.text();
+    assert.match(applicationText, /function closeLoadingDemo/);
+    assert.match(
+      applicationText,
+      /localStorage\.setItem\("fixlab\.loading-demo\.dismissed", "true"\)/
+    );
 
     const traversal = await fetch(`${url}/..%2fpackage.json`);
     assert.equal(traversal.status, 404);
