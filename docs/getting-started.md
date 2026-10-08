@@ -108,9 +108,11 @@ fixlab onboard C:\path\to\application --runtime copilot
 
 The first run discovers common React and ASP.NET layouts and creates an initial
 profile using repository-owned package scripts, lockfiles, Node version files,
-project files, ports, and the Git default branch. Review every detected value.
-If required paths or startup commands cannot be resolved, FixLab lists only
-those remaining fields and stops before setup.
+project files, ports, environment-specific startup scripts, Playwright
+authentication scripts, and the Git default branch. Review every detected
+value. If required paths, environment commands, or authentication status paths
+cannot be resolved, FixLab lists only those remaining fields and stops before
+setup.
 
 When discovery is complete, an interactive terminal displays the restore and
 Playwright plans and asks whether to execute them. Non-interactive use remains
@@ -131,11 +133,19 @@ The equivalent manual steps are:
    under `.github/prompts`.
 2. Review the detected frontend and backend paths and fill any unresolved
    fields.
-3. Add deterministic restore, test, lint, build, and startup commands.
-4. Define safe validation environments.
+3. Add deterministic restore, test, lint, and build commands.
+4. Define every safe validation environment with its exact frontend startup
+   command, loopback health URL, and whether browser authentication is
+   required.
 5. Add browser journeys that use non-sensitive test data.
 6. Document the repository's process ownership and cleanup rules.
 7. Validate the profile before enabling pull request creation.
+
+Every job preflights its actual execution workspace before diagnosis. Missing
+restores run from the profile-defined working directories; private-feed or
+interactive authentication failures block intake immediately. FixLab does not
+guess environment script names or defer missing Playwright and browser state
+until the final live-test stage.
 
 When the profile already exists, `fixlab init` preserves it and reports that
 new required fields must be merged manually. Run `fixlab doctor` after every
@@ -173,6 +183,10 @@ fixlab exec --stage validation -- npm test
 fixlab exec --stage build --reuse -- dotnet build .\src\Application.csproj
 fixlab exec --cwd .\frontend --stage typecheck --reuse -- npm run type-check
 ```
+
+The `--` separator is optional for Windows PowerShell compatibility; keep it
+when the shell passes it through normally because it makes the command boundary
+explicit.
 
 The terminal receives a compact pass/fail summary, unique diagnostics, test
 counts, duration, and a private evidence path instead of the complete command

@@ -22,6 +22,7 @@ import {
   buildAgencyInvocation,
   buildCopilotInvocation,
   buildJobPrompt,
+  configuredEnvironmentSettings,
   createCacheContext,
   createDashboardServer,
   createProcessCompletion,
@@ -3190,6 +3191,11 @@ test("selected non-production data falls back to synthetic only when required", 
     mode: "validate-only",
     requestType: "bug-fix",
     targetEnvironment: "dev",
+    environmentSettings: {
+      frontendCommand: "npm run start:dev",
+      healthUrl: "http://localhost:3000",
+      authenticationRequired: true
+    },
     testEvidence: {
       enabled: true,
       source: "non-production-read-only",
@@ -3199,6 +3205,11 @@ test("selected non-production data falls back to synthetic only when required", 
   });
 
   assert.match(prompt, /Use the selected dev backend and API as the primary/);
+  assert.match(prompt, /frontend startup command for dev is `npm run start:dev`/);
+  assert.match(prompt, /health URL for dev is `http:\/\/localhost:3000`/);
+  assert.match(prompt, /Browser authentication for dev is required/);
+  assert.match(prompt, /Before diagnosis or source inspection, preflight the actual execution workspace/);
+  assert.match(prompt, /private package feed returns 401\/403/);
   assert.match(prompt, /Do not fulfill or intercept business-data reads while the selected backend is available/);
   assert.match(prompt, /returns no safe records capable of exercising/);
   assert.match(prompt, /fall back to synthetic-intercepted data/);
@@ -3206,6 +3217,30 @@ test("selected non-production data falls back to synthetic only when required", 
   assert.match(prompt, /FIXLAB_TEST with source synthetic-intercepted and mutation mode intercepted/);
   assert.match(prompt, /A synthetic pass proves the UI behavior only/);
   assert.match(prompt, /do not claim the selected backend or its data was validated/);
+});
+
+test("environment settings preserve explicit startup and authentication contracts", () => {
+  const profile = validProfile({
+    environments: {
+      local: {
+        frontendCommand: "npm run start:local",
+        healthUrl: "http://localhost:3000",
+        authenticationRequired: false
+      },
+      uat: {
+        frontendCommand: "npm run start:uat",
+        healthUrl: "http://localhost:3000",
+        authenticationRequired: true
+      }
+    }
+  });
+
+  assert.deepEqual(configuredEnvironmentSettings(profile, "UAT"), {
+    frontendCommand: "npm run start:uat",
+    healthUrl: "http://localhost:3000",
+    authenticationRequired: true
+  });
+  assert.equal(configuredEnvironmentSettings(profile, "sit"), null);
 });
 
 test("backend-first prompt guidance requires environment and read-only source", () => {
@@ -3263,6 +3298,60 @@ test("dashboard rejects validation environments outside the profile allowlist", 
       assert.equal(result.response.status, 400);
       assert.match(result.body.error, /targetEnvironment/);
     }
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard blocks an authenticated environment before starting a job", async () => {
+  const repository = createRepository();
+  const profilePath = join(
+    repository,
+    ".github",
+    "fixlab",
+    "repository-profile.json"
+  );
+  const profile = validProfile({
+    environments: {
+      local: {
+        frontendCommand: "npm start",
+        healthUrl: "http://localhost:3000",
+        authenticationRequired: false
+      },
+      uat: {
+        frontendCommand: "npm run start:uat",
+        healthUrl: "http://localhost:3000",
+        authenticationRequired: true
+      }
+    },
+    browserAutomation: {
+      ...validProfile().browserAutomation,
+      authentication: {
+        required: false,
+        command: "npm run test:e2e:auth",
+        statusPaths: ["e2e/.edge-profile"]
+      }
+    }
+  });
+  writeFileSync(profilePath, JSON.stringify(profile));
+  const { dashboard, url } = await startDashboard(repository, () => {
+    throw new Error("executor should not run");
+  });
+
+  try {
+    const result = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Validate the selected environment.",
+        mode: "playwright-only",
+        targetEnvironment: "uat"
+      })
+    });
+    assert.equal(result.response.status, 409);
+    assert.match(result.body.error, /browser authentication is not ready/);
+    assert.match(result.body.error, /fixlab authenticate/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

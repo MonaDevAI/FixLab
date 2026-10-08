@@ -276,6 +276,51 @@ export function validateLiveTestProfile(profile, repository) {
       }
     }
   }
+  if (
+    profile?.environments &&
+    !Array.isArray(profile.environments) &&
+    typeof profile.environments === "object"
+  ) {
+    for (const [environment, configuration] of Object.entries(
+      profile.environments
+    )) {
+      if (!configuration || typeof configuration !== "object") {
+        missing.push(`environments.${environment}`);
+        continue;
+      }
+      if (!requiredString(configuration.frontendCommand)) {
+        missing.push(`environments.${environment}.frontendCommand`);
+      }
+      if (!requiredString(configuration.healthUrl)) {
+        missing.push(`environments.${environment}.healthUrl`);
+      } else {
+        try {
+          validatedManualLocalhostUrl(configuration.healthUrl);
+        } catch {
+          missing.push(
+            `environments.${environment}.healthUrl (credential-free loopback URL required)`
+          );
+        }
+      }
+      if (typeof configuration.authenticationRequired !== "boolean") {
+        missing.push(
+          `environments.${environment}.authenticationRequired`
+        );
+      }
+      if (configuration.authenticationRequired === true) {
+        if (!requiredString(authentication?.command)) {
+          missing.push("browserAutomation.authentication.command");
+        }
+        if (
+          !Array.isArray(authentication?.statusPaths) ||
+          authentication.statusPaths.length === 0 ||
+          authentication.statusPaths.some((value) => !requiredString(value))
+        ) {
+          missing.push("browserAutomation.authentication.statusPaths");
+        }
+      }
+    }
+  }
 
   return {
     ok: missing.length === 0,
@@ -327,6 +372,73 @@ export function configuredValidationEnvironments(profile) {
     environments.push(environment);
   }
   return environments;
+}
+
+export function configuredEnvironmentSettings(profile, environment) {
+  if (
+    !environment ||
+    !profile?.environments ||
+    Array.isArray(profile.environments) ||
+    typeof profile.environments !== "object"
+  ) {
+    return null;
+  }
+  const entry = Object.entries(profile.environments).find(
+    ([name]) => name.toLowerCase() === environment.toLowerCase()
+  );
+  if (!entry || !entry[1] || typeof entry[1] !== "object") {
+    return null;
+  }
+  return {
+    frontendCommand:
+      typeof entry[1].frontendCommand === "string"
+        ? entry[1].frontendCommand.trim()
+        : "",
+    healthUrl:
+      typeof entry[1].healthUrl === "string"
+        ? entry[1].healthUrl.trim()
+        : "",
+    authenticationRequired:
+      entry[1].authenticationRequired === true
+  };
+}
+
+function environmentAuthenticationReadiness(
+  profile,
+  repository,
+  environment
+) {
+  const settings = configuredEnvironmentSettings(profile, environment);
+  if (!settings?.authenticationRequired) {
+    return { ok: true, detail: "not required" };
+  }
+  const authentication = profile?.browserAutomation?.authentication ?? {};
+  if (
+    typeof authentication.command !== "string" ||
+    !authentication.command.trim() ||
+    !Array.isArray(authentication.statusPaths) ||
+    authentication.statusPaths.length === 0
+  ) {
+    return {
+      ok: false,
+      detail: `environment ${environment} requires browser authentication configuration`
+    };
+  }
+  const authenticationRoot = resolve(
+    repository,
+    profile.browserAutomation?.workingDirectory ?? "."
+  );
+  const missing = authentication.statusPaths.filter(
+    (statusPath) => !existsSync(resolve(authenticationRoot, statusPath))
+  );
+  return missing.length === 0
+    ? { ok: true, detail: "ready" }
+    : {
+        ok: false,
+        detail:
+          `environment ${environment} browser authentication is not ready ` +
+          `(${missing.join(", ")}); run fixlab authenticate`
+      };
 }
 
 export function validateTargetEnvironment(value, environments) {
@@ -514,6 +626,10 @@ function restoreDashboardJob(snapshot, repository) {
     pullRequestStrategy: restored.pullRequestStrategy,
     runAllUiScenarios: restored.runAllUiScenarios,
     targetEnvironment: restored.targetEnvironment,
+    environmentSettings: configuredEnvironmentSettings(
+      profile,
+      restored.targetEnvironment
+    ),
     recordPlaywrightVideo: restored.recordPlaywrightVideo,
     manualLocalhostTest: restored.manualLocalhostTest,
     manualLocalhostUrl: restored.manualLocalhostUrl,
@@ -712,6 +828,7 @@ export function buildJobPrompt({
   pullRequestStrategy = "common",
   runAllUiScenarios = false,
   targetEnvironment = "",
+  environmentSettings = null,
   recordPlaywrightVideo = false,
   manualLocalhostTest = false,
   manualLocalhostUrl = "",
@@ -772,6 +889,9 @@ export function buildJobPrompt({
     : "- Run the smallest repository-defined Playwright journey that proves the selected behavior.";
   const environmentGuidance = targetEnvironment
     ? `- The user selected ${targetEnvironment} as the validation environment. Use exactly that repository-approved environment for profile-defined application startup and Playwright live testing.
+- The profile-defined frontend startup command for ${targetEnvironment} is ${environmentSettings?.frontendCommand ? `\`${environmentSettings.frontendCommand}\`` : "not configured"}. Run that exact command from applications.frontend.workingDirectory; never guess an environment script or run it from the repository root.
+    - The profile-defined health URL for ${targetEnvironment} is ${environmentSettings?.healthUrl ? `\`${environmentSettings.healthUrl}\`` : "not configured"}. Wait for that exact loopback URL; do not substitute localhost and 127.0.0.1 because repositories may bind them differently.
+    - Browser authentication for ${targetEnvironment} is ${environmentSettings?.authenticationRequired ? "required" : "not required by the profile"}.
 - Do not silently fall back to local or another environment. If ${targetEnvironment} is unavailable, unauthenticated, or cannot be used safely, block the affected stage with the exact prerequisite.
 - Focused tests, type-checks, and builds still run locally unless the repository profile explicitly defines otherwise.`
     : "- No environment override was selected. Use the repository profile's safe default and never select production.";
@@ -841,6 +961,9 @@ Use this concise metadata only to avoid repeated discovery. Verify task-specific
 
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all repository-owned instructions before acting.
+- Before diagnosis or source inspection, preflight the actual execution workspace: verify profile-defined frontend and backend restore commands have completed, the configured Playwright package and browser can launch, the selected environment has an explicit startup command, and every required browser-authentication status path exists.
+- Run missing profile-defined restores immediately in their configured working directories. If a private package feed returns 401/403 or authentication is interactive, block intake with the exact authentication action instead of deferring setup until live-test.
+- Do not start implementation while execution prerequisites are unresolved. Emit intake blocked and mark later stages skipped when restore, browser, environment startup, or required authentication cannot be made ready safely.
 - For repeat work, inspect the current git status and effective diff first, then search task-relevant symbols and files instead of rescanning the whole repository.
 - Do not perform a whole-repository rescan when the current diff, cached metadata, and focused symbol/path searches are sufficient.
 - Reuse this job/session context. Do not reread unchanged files, repeat completed diagnosis, reinstall available dependencies, or rerun broad checks without new evidence.
@@ -3127,6 +3250,21 @@ export function createDashboardServer({
         sendJson(response, 400, { error: error.message });
         return;
       }
+      const environmentSettings = configuredEnvironmentSettings(
+        repositoryProfile,
+        targetEnvironment
+      );
+      const authenticationReadiness = environmentAuthenticationReadiness(
+        repositoryProfile,
+        resolvedRepository,
+        targetEnvironment
+      );
+      if (!authenticationReadiness.ok) {
+        sendJson(response, 409, {
+          error: authenticationReadiness.detail
+        });
+        return;
+      }
       const manualLocalhostTest =
         body.manualLocalhostTest ??
         body.holdForManualLiveTest ??
@@ -3262,6 +3400,7 @@ export function createDashboardServer({
         pullRequestStrategy,
         runAllUiScenarios,
         targetEnvironment,
+        environmentSettings,
         recordPlaywrightVideo,
         manualLocalhostTest,
         manualLocalhostUrl,

@@ -73,11 +73,23 @@
       "productionAllowed": false
     }
   },
-  "environments": [
-    "local",
-    "development",
-    "integration"
-  ],
+  "environments": {
+    "local": {
+      "frontendCommand": "npm run start:local",
+      "healthUrl": "http://localhost:3000",
+      "authenticationRequired": false
+    },
+    "development": {
+      "frontendCommand": "npm run start:development",
+      "healthUrl": "http://localhost:3000",
+      "authenticationRequired": true
+    },
+    "integration": {
+      "frontendCommand": "npm run start:integration",
+      "healthUrl": "http://localhost:3000",
+      "authenticationRequired": true
+    }
+  },
   "pullRequests": {
     "defaultTargetBranch": "develop",
     "requireConfirmation": true,

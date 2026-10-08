@@ -87,7 +87,7 @@ Usage:
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
   fixlab authenticate [repository] [--yes]
-  fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]
+  fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] [--] <command> [args...]
   fixlab evidence [repository] show <evidence-id> [--stream <summary|stdout|stderr>] [--lines <count>]
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
@@ -497,6 +497,54 @@ function packageScript(packageManager, name) {
   return name ? `${packageManager} run ${name}` : "";
 }
 
+function detectBrowserAuthenticationStatusPaths(frontendDirectory) {
+  const candidates = [
+    join("e2e", "auth.setup.ts"),
+    join("e2e", "auth.setup.js"),
+    join("e2e", "fixtures.ts"),
+    join("e2e", "fixtures.js"),
+    "playwright.config.ts",
+    "playwright.config.js"
+  ];
+  const paths = new Set();
+  for (const candidate of candidates) {
+    const path = join(frontendDirectory, candidate);
+    if (!existsSync(path) || statSync(path).size > 256 * 1024) {
+      continue;
+    }
+    const source = readFileSync(path, "utf8");
+    for (const match of source.matchAll(
+      /path\.join\(\s*__dirname\s*,\s*["'](\.[^"']+)["']\s*\)/gu
+    )) {
+      paths.add(
+        join(dirname(candidate), match[1]).replaceAll("\\", "/")
+      );
+    }
+  }
+  return [...paths];
+}
+
+function detectBrowserHealthUrl(frontendDirectory, port) {
+  for (const candidate of [
+    "playwright.config.ts",
+    "playwright.config.js",
+    "playwright.config.mjs"
+  ]) {
+    const path = join(frontendDirectory, candidate);
+    if (!existsSync(path) || statSync(path).size > 256 * 1024) {
+      continue;
+    }
+    const source = readFileSync(path, "utf8");
+    if (/https?:\/\/localhost(?::|\$\{)/u.test(source)) {
+      return `http://localhost:${port}`;
+    }
+    if (/https?:\/\/127\.0\.0\.1(?::|\$\{)/u.test(source)) {
+      return `http://127.0.0.1:${port}`;
+    }
+  }
+  return `http://127.0.0.1:${port}`;
+}
+
 function firstScript(scripts, names) {
   return names.find((name) => typeof scripts?.[name] === "string") ?? "";
 }
@@ -749,6 +797,12 @@ function createDetectedProfile(repository) {
       "test:playwright",
       "playwright"
     ]);
+    const authenticationScript = firstScript(scripts, [
+      "test:e2e:auth",
+      "e2e:auth",
+      "playwright:auth",
+      "auth:e2e"
+    ]);
     const sourceDirectory = existsSync(join(frontend.directory, "src"))
       ? `${frontend.relativeDirectory === "." ? "" : `${frontend.relativeDirectory}/`}src`
       : frontend.relativeDirectory;
@@ -759,6 +813,10 @@ function createDetectedProfile(repository) {
       Boolean(frontend.packageJson.dependencies?.vite) ||
       Boolean(frontend.packageJson.devDependencies?.vite);
     const port = portMatch ? Number(portMatch[1]) : isVite ? 5173 : 3000;
+    const browserHealthUrl = detectBrowserHealthUrl(
+      frontend.directory,
+      port
+    );
     const node = detectNodeVersion(
       repository,
       frontend.directory,
@@ -794,7 +852,7 @@ function createDetectedProfile(repository) {
       port,
       healthUrl: `http://127.0.0.1:${port}`
     };
-    const environments = new Set();
+    const environments = {};
     for (const scriptName of Object.keys(scripts)) {
       const match = scriptName.match(
         /^start:(local|dev|development|sit|uat|integration)$/i
@@ -802,18 +860,35 @@ function createDetectedProfile(repository) {
       if (!match) {
         continue;
       }
-      environments.add(
+      const environment =
         match[1].toLowerCase() === "dev"
           ? "development"
-          : match[1].toLowerCase()
-      );
+          : match[1].toLowerCase();
+      environments[environment] = {
+        frontendCommand: packageScript(packageManager, scriptName),
+        healthUrl: browserHealthUrl,
+        authenticationRequired: false
+      };
     }
-    if (/dev/i.test(scripts.start ?? "")) {
-      environments.add("development");
+    if (/dev/i.test(scripts.start ?? "") && !environments.development) {
+      environments.development = {
+        frontendCommand: packageScript(packageManager, "start"),
+        healthUrl: browserHealthUrl,
+        authenticationRequired: false
+      };
     }
-    if (environments.size > 0) {
-      template.environments = [...environments];
+    if (startCommand) {
+      const environment =
+        ["dev", "serve"].includes(startScript) ? "development" : "local";
+      if (!environments[environment]) {
+        environments[environment] = {
+          frontendCommand: startCommand,
+          healthUrl: browserHealthUrl,
+          authenticationRequired: false
+        };
+      }
     }
+    template.environments = environments;
     template.browserAutomation.workingDirectory =
       frontend.relativeDirectory;
     template.browserAutomation.package =
@@ -831,6 +906,25 @@ function createDetectedProfile(repository) {
         : packageManager === "yarn"
           ? "yarn playwright test"
           : "npx playwright test");
+    if (authenticationScript) {
+      const authentication = template.browserAutomation.authentication;
+      authentication.command = packageScript(
+        packageManager,
+        authenticationScript
+      );
+      authentication.statusPaths =
+        detectBrowserAuthenticationStatusPaths(frontend.directory);
+      for (const [environment, configuration] of Object.entries(
+        environments
+      )) {
+        configuration.authenticationRequired = environment !== "local";
+      }
+      if (authentication.statusPaths.length === 0) {
+        unresolved.push(
+          "set browserAutomation.authentication.statusPaths for the detected browser authentication command"
+        );
+      }
+    }
     findings.push(
       `frontend ${frontend.relativeDirectory} (${packageManager}, Node.js ${node.version} from ${node.source})`
     );
@@ -901,6 +995,35 @@ function profileSetupIssues(repository, profile) {
   ) {
     issues.push("backend working directory does not exist");
   }
+  if (
+    profile?.environments &&
+    !Array.isArray(profile.environments) &&
+    typeof profile.environments === "object"
+  ) {
+    const authentication = profile.browserAutomation?.authentication ?? {};
+    for (const [environment, configuration] of Object.entries(
+      profile.environments
+    )) {
+      if (!configuration?.frontendCommand?.trim()) {
+        issues.push(
+          `environment ${environment} frontend startup command is missing`
+        );
+      }
+      if (!configuration?.healthUrl?.trim()) {
+        issues.push(`environment ${environment} health URL is missing`);
+      }
+      if (
+        configuration?.authenticationRequired === true &&
+        (!authentication.command?.trim() ||
+          !Array.isArray(authentication.statusPaths) ||
+          authentication.statusPaths.length === 0)
+      ) {
+        issues.push(
+          `environment ${environment} requires browser authentication configuration`
+        );
+      }
+    }
+  }
   return issues;
 }
 
@@ -917,6 +1040,11 @@ function init(repository) {
       if (profile?.browserAutomation?.testSynthesis === undefined) {
         console.log(
           "Profile upgrade required: add browserAutomation.testSynthesis with an approved data source, mutation mode, and scenario evidence requirement."
+        );
+      }
+      if (Array.isArray(profile?.environments)) {
+        console.log(
+          "Profile upgrade required: replace the environments array with environment objects containing frontendCommand, healthUrl, and authenticationRequired."
         );
       }
     } catch {
@@ -1355,8 +1483,15 @@ function authenticate(repository, approved) {
 
   const browserAutomation = profile.browserAutomation ?? {};
   const authentication = browserAutomation.authentication ?? {};
+  const environmentAuthenticationRequired =
+    profile.environments &&
+    !Array.isArray(profile.environments) &&
+    typeof profile.environments === "object" &&
+    Object.values(profile.environments).some(
+      (configuration) => configuration?.authenticationRequired === true
+    );
   if (
-    authentication.required !== true ||
+    (authentication.required !== true && !environmentAuthenticationRequired) ||
     typeof authentication.command !== "string" ||
     !authentication.command.trim()
   ) {
@@ -1790,9 +1925,17 @@ async function onboard({
     return playwrightResult;
   }
   const loaded = loadProfile(repository);
+  const environmentAuthenticationRequired =
+    loaded.profile?.environments &&
+    !Array.isArray(loaded.profile.environments) &&
+    typeof loaded.profile.environments === "object" &&
+    Object.values(loaded.profile.environments).some(
+      (configuration) => configuration?.authenticationRequired === true
+    );
   if (
     !authenticateBrowser &&
-    loaded.profile?.browserAutomation?.authentication?.required === true
+    (loaded.profile?.browserAutomation?.authentication?.required === true ||
+      environmentAuthenticationRequired)
   ) {
     authenticateBrowser = await promptForApproval(
       "Run the repository-owned interactive browser authentication command?"

@@ -12,6 +12,12 @@ repository:
 fixlab exec --cwd .\frontend --stage test -- npm test
 ```
 
+If a Windows PowerShell shim consumes the `--` separator, omit it:
+
+```powershell
+fixlab exec --cwd .\frontend --stage test npm test
+```
+
 The `Evidence:` path is Git-private and contains redacted `stdout.log`,
 `stderr.log`, and `result.json`. A missing stream file means that stream was
 empty. The terminal `Context:` line and `result.json.context` report raw and

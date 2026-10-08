@@ -323,10 +323,19 @@ Defines:
 - Component paths and ownership boundaries
 - Restore, lint, test, build, and startup commands
 - Frontend and backend ports
-- Supported validation environments
+- Supported validation environments, exact startup commands, loopback health
+  URLs, and authentication requirements
 - Browser test journeys
 - Allowed pull request target branches
 - Timeout and blocker behavior
+
+Before diagnosis, the agent preflights the actual execution workspace rather
+than relying on readiness from a different checkout. It runs missing
+profile-defined restores, verifies Playwright and the configured browser,
+checks the selected environment's explicit startup command, and verifies
+required authentication state. Private-feed or interactive authentication
+failures block intake with an exact action instead of surfacing during the
+final live-test gate.
 
 ### Evidence store
 

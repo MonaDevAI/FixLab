@@ -292,29 +292,23 @@ export function parseStructuredCommandArguments(
   defaultRepository = process.cwd()
 ) {
   const separator = args.indexOf("--");
-  if (separator < 0 || separator === args.length - 1) {
-    throw new Error(
-      "usage: fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]"
-    );
-  }
-
-  const options = args.slice(0, separator);
-  const command = args[separator + 1];
-  const commandArgs = args.slice(separator + 2);
   let repositoryArgument = "";
   let cwdArgument = ".";
   let stage = "validation";
   let reuse = false;
   let timeoutSeconds = 0;
+  let command = "";
+  let commandArgs = [];
+  const optionLimit = separator >= 0 ? separator : args.length;
 
-  for (let index = 0; index < options.length; index += 1) {
-    const option = options[index];
+  for (let index = 0; index < optionLimit; index += 1) {
+    const option = args[index];
     if (option === "--reuse") {
       reuse = true;
       continue;
     }
     if (["--cwd", "--stage", "--timeout-seconds"].includes(option)) {
-      const value = options[index + 1];
+      const value = args[index + 1];
       if (!value) {
         throw new Error(`${option} requires a value`);
       }
@@ -331,10 +325,34 @@ export function parseStructuredCommandArguments(
     if (option.startsWith("-")) {
       throw new Error(`unknown fixlab exec option: ${option}`);
     }
+    if (
+      separator < 0 &&
+      !repositoryArgument &&
+      existsSync(resolve(option)) &&
+      statSync(resolve(option)).isDirectory()
+    ) {
+      repositoryArgument = option;
+      continue;
+    }
+    if (separator < 0) {
+      command = option;
+      commandArgs = args.slice(index + 1);
+      break;
+    }
     if (repositoryArgument) {
       throw new Error("fixlab exec accepts at most one repository path");
     }
     repositoryArgument = option;
+  }
+
+  if (separator >= 0) {
+    command = args[separator + 1] ?? "";
+    commandArgs = args.slice(separator + 2);
+  }
+  if (!command) {
+    throw new Error(
+      "usage: fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] [--] <command> [args...]"
+    );
   }
 
   if (!/^[a-z][a-z0-9-]{0,31}$/u.test(stage)) {

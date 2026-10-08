@@ -128,10 +128,12 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
         name: "detected-application",
         scripts: {
           dev: "vite --port 4173",
+          "start:uat": "vite --mode uat --port 4173",
           test: "vitest run",
           typecheck: "tsc --noEmit",
           build: "vite build",
-          "test:e2e": "playwright test"
+          "test:e2e": "playwright test",
+          "test:e2e:auth": "playwright test --project=setup --headed"
         },
         dependencies: {
           react: "^19.0.0"
@@ -141,6 +143,15 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
           vite: "^7.0.0"
         }
       })
+    );
+    mkdirSync(join(frontend, "e2e"), { recursive: true });
+    writeFileSync(
+      join(frontend, "e2e", "auth.setup.ts"),
+      "const userDataDir = path.join(__dirname, '.edge-profile');"
+    );
+    writeFileSync(
+      join(frontend, "playwright.config.ts"),
+      "const baseURL = `http://localhost:${PORT}`;"
     );
     writeFileSync(join(backend, "Application.sln"), "");
     writeFileSync(
@@ -219,6 +230,26 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
       profile.browserAutomation.testCommand,
       "npm run test:e2e"
     );
+    assert.equal(
+      profile.browserAutomation.authentication.command,
+      "npm run test:e2e:auth"
+    );
+    assert.deepEqual(
+      profile.browserAutomation.authentication.statusPaths,
+      ["e2e/.edge-profile"]
+    );
+    assert.deepEqual(profile.environments, {
+      development: {
+        frontendCommand: "npm run dev",
+        healthUrl: "http://localhost:4173",
+        authenticationRequired: true
+      },
+      uat: {
+        frontendCommand: "npm run start:uat",
+        healthUrl: "http://localhost:4173",
+        authenticationRequired: true
+      }
+    });
     assert.equal(profile.pullRequests.defaultTargetBranch, "main");
   } finally {
     rmSync(repository, { recursive: true, force: true });

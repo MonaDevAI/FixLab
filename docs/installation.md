@@ -321,7 +321,23 @@ repository. A React and .NET profile normally defines:
       "productionAllowed": false
     }
   },
-  "environments": ["local", "dev", "sit"],
+  "environments": {
+    "local": {
+      "frontendCommand": "npm run start:local",
+      "healthUrl": "http://localhost:3000",
+      "authenticationRequired": false
+    },
+    "dev": {
+      "frontendCommand": "npm run start:dev",
+      "healthUrl": "http://localhost:3000",
+      "authenticationRequired": true
+    },
+    "sit": {
+      "frontendCommand": "npm run start:sit",
+      "healthUrl": "http://localhost:3000",
+      "authenticationRequired": true
+    }
+  },
   "pullRequests": {
     "defaultTargetBranch": "main",
     "requireConfirmation": true,
@@ -335,8 +351,13 @@ repository. A React and .NET profile normally defines:
 
 Use repository-relative paths and commands that run non-interactively. Replace
 the example solution, directories, startup command, test command, environments,
-target branch, and developer alias. If browser authentication is required, set
-`authentication.required` to `true` and configure the repository-owned login
+target branch, and developer alias. Every environment must define the exact
+frontend command FixLab should run from
+`applications.frontend.workingDirectory` and the exact loopback `healthUrl`
+used by the repository. FixLab never derives commands such as `start:uat` from
+an environment name and never substitutes `127.0.0.1` for `localhost` or the
+reverse. When an environment requires browser authentication, set
+`authenticationRequired` to `true` and configure the repository-owned login
 command and status paths as described below.
 
 Save the file, then validate both the machine and profile with the selected

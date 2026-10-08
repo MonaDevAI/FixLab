@@ -321,6 +321,13 @@ test("structured command arguments enforce repository containment", () => {
     assert.equal(parsed.command, process.execPath);
     assert.deepEqual(parsed.commandArgs, ["--version"]);
     assert.equal(parsed.stage, "test");
+    const powerShellCompatible = parseStructuredCommandArguments(
+      [repository, "--stage", "test", process.execPath, "--version"],
+      repository
+    );
+    assert.equal(powerShellCompatible.command, process.execPath);
+    assert.deepEqual(powerShellCompatible.commandArgs, ["--version"]);
+    assert.equal(powerShellCompatible.stage, "test");
     assert.throws(
       () =>
         parseStructuredCommandArguments(
@@ -330,7 +337,7 @@ test("structured command arguments enforce repository containment", () => {
       /--cwd must stay within the repository/
     );
     assert.throws(
-      () => parseStructuredCommandArguments([repository, process.execPath]),
+      () => parseStructuredCommandArguments([repository]),
       /usage: fixlab exec/
     );
     assert.throws(
