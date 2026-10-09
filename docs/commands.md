@@ -94,6 +94,36 @@ installation or `fixlab init`. The UI starts one selected-runtime job at a time
 and displays the intake, diagnosis, reproduce, fix, review, local-stack,
 live-test, and pull-request stages with polled logs.
 
+For an idle current job, **Review and run Playwright** starts the profile's
+`browserAutomation.testCommand` as a job-linked background process. Review the
+exact command, working directory, environment, data-safety policy, and timeout
+before approving. Changes to that plan invalidate approval. Preflight checks
+the configured package manager, installed Playwright package, and a real browser
+launch without blocking HTTP requests. Required authentication must already be
+available; use **Connect Playwright** first when necessary.
+
+The dashboard shows preflight/test phase, elapsed time, latest output, bounded
+redacted logs, and the selected run's screenshots and videos. **Stop owned test**
+terminates only this run's process tree. The default wall-clock limit is 30
+minutes; `browserAutomation.timeoutMinutes` accepts integers from 1 to 120.
+Failures, preflight blockers, cancellations, timeouts, and interrupted restarts
+remain explicit and persisted. Raw logs are not written to durable job history.
+This test outcome is separate from the agent's workflow gates and never approves
+a pull request or marks the entire job passed.
+Standard `npm run`, `pnpm run`, and Playwright CLI commands receive a progress
+reporter plus the local HTML report. Browser action kinds are shown without
+input values or test data. Custom wrappers keep their own output and reporting.
+All-skipped suites and unresolved failures never satisfy the browser gate.
+
+Background runs require `dataSafety.productionAllowed: false` and
+`testSynthesis.mutationMode` set to `none` or `intercepted`. The repository-owned
+tests must implement that safety policy; the runner cannot make an arbitrary
+test script read-only. An explicitly selected environment must have profile
+startup settings; it is never replaced with a default. An active agent,
+authentication flow, and another background test cannot overlap this run.
+While testing, the dashboard stays responsive; agent resumption and queued
+workspace-changing jobs wait until the owned test has finished.
+
 Use `--keep-awake-minutes` to prevent system sleep temporarily while the
 dashboard is running:
 

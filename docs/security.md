@@ -37,6 +37,15 @@ operations. Treat every runner as privileged engineering infrastructure.
 - Record every process identifier started by the runner.
 - Stop only verified descendants of the job's runner process.
 - Never terminate a process by name or broad wildcard.
+- Job-linked background Playwright requires explicit approval of the current
+  profile command, working directory, environment, timeout, and data-safety
+  contract. Profile changes invalidate approval; HTTP clients cannot supply
+  an arbitrary command. These routes reject cross-origin approval requests.
+- Background browser tests accept only read-only or intercepted-mutation
+  profile contracts and never select production. Repository-owned tests remain
+  responsible for enforcing interception; this feature does not bypass runtime
+  permissions or make arbitrary scripts safe. It stops only its spawned process
+  tree, and excludes raw logs and environment values from durable history.
 - Use documented local ports and report conflicts safely. The dashboard
   defaults to port 4317 but accepts an explicit alternate port.
 - The CI failure-containment workflow runs from `workflow_run` with no source

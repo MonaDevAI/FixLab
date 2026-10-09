@@ -32,6 +32,8 @@ import {
   removeArtifactDirectory,
   storeScreenshots
 } from "./intake.js";
+import { sanitize } from "../bin/structured-command.js";
+import { runPlaywrightTest, withPlaywrightProgress } from "./playwright-runner.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -526,6 +528,12 @@ function dashboardSnapshot(job) {
       reported: job.testEvidence.reported,
       scenario: safePersistedSummary(job.testEvidence.scenario)
     },
+    browserRun: job.browserRun ? {
+      ...job.browserRun,
+      command: safePersistedSummary(job.browserRun.command),
+      message: safePersistedSummary(job.browserRun.message),
+      currentStep: ""
+    } : null,
     branchNaming: job.branchNaming ?? null,
     intakeSource: job.intakeSource,
     workItem: persistedWorkItem(job.workItem),
@@ -648,6 +656,18 @@ export function recoverInterruptedDashboardJob(
   snapshot,
   recoveredAt = new Date().toISOString()
 ) {
+  if (snapshot?.browserRun?.status === "running") {
+    snapshot = {
+      ...snapshot,
+      browserRun: {
+        ...snapshot.browserRun,
+        status: "blocked",
+        finishedAt: recoveredAt,
+        currentStep: "",
+        message: "Dashboard restarted; the previous browser process is not owned by this instance."
+      }
+    };
+  }
   if (snapshot?.status !== "running") {
     return snapshot;
   }
@@ -713,6 +733,13 @@ function getPullRequestReadiness(job) {
     };
   }
   const fixedBugs = (job.bugs ?? []).filter((bug) => bug.outcome === "fixed");
+  if (job.browserRun && job.browserRun.status !== "passed") {
+    return {
+      status: "blocked",
+      ready: false,
+      message: `Background Playwright is ${job.browserRun.status}; its outcome does not satisfy the browser gate.`
+    };
+  }
   const hasCodeChange =
     fixedBugs.length > 0 ||
     ((job.bugs ?? []).length === 0 && job.stages?.fix?.status === "passed");
@@ -1658,6 +1685,7 @@ function publicJob(job) {
     manualLocalhostPending: job.manualLocalhostPending,
     manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: job.testEvidence,
+    browserRun: job.browserRun ?? null,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
     workItems: job.workItems.map(publicWorkItem),
@@ -1673,6 +1701,7 @@ function publicJob(job) {
     lastActivityAt: job.lastActivityAt,
     error: job.error,
     canResume:
+      job.browserRun?.status !== "running" &&
       !job.resumeDisabled &&
       ["blocked", "failed", "passed"].includes(job.status),
     canComment: job.status === "running",
@@ -2109,6 +2138,9 @@ User action: ${action}
 User input:
 ${details}
 ${manualResult}
+Latest job-linked background Playwright outcome: ${job.browserRun
+  ? `${job.browserRun.status}. ${safeSummary(job.browserRun.message)}`
+  : "No background test has been recorded."}
 
 Resume requirements:
 - Reuse the completed diagnosis, current worktree, validation evidence, branch, and pull request from this session.
@@ -2378,12 +2410,14 @@ export function createDashboardServer({
   executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader(),
   browserOpener = openLocalUrl,
+  playwrightExecutor = runPlaywrightTest,
   executionIdleTimeoutMs,
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
   const resolvedRepository = resolve(repository);
   let currentJob = null;
   let activeHandle = null;
+  let browserHandle = null;
   const queuedJobs = [];
   const completedJobs = [];
   const artifactDirectories = new Set();
@@ -2453,6 +2487,80 @@ export function createDashboardServer({
       dashboardHistoryWarning =
         "Dashboard jobs remain visible in memory but could not be persisted.";
     }
+  }
+
+  function browserRunPlan() {
+    if (!currentJob || currentJob.status === "queued") {
+      throw new Error("Select a started FixLab job before running Playwright.");
+    }
+    const profile = loadRepositoryProfile(resolvedRepository);
+    const validation = validateLiveTestProfile(profile, resolvedRepository);
+    if (!validation.ok) {
+      throw new Error(`Playwright profile is not ready: ${validation.detail}`);
+    }
+    const browser = profile.browserAutomation;
+    if (!["@playwright/test", "playwright"].includes(browser.package) ||
+        !["chromium", "firefox", "webkit"].includes(browser.browser)) {
+      throw new Error("Use a supported Playwright package and browser in the repository profile.");
+    }
+    if (!["none", "intercepted"].includes(browser.testSynthesis.mutationMode)) {
+      throw new Error("Background tests require a repository-owned read-only or intercepted-mutation contract.");
+    }
+    const configuredCommand = browser.testCommand.trim();
+    if (/[&|;<>\r\n]/u.test(configuredCommand)) {
+      throw new Error("Background tests require a single repository-owned test command, not shell chaining or redirection.");
+    }
+    const command = withPlaywrightProgress(
+      configuredCommand,
+      join(packageRoot, "dashboard", "playwright-reporter.js")
+    );
+    if (sanitize(command) !== command ||
+        safeSummary(command) === "[omitted potentially sensitive summary]") {
+      throw new Error("Playwright commands must not contain credentials.");
+    }
+    const configuration = playwrightAuthenticationConfig(resolvedRepository);
+    const environment = validateTargetEnvironment(
+      currentJob.targetEnvironment,
+      configuredValidationEnvironments(profile)
+    );
+    const settings = configuredEnvironmentSettings(profile, environment);
+    if (environment && !settings) {
+      throw new Error("The selected environment requires explicit profile startup settings; no fallback is allowed.");
+    }
+    if (settings?.authenticationRequired || configuration.required) {
+      if (!configuration.statusPaths.length ||
+          configuration.statusPaths.some((path) =>
+            !existsSync(resolveContainedPath(configuration.workingDirectory, path, "authentication status path")))) {
+        throw new Error("Browser authentication is not ready; connect Playwright first.");
+      }
+    }
+    const timeoutMinutes = browser.timeoutMinutes ?? 30;
+    if (!Number.isInteger(timeoutMinutes) || timeoutMinutes < 1 || timeoutMinutes > 120) {
+      throw new Error("browserAutomation.timeoutMinutes must be an integer from 1 to 120.");
+    }
+    const executionEnvironment = {
+      ...configuration.environment,
+      ...(settings ? { E2E_START: settings.frontendCommand } : {})
+    };
+    const plan = {
+      jobId: currentJob.id,
+      command,
+      workingDirectory: browser.workingDirectory,
+      absoluteWorkingDirectory: configuration.workingDirectory,
+      environment: environment || "profile default",
+      executionEnvironment,
+      configuration: {
+        package: browser.package,
+        browser: browser.browser,
+        channel: browser.channel
+      },
+      policy: safeSummary(browser.dataSafety.policy),
+      timeoutMs: timeoutMinutes * 60 * 1000
+    };
+    return {
+      ...plan,
+      approvalId: createHash("sha256").update(JSON.stringify(plan)).digest("hex")
+    };
   }
 
   function recordJobMetric(job) {
@@ -2640,6 +2748,7 @@ export function createDashboardServer({
   function startNextJob() {
     if (
       activeHandle ||
+      browserHandle ||
       queuedJobs.length === 0 ||
       (currentJob && currentJob.status !== "passed")
     ) {
@@ -2670,6 +2779,18 @@ export function createDashboardServer({
       request.url,
       `http://${request.headers.host ?? DASHBOARD_HOST}`
     );
+    if (["/api/playwright/run", "/api/playwright/run/stop"].includes(requestUrl.pathname)) {
+      try {
+        const origin = new URL(`http://${request.headers.host}`);
+        if (!["127.0.0.1", "localhost"].includes(origin.hostname) ||
+            (request.headers.origin && new URL(request.headers.origin).origin !== origin.origin)) {
+          throw new Error("Untrusted dashboard origin.");
+        }
+      } catch {
+        sendJson(response, 403, { error: "Playwright approval must use this loopback dashboard origin." });
+        return;
+      }
+    }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
       persistDashboardState();
@@ -2862,7 +2983,7 @@ export function createDashboardServer({
         sendJson(response, 404, { error: "no FixLab job is available" });
         return;
       }
-      if (activeHandle) {
+      if (activeHandle || browserHandle) {
         sendJson(response, 409, {
           error: "the current FixLab agent is still running or shutting down"
         });
@@ -2904,6 +3025,10 @@ export function createDashboardServer({
       request.method === "POST" &&
       requestUrl.pathname === "/api/job/input"
     ) {
+      if (browserHandle) {
+        sendJson(response, 409, { error: "Stop or finish the owned Playwright run before resuming the agent." });
+        return;
+      }
       if (!currentJob) {
         sendJson(response, 404, { error: "no FixLab job is available" });
         return;
@@ -3361,6 +3486,7 @@ export function createDashboardServer({
 
       shouldQueue =
         Boolean(activeHandle) ||
+        Boolean(browserHandle) ||
         ["running", "blocked", "failed"].includes(currentJob?.status) ||
         queuedJobs.length > 0;
       if (shouldQueue && queuedJobs.length >= MAX_QUEUED_JOBS) {
@@ -3505,6 +3631,196 @@ export function createDashboardServer({
 
     if (
       request.method === "GET" &&
+      requestUrl.pathname === "/api/playwright/run"
+    ) {
+      try {
+        const plan = browserRunPlan();
+        sendJson(response, 200, {
+          plan: {
+            jobId: plan.jobId,
+            command: plan.command,
+            workingDirectory: plan.workingDirectory,
+            environment: plan.environment,
+            policy: plan.policy,
+            timeoutMs: plan.timeoutMs,
+            approvalId: plan.approvalId
+          }
+        });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      ["/api/playwright/run", "/api/playwright/run/stop"].includes(requestUrl.pathname)
+    ) {
+      let body;
+      try {
+        if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+          throw new Error("Content-Type must be application/json");
+        }
+        body = await readJsonBody(request);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (!currentJob || body.jobId !== currentJob.id) {
+        sendJson(response, 404, { error: "Select the current FixLab job." });
+        return;
+      }
+      if (requestUrl.pathname.endsWith("/stop")) {
+        if (!browserHandle) {
+          sendJson(response, 409, { error: "No owned Playwright run is active." });
+          return;
+        }
+        browserHandle.terminate();
+        sendJson(response, 202, { job: publicJob(currentJob) });
+        return;
+      }
+      if (activeHandle || browserHandle || playwrightConnection.handle) {
+        sendJson(response, 409, { error: "An owned agent or browser process is already active." });
+        return;
+      }
+      let plan;
+      try {
+        plan = browserRunPlan();
+        if (body.approved !== true || body.approvalId !== plan.approvalId) {
+          throw new Error("Review and explicitly approve the current Playwright plan.");
+        }
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      const job = currentJob;
+      const startedAt = new Date().toISOString();
+      job.browserRun = {
+        id: randomUUID(),
+        status: "running",
+        phase: "preflight",
+        command: plan.command,
+        workingDirectory: plan.workingDirectory,
+        environment: plan.environment,
+        timeoutMs: plan.timeoutMs,
+        startedAt,
+        finishedAt: null,
+        lastActivityAt: startedAt,
+        currentStep: "",
+        message: "Approved; starting browser preflight."
+      };
+      const partial = { stdout: "", stderr: "" };
+      const oversized = { stdout: false, stderr: false };
+      const logLine = (stream, text) => {
+        if (text.startsWith("FIXLAB_BROWSER_RESULT|")) {
+          try {
+            const counts = JSON.parse(text.slice("FIXLAB_BROWSER_RESULT|".length));
+            if (["total", "passed", "failed", "skipped"].every((key) =>
+              Number.isSafeInteger(counts[key]) && counts[key] >= 0) &&
+                counts.passed + counts.failed + counts.skipped === counts.total) {
+              job.browserRun.testCounts = Object.fromEntries(
+                ["total", "passed", "failed", "skipped"].map((key) => [key, counts[key]])
+              );
+            } else {
+              throw new Error("Invalid Playwright result counts.");
+            }
+          } catch {
+            pushLog(job, {
+              index: job.nextLogIndex, timestamp: new Date().toISOString(),
+              stream: "dashboard", message: "Ignored an invalid Playwright result summary."
+            });
+          }
+          return;
+        }
+        const message = sanitize(text)
+          .replace(/\u001b\[[0-9;]*[A-Za-z]/gu, "")
+          .replace(/https?:\/\/\S+/giu, "[omitted URL]")
+          .slice(0, 1000);
+        if (!message.trim()) {
+          return;
+        }
+        const timestamp = new Date().toISOString();
+        job.browserRun.lastActivityAt = timestamp;
+        job.browserRun.currentStep = message;
+        pushLog(job, { index: job.nextLogIndex, timestamp, stream: `playwright-${stream}`, message });
+      };
+      const output = (stream, text) => {
+        for (const segment of String(text).split(/(\n)/u)) {
+          if (segment === "\n") {
+            logLine(stream, oversized[stream] ? "[Oversized output line omitted]" : partial[stream]);
+            partial[stream] = "";
+            oversized[stream] = false;
+          } else if (!oversized[stream]) {
+            partial[stream] += segment;
+            if (partial[stream].length > 16 * 1024) {
+              partial[stream] = "";
+              oversized[stream] = true;
+            }
+          }
+        }
+      };
+      const finish = (result) => {
+        for (const stream of ["stdout", "stderr"]) {
+          if (partial[stream] || oversized[stream]) {
+            logLine(stream, oversized[stream] ? "[Oversized output line omitted]" : partial[stream]);
+          }
+        }
+        Object.assign(job.browserRun, result, { finishedAt: new Date().toISOString() });
+        if (result.status === "passed" && job.browserRun.testCounts) {
+          if (job.browserRun.testCounts.failed > 0) {
+            job.browserRun.status = "failed";
+            result.message = "Playwright reported failing tests; inspect the local report.";
+          } else if (job.browserRun.testCounts.passed === 0) {
+            job.browserRun.status = "skipped";
+            result.message = "No browser tests passed; this run does not satisfy the browser gate.";
+          }
+        }
+        job.browserRun.message = safeSummary(result.message);
+        persistDashboardState();
+      };
+      const heartbeat = setInterval(() => {
+        persistDashboardState();
+      }, 30_000);
+      heartbeat.unref?.();
+      try {
+        browserHandle = playwrightExecutor({
+          command: plan.command,
+          workingDirectory: plan.absoluteWorkingDirectory,
+          configuration: plan.configuration,
+          environment: plan.executionEnvironment,
+          timeoutMs: plan.timeoutMs,
+          onOutput: output,
+          onPhase(phase, message) {
+            job.browserRun.phase = phase;
+            job.browserRun.message = message;
+            persistDashboardState();
+          }
+        });
+        const ownedHandle = browserHandle;
+        Promise.resolve(ownedHandle.completion)
+          .then(finish)
+          .catch((error) => finish({
+            status: "failed", message: safeSummary(error.message), code: null
+          }))
+          .finally(() => {
+            clearInterval(heartbeat);
+            if (browserHandle === ownedHandle) {
+              browserHandle = null;
+            }
+            startNextJob();
+          });
+      } catch (error) {
+        clearInterval(heartbeat);
+        browserHandle = null;
+        finish({ status: "failed", message: safeSummary(error.message), code: null });
+      }
+      persistDashboardState();
+      sendJson(response, 202, { job: publicJob(job) });
+      return;
+    }
+
+    if (
+      request.method === "GET" &&
       requestUrl.pathname === "/api/playwright/artifacts"
     ) {
       const jobId = requestUrl.searchParams.get("jobId");
@@ -3522,7 +3838,7 @@ export function createDashboardServer({
       let artifacts;
       try {
         artifacts = listPlaywrightArtifacts(resolvedRepository, {
-          since: job.startedAt ?? job.createdAt
+          since: job.browserRun?.startedAt ?? job.startedAt ?? job.createdAt
         });
       } catch (error) {
         sendJson(response, 400, { error: error.message });
@@ -3611,6 +3927,10 @@ export function createDashboardServer({
         sendJson(response, 409, {
           error: "Playwright authentication is already running"
         });
+        return;
+      }
+      if (browserHandle) {
+        sendJson(response, 409, { error: "Stop or finish the owned Playwright run before authenticating." });
         return;
       }
       let configuration;
@@ -3713,6 +4033,10 @@ export function createDashboardServer({
       };
     },
     async close() {
+      if (browserHandle) {
+        browserHandle.terminate();
+        await browserHandle.completion;
+      }
       persistDashboardState();
       if (activeHandle?.terminate) {
         activeHandle.terminate();

@@ -29,7 +29,7 @@ const SECRET_ARGUMENT_PATTERN =
 const AUTH_SCHEME_PATTERN = /(\b(?:bearer|basic)\s+)[^\s"',;]+/giu;
 const CREDENTIAL_URL_PATTERN = /(https?:\/\/[^:\s/]+:)[^@\s]+@/giu;
 
-function sanitize(value) {
+export function sanitize(value) {
   return String(value)
     .replace(HEADER_SECRET_PATTERN, "$1[REDACTED]")
     .replace(SECRET_PATTERN, "$1[REDACTED]")

@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
@@ -127,6 +127,70 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await dashboard.close();
   rmSync(repository, { recursive: true, force: true });
+});
+
+test("dashboard approves, traces and stops a job-linked background browser test", async ({ page, request }) => {
+  const isolatedRepository = mkdtempSync(join(tmpdir(), "fixlab-background-e2e-"));
+  const profileDirectory = join(isolatedRepository, ".github", "fixlab");
+  mkdirSync(profileDirectory, { recursive: true });
+  writeFileSync(
+    join(profileDirectory, "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json"))
+  );
+  const isolatedDashboard = createDashboardServer({
+    repository: isolatedRepository,
+    packageRoot,
+    executor,
+    playwrightExecutor({ onOutput, onPhase }) {
+      let complete;
+      const completion = new Promise((resolve) => { complete = resolve; });
+      onPhase("test", "Running the approved browser test.");
+      onOutput("stdout", "Browser step: locator.click\n");
+      return {
+        completion,
+        terminate() {
+          complete({ status: "cancelled", message: "Owned browser test stopped." });
+        }
+      };
+    }
+  });
+  try {
+    await new Promise((resolve, reject) => {
+      isolatedDashboard.server.once("error", reject);
+      isolatedDashboard.server.listen(0, "127.0.0.1", resolve);
+    });
+    const isolatedUrl = `http://127.0.0.1:${isolatedDashboard.server.address().port}`;
+    const created = await request.post(`${isolatedUrl}/api/jobs`, {
+      data: {
+        request: "Check background browser progress.",
+        requestType: "bug-fix",
+        mode: "playwright-only"
+      }
+    });
+    expect(created.ok()).toBeTruthy();
+    await expect.poll(async () => {
+      const response = await request.get(`${isolatedUrl}/api/job`);
+      return (await response.json()).job.status;
+    }).toBe("passed");
+    await page.goto(isolatedUrl);
+    const start = page.getByRole("button", { name: "Review and run Playwright" });
+    await expect(start).toBeEnabled();
+    page.once("dialog", async (dialog) => {
+      expect(dialog.message()).toContain("npm run test:e2e");
+      expect(dialog.message()).toContain("Data safety:");
+      await dialog.accept();
+    });
+    await start.click();
+    await expect(page.locator("#background-playwright-status")).toContainText("running");
+    await expect(page.locator("#background-playwright-progress")).toContainText("locator.click");
+    await expect(start).toBeDisabled();
+    await page.getByRole("button", { name: "Stop owned test" }).click();
+    await expect(page.locator("#background-playwright-status")).toContainText("cancelled");
+    await expect(page.locator("#job-status")).toContainText("passed");
+  } finally {
+    await isolatedDashboard.close();
+    rmSync(isolatedRepository, { recursive: true, force: true });
+  }
 });
 
 test("dashboard exposes repository readiness through the running server", async ({

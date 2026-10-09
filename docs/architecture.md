@@ -63,6 +63,15 @@ Git directory so bug outcomes and pull-request readiness remain visible after
 a dashboard update or restart. It is not the durable, authenticated team broker
 described below.
 
+An idle dashboard job can also own one explicitly approved asynchronous
+Playwright run. The runner keeps process ownership, preflight/test phase,
+redacted bounded output, elapsed time, and evidence tied to the job ID without
+waiting in an agent tool call. Approval is fingerprinted against the current
+profile command and environment. Agent resumption and other browser processes
+cannot overlap that run. Browser outcomes persist separately from workflow
+stages, so successful test execution alone never completes a job or authorizes
+a pull request.
+
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
 require evidence-backed diagnosis and reproduction. Small enhancements use a
 risk-scaled fast path: a concise acceptance contract, affected-surface and

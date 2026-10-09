@@ -173,6 +173,18 @@
           </div>
         </div>
         <div id="stages" class="stages"></div>
+        <div id="background-playwright-panel" class="playwright-evidence" hidden>
+          <div class="section-heading">
+            <h3>Job-linked background Playwright</h3>
+            <span id="background-playwright-status" class="badge">Not started</span>
+          </div>
+          <p class="guidance">Explicitly approve the repository profile's test command. Preflight and testing run asynchronously with logs and browser evidence linked to this job. The repository tests must enforce the configured read-only or intercepted-mutation policy. This does not bypass runtime approvals or complete other workflow gates.</p>
+          <p id="background-playwright-progress" class="guidance" role="status" aria-live="polite"></p>
+          <div class="button-row">
+            <button id="background-playwright-start" type="button">Review and run Playwright</button>
+            <button id="background-playwright-stop" type="button" class="secondary" disabled>Stop owned test</button>
+          </div>
+        </div>
         <div id="queue-panel" class="queue-panel" hidden>
           <div class="section-heading">
             <h3>Running queue</h3>

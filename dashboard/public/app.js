@@ -189,6 +189,11 @@ const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
 const playwrightCheck = document.querySelector("#playwright-check");
 const playwrightConnect = document.querySelector("#playwright-connect");
+const backgroundPlaywrightPanel = document.querySelector("#background-playwright-panel");
+const backgroundPlaywrightStatus = document.querySelector("#background-playwright-status");
+const backgroundPlaywrightProgress = document.querySelector("#background-playwright-progress");
+const backgroundPlaywrightStart = document.querySelector("#background-playwright-start");
+const backgroundPlaywrightStop = document.querySelector("#background-playwright-stop");
 const onboardingStatus = document.querySelector("#onboarding-status");
 const onboardingOrganization = document.querySelector(
   "#onboarding-organization"
@@ -470,6 +475,21 @@ function inferActiveStageFromLogs(logs = []) {
 function renderJob(job, currentActiveJob = job) {
   const running = job?.status === "running";
   const isActive = Boolean(job?.id && job.id === currentActiveJob?.id);
+  const browserRun = job?.browserRun;
+  const browserRunning = browserRun?.status === "running";
+  backgroundPlaywrightPanel.hidden = !job;
+  backgroundPlaywrightStatus.textContent = browserRun
+    ? `${browserRun.status} · ${browserRun.phase} · ${formatDuration(
+        Date.parse(browserRun.finishedAt ?? new Date().toISOString()) -
+        Date.parse(browserRun.startedAt)
+      )}`
+    : "Not started";
+  backgroundPlaywrightStatus.className = `badge ${browserRun?.status ?? ""}`;
+  backgroundPlaywrightProgress.textContent = browserRun
+    ? `${browserRun.message} ${browserRun.currentStep || ""}`
+    : "Select the current idle job to review its approved test command.";
+  backgroundPlaywrightStart.disabled = !isActive || running || browserRunning || job?.status === "queued";
+  backgroundPlaywrightStop.disabled = !isActive || !browserRunning;
   const activeNeedsQueue =
     currentActiveJob &&
     ["running", "blocked", "failed"].includes(currentActiveJob.status);
@@ -1603,6 +1623,55 @@ approvePullRequestButton.addEventListener("click", async () => {
 });
 
 playwrightCheck.addEventListener("click", refreshPlaywrightStatus);
+backgroundPlaywrightStart.addEventListener("click", async () => {
+  backgroundPlaywrightStart.disabled = true;
+  try {
+    const { plan } = await fetchJson("/api/playwright/run");
+    if (plan.jobId !== selectedJobId) {
+      throw new Error("Select the current job before approving Playwright.");
+    }
+    if (!window.confirm(
+      `Run this repository-owned Playwright command for job ${plan.jobId}?\n\n` +
+      `Command: ${plan.command}\nDirectory: ${plan.workingDirectory}\n` +
+      `Environment: ${plan.environment}\nTimeout: ${plan.timeoutMs / 60000} minutes\n` +
+      `Data safety: ${plan.policy}\n\nThis runs tests only; it does not approve a PR or other workflow gates.`
+    )) {
+      renderJob(observedJobs.get(selectedJobId) ?? activeJob, activeJob);
+      return;
+    }
+    const body = await fetchJson("/api/playwright/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jobId: plan.jobId, approvalId: plan.approvalId, approved: true
+      })
+    });
+    activeJob = body.job;
+    rememberJob(body.job);
+    renderJob(body.job, activeJob);
+  } catch (error) {
+    formError.textContent = error.message;
+    backgroundPlaywrightProgress.textContent = error.message;
+    backgroundPlaywrightStart.disabled = false;
+  }
+});
+
+backgroundPlaywrightStop.addEventListener("click", async () => {
+  backgroundPlaywrightStop.disabled = true;
+  try {
+    const body = await fetchJson("/api/playwright/run/stop", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: selectedJobId })
+    });
+    rememberJob(body.job);
+    renderJob(body.job, activeJob);
+  } catch (error) {
+    formError.textContent = error.message;
+    backgroundPlaywrightProgress.textContent = error.message;
+    backgroundPlaywrightStop.disabled = false;
+  }
+});
 playwrightEvidenceRefresh.addEventListener(
   "click",
   refreshPlaywrightEvidence

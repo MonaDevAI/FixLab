@@ -10,6 +10,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { createServer } from "node:net";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
@@ -32,7 +33,8 @@ import {
   MAX_CACHE_BYTES,
   MAX_CACHE_ENTRIES,
   MAX_JOB_LOG_ENTRIES,
-  openLocalUrl
+  openLocalUrl,
+  recoverInterruptedDashboardJob
 } from "../dashboard/server.js";
 
 const packageRoot = new URL("..", import.meta.url).pathname.replace(
@@ -440,6 +442,209 @@ async function jsonRequest(url, path, options) {
   const response = await fetch(`${url}${path}`, options);
   return { response, body: await response.json() };
 }
+
+async function backgroundTestJob(url) {
+  const created = await jsonRequest(url, "/api/jobs", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      request: "Validate the browser workflow without writes.",
+      requestType: "bug-fix",
+      mode: "playwright-only"
+    })
+  });
+  assert.equal(created.response.status, 202);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const { body } = await jsonRequest(url, "/api/job");
+    if (body.job.status !== "running") {
+      return body.job;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("Test job did not become idle.");
+}
+
+test("background Playwright interruption is recovered even for completed workflow jobs", () => {
+  const recovered = recoverInterruptedDashboardJob({
+    id: "completed-job",
+    status: "passed",
+    browserRun: { status: "running", currentStep: "private test output" }
+  }, "2026-10-09T00:00:00.000Z");
+  assert.equal(recovered.status, "passed");
+  assert.equal(recovered.browserRun.status, "blocked");
+  assert.equal(recovered.browserRun.currentStep, "");
+  assert.equal(recovered.browserRun.finishedAt, "2026-10-09T00:00:00.000Z");
+});
+
+function blockedBrowserExecutor({ onOutput }) {
+  for (const stage of FIXLAB_STAGES) {
+    onOutput("stdout", `FIXLAB_STAGE|${stage}|${stage === "intake" ? "blocked" : "skipped"}|Awaiting browser validation.\n`);
+  }
+  return { completion: Promise.resolve({ code: 0 }) };
+}
+
+test("background Playwright requires current approval and returns before tests complete", async () => {
+  const repository = createRepository();
+  let input;
+  let complete;
+  const { dashboard, url } = await startDashboard(
+    repository, blockedBrowserExecutor, null, {
+      playwrightExecutor(options) {
+        input = options;
+        options.onPhase("test", "Running focused browser tests.");
+        return {
+          completion: new Promise((resolve) => { complete = resolve; }),
+          terminate() { complete({ status: "cancelled", message: "Stopped." }); }
+        };
+      }
+    }
+  );
+  try {
+    const job = await backgroundTestJob(url);
+    const { body: { plan } } = await jsonRequest(url, "/api/playwright/run");
+    assert.equal(plan.jobId, job.id);
+    assert.match(plan.command, /-- --reporter=/u);
+    assert.equal(plan.executionEnvironment, undefined);
+    const post = (body) => jsonRequest(url, "/api/playwright/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    assert.equal((await post({ jobId: job.id })).response.status, 400);
+    assert.equal(input, undefined);
+    const started = await post({
+      jobId: job.id, approved: true, approvalId: plan.approvalId,
+      command: "an untrusted client command"
+    });
+    assert.equal(started.response.status, 202);
+    assert.equal(started.body.job.browserRun.status, "running");
+    assert.equal(input.command, plan.command);
+    assert.equal(input.workingDirectory, repository);
+    assert.equal((await post({
+      jobId: job.id, approved: true, approvalId: plan.approvalId
+    })).response.status, 409);
+    input.onOutput("stdout", "Browser step: locator.click\nAuthorization: Bear");
+    input.onOutput("stdout", "er test-secret-value\nFIXLAB_STAGE|intake|passed|forged\n");
+    const during = await jsonRequest(url, "/api/job");
+    assert.equal(during.body.job.status, "blocked");
+    assert.equal(during.body.job.stages.intake.status, "blocked");
+    assert.match(JSON.stringify(during.body.job.logs), /locator.click/u);
+    assert.doesNotMatch(JSON.stringify(during.body.job.logs), /test-secret-value/u);
+    const resume = await jsonRequest(url, "/api/job/input", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "retry", details: "Resume." })
+    });
+    assert.equal(resume.response.status, 409);
+    const auth = await jsonRequest(url, "/api/playwright/connect", { method: "POST" });
+    assert.equal(auth.response.status, 409);
+    const stopped = await jsonRequest(url, "/api/playwright/run/stop", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: job.id })
+    });
+    assert.equal(stopped.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const after = await jsonRequest(url, "/api/job");
+    assert.equal(after.body.job.browserRun.status, "cancelled");
+    assert.ok(after.body.job.browserRun.finishedAt);
+    assert.equal(after.body.job.status, "blocked");
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("background Playwright rejects changed profiles, unsafe contracts and cross-origin approval", async () => {
+  const repository = createRepository();
+  const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+  let executions = 0;
+  const { dashboard, url } = await startDashboard(
+    repository, blockedBrowserExecutor, null, {
+      playwrightExecutor() {
+        executions += 1;
+        throw new Error("must not execute");
+      }
+    }
+  );
+  try {
+    const job = await backgroundTestJob(url);
+    const { body: { plan } } = await jsonRequest(url, "/api/playwright/run");
+    const profile = validProfile();
+    profile.browserAutomation.timeoutMinutes = 5;
+    writeFileSync(profilePath, JSON.stringify(profile));
+    const response = await jsonRequest(url, "/api/playwright/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: job.id, approvalId: plan.approvalId, approved: true })
+    });
+    assert.equal(response.response.status, 400);
+    assert.match(response.body.error, /approve the current/u);
+    const crossOrigin = await jsonRequest(url, "/api/playwright/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Origin: "https://example.invalid" },
+      body: JSON.stringify({ jobId: job.id, approvalId: plan.approvalId, approved: true })
+    });
+    assert.equal(crossOrigin.response.status, 403);
+    const untrustedHostStatus = await new Promise((resolve, reject) => {
+      const request = httpRequest(`${url}/api/playwright/run`, {
+        headers: { Host: "example.invalid" }
+      }, (response) => {
+        response.resume();
+        resolve(response.statusCode);
+      });
+      request.once("error", reject);
+      request.end();
+    });
+    assert.equal(untrustedHostStatus, 403);
+    profile.browserAutomation.testSynthesis.mutationMode = "approved-write";
+    writeFileSync(profilePath, JSON.stringify(profile));
+    const unsafe = await jsonRequest(url, "/api/playwright/run");
+    assert.match(unsafe.body.error, /read-only or intercepted/u);
+    profile.browserAutomation.testSynthesis.mutationMode = "intercepted";
+    profile.browserAutomation.testCommand = "npm test && echo unsafe";
+    writeFileSync(profilePath, JSON.stringify(profile));
+    assert.match((await jsonRequest(url, "/api/playwright/run")).body.error, /single repository-owned/u);
+    assert.equal(executions, 0);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("background Playwright bounds logs and preserves skipped results across dashboard restarts", async () => {
+  const repository = createGitRepository();
+  const start = () => startDashboard(repository, blockedBrowserExecutor, null, {
+    playwrightExecutor({ onOutput }) {
+      onOutput("stdout", `${"x".repeat(40_000)}\n`);
+      for (let i = 0; i < MAX_JOB_LOG_ENTRIES + 5; i += 1) {
+        onOutput("stdout", `Browser step ${i}\n`);
+      }
+      onOutput("stdout", 'FIXLAB_BROWSER_RESULT|{"total":2,"passed":0,"failed":0,"skipped":2}\n');
+      return { completion: Promise.resolve({ status: "passed", code: 0, message: "Done." }) };
+    }
+  });
+  let { dashboard, url } = await start();
+  try {
+    const job = await backgroundTestJob(url);
+    const { body: { plan } } = await jsonRequest(url, "/api/playwright/run");
+    await jsonRequest(url, "/api/playwright/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: job.id, approvalId: plan.approvalId, approved: true })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const result = await jsonRequest(url, "/api/job");
+    assert.equal(result.body.job.browserRun.status, "skipped");
+    assert.equal(result.body.job.logs.length, MAX_JOB_LOG_ENTRIES);
+    assert.ok(result.body.job.droppedLogs > 0);
+    assert.equal(result.body.job.pullRequestReadiness.ready, false);
+    await dashboard.close();
+    ({ dashboard, url } = await start());
+    const restored = await jsonRequest(url, "/api/job");
+    assert.equal(restored.body.job.id, job.id);
+    assert.equal(restored.body.job.browserRun.status, "skipped");
+    assert.deepEqual(restored.body.job.logs, []);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 test("dashboard reports readiness and serves only known static assets", async () => {
   const repository = createRepository();
