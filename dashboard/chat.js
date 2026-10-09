@@ -28,6 +28,7 @@ export function formatChatHelp() {
   /manual-fail         Confirm that manual React localhost validation failed.
   /new-bug <details>   Start or queue a separate bug-fix job.
   /cancel-job <id|#>   Remove a waiting job by ID or queue position.
+  /close               Archive an idle blocked, failed, or passed job.
   /stop                Stop the owned executor and leave the job resumable.
   /help                Show these commands.
   /exit                Leave chat without stopping the job.
@@ -92,6 +93,11 @@ export function parseNaturalChatCommand(line) {
   );
   if (cancelJob) {
     return { command: "/cancel-job", details: cancelJob[1].trim() };
+  }
+  if (
+    /^(?:close|archive|dismiss)(?: the)?(?: current)? job$/u.test(lower)
+  ) {
+    return { command: "/close", details: "" };
   }
   return null;
 }
@@ -424,6 +430,18 @@ export async function runChat({
         return;
       }
       await cancelQueuedJob(details.replace(/^#/u, ""));
+      return;
+    }
+    if (command === "/close") {
+      const body = await requestJson(
+        fetchImpl,
+        `${dashboardUrl}/api/job/dismiss`,
+        { method: "POST" }
+      );
+      currentJob = body.job;
+      write(
+        `Closed job ${body.closedJob.id} with outcome ${body.closedJob.status}.`
+      );
       return;
     }
     if (command === "/repository") {

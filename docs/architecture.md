@@ -199,9 +199,10 @@ interrupted, resumable failure.
 New requests submitted while a job is running, blocked, or failed enter the
 bounded queue. A passed active job starts the next queued job. Blocked and
 failed jobs pause queue advancement so the same session remains resumable. A
-user may explicitly dismiss a failed job without resuming it; FixLab preserves
-the failed outcome in dashboard history, performs no repository mutation for
-that job, and starts the next queued job.
+user may explicitly close an idle blocked, failed, or passed job without
+resuming it; FixLab preserves the original outcome and evidence in dashboard
+history, performs no repository mutation for that job, and starts the next
+queued job.
 Waiting jobs can be removed by queue position or job ID before execution. The
 dashboard records the job as cancelled, deletes only its FixLab-owned
 screenshot artifacts, renumbers the remaining queue, and never interrupts the
@@ -246,6 +247,26 @@ passes or repository policy records an accepted outcome.
 Stage summaries remain structured independently of raw output. The dashboard
 retains a bounded local log window and reports how many older entries were
 omitted; it does not feed unbounded logs back into prompts.
+Every dashboard agent turn, including retries and queued comments, carries a
+command-output contract requiring all finite, non-interactive shell commands
+to use `fixlab exec`. This extends beyond validation to discovery, Git, restores,
+browser tests, and already-authorized external commands. Interactive
+authentication and long-lived applications retain their approved execution
+paths and report concise readiness or blocker summaries. This is an agent
+execution contract, not interception of native runtime tool results: shrinking
+the dashboard display after the runtime sees output cannot save input tokens.
+Non-reused commands do not fingerprint the whole worktree.
+
+Dashboard-owned background Playwright output uses the same structured summary
+formatter and diagnostic deduplication. Redacted detailed output and summary
+results are kept in Git-private command evidence. Resumed turns receive only
+the compact result, final outcome, test counts, and evidence identifier, never
+the full dashboard log window. The dashboard displays estimated output-token
+reduction separately from actual Copilot usage. Durable job history retains
+the evidence identifier and numeric reduction metadata, not diagnostic text;
+resumption reloads the bounded local summary. Non-Git repositories retain only
+the in-memory compact result and explicitly report unavailable durable command
+evidence.
 Polled job responses expose only Azure DevOps identity and state summaries,
 not the full loaded descriptions and reproduction text.
 
@@ -299,13 +320,15 @@ The file is capped at 20 entries and 64 KiB.
 
 The shared Git directory also holds
 `.git/fixlab/dashboard-metrics.json`, bounded to 500 job records. Records
-contain identifiers, queue/start/finish timestamps, terminal status, bug count,
-execution and queue-wait durations, and parsed Copilot token totals. They never
-contain request text, comments, screenshots, credentials, raw logs, or source
-content. The local API aggregates 24-hour, 7-day, 30-day, or all-retained
-periods. Cache reuse is `cached input / total input`; without a defined
-comparable baseline it is not represented as exact token reduction or cost
-savings.
+include privacy-safe retry/resume, human-intervention, validation-reuse,
+browser-attempt, preflight-recovery, and command-output reduction counters;
+they never contain prompts, command output, credentials, or authentication
+state. Records also contain identifiers, queue/start/finish timestamps,
+terminal status, bug count, execution and queue-wait durations, and parsed
+Copilot token totals. The local API aggregates 24-hour, 7-day, 30-day, or
+all-retained periods. Cache reuse is `cached input / total input`; without a
+defined comparable baseline it is not represented as exact token reduction
+or cost savings.
 
 Changing `HEAD` or profile content causes an automatic cache miss. Instruction
 changes remain an explicit prompt-level invalidation boundary and are reread.
@@ -344,7 +367,15 @@ profile-defined restores, verifies Playwright and the configured browser,
 checks the selected environment's explicit startup command, and verifies
 required authentication state. Private-feed or interactive authentication
 failures block intake with an exact action instead of surfacing during the
-final live-test gate.
+final live-test gate. Profiles may also define bounded preflight recovery.
+Recovery retries only the
+completed FixLab-owned probe, verifies the configured runtime and exact health
+URL, and never terminates an arbitrary process merely because it owns a port.
+
+Authenticated Playwright profiles may declare the required test filename
+pattern, project, fixture import, and readiness helper. Generated transient
+tests must follow that contract rather than defaulting to plain
+`@playwright/test` or `storageState`.
 
 ### Evidence store
 

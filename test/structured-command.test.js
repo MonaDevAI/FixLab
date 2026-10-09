@@ -14,6 +14,7 @@ import { basename, join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import {
+  createStructuredOutput,
   executeStructuredCommand,
   parseStructuredCommandArguments,
   showStructuredEvidence
@@ -59,6 +60,84 @@ function capture() {
     }
   };
 }
+
+test("externally owned command output retains compact results and detailed redacted evidence", () => {
+  const repository = createRepository();
+  try {
+    const output = createStructuredOutput({
+      repository,
+      command: "npm run test:e2e",
+      cwd: ".",
+      stage: "live-test",
+      tool: "Playwright"
+    });
+    for (let index = 0; index < 2000; index += 1) {
+      output.write("stdout", `Browser step: locator.click ${index}\n`);
+    }
+    output.write("stderr", "error: browser assertion failed; token=");
+    output.write("stderr", "sensitive-value\n");
+    output.write("stderr", `error: ${"x".repeat(5000)}\n`);
+    const compact = output.finish({
+      status: 2,
+      outcome: "failed",
+      testCounts: { total: 3, passed: 1, failed: 1, skipped: 1 }
+    });
+    assert.match(compact.summary, /FAIL fixlab exec/u);
+    assert.match(compact.summary, /Outcome: failed/u);
+    assert.match(compact.summary, /Tests: 1 passed, 1 failed, 0 cancelled, 1 skipped, 3 total/u);
+    assert.match(compact.summary, /browser assertion failed/u);
+    assert.doesNotMatch(compact.summary, /sensitive-value|locator\.click/u);
+    assert.ok(compact.context.reductionPercent > 90);
+    assert.ok(compact.summary.length < 3000);
+    const detail = capture();
+    showStructuredEvidence(
+      ["show", compact.evidenceId, "--stream", "stderr"],
+      repository,
+      { stdout: detail.stream }
+    );
+    assert.match(detail.text(), /x{5000}/u);
+    assert.doesNotMatch(detail.text(), /sensitive-value/u);
+    assert.throws(() => output.finish({ status: 0 }), /already been summarized/u);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("non-Git command summaries explicitly report unavailable durable evidence", () => {
+  const output = createStructuredOutput({
+    command: "npm test",
+    cwd: ".",
+    stage: "live-test",
+    tool: "Playwright"
+  });
+  output.write("stdout", "Browser step: locator.click\n");
+  const result = output.finish({ status: 1, outcome: "cancelled" });
+  assert.equal(result.evidenceId, null);
+  assert.match(result.summary, /Outcome: cancelled/u);
+  assert.match(result.summary, /Evidence: unavailable/u);
+  assert.doesNotMatch(result.summary, /Inspect:|PASS fixlab exec/u);
+});
+
+test("non-reused commands do not fingerprint unrelated worktree contents", async () => {
+  const repository = createRepository();
+  const output = capture();
+  try {
+    rmSync(join(repository, "tracked.txt"));
+    const status = await executeStructuredCommand({
+      repository,
+      cwd: repository,
+      stage: "discovery",
+      reuse: false,
+      timeoutSeconds: 0,
+      command: process.execPath,
+      commandArgs: ["-e", "console.log('discovery complete')"]
+    }, { stdout: output.stream, stderr: output.stream });
+    assert.equal(status, 0);
+    assert.match(output.text(), /PASS fixlab exec/u);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 test("structured execution keeps compact diagnostics and redacted evidence", async () => {
   const repository = createRepository();

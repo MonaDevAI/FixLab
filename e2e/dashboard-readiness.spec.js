@@ -186,6 +186,8 @@ test("dashboard approves, traces and stops a job-linked background browser test"
     await expect(start).toBeDisabled();
     await page.getByRole("button", { name: "Stop owned test" }).click();
     await expect(page.locator("#background-playwright-status")).toContainText("cancelled");
+    await expect(page.locator("#background-playwright-progress")).toContainText("Output summary:");
+    await expect(page.locator("#background-playwright-progress")).toContainText("estimated tokens");
     await expect(page.locator("#job-status")).toContainText("passed");
   } finally {
     await isolatedDashboard.close();
@@ -728,7 +730,7 @@ test("dashboard explains how to resume a failed job and release the queue", asyn
   );
   await expect(page.getByRole("button", { name: "Resume FixLab" })).toBeVisible();
   const dismissButton = page.getByRole("button", {
-    name: "Dismiss failed job and continue queue"
+    name: "Close job and continue queue"
   });
   await expect(dismissButton).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());

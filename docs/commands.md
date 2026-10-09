@@ -206,6 +206,17 @@ remove job 253ef92a-7bdf-47bd-b944-cdb0e6297580 from the queue
 The removed job remains visible as cancelled in dashboard history. FixLab
 deletes its queued screenshot artifacts and renumbers the remaining jobs.
 
+Close the idle current job without rewriting its outcome:
+
+```text
+close current job
+/close
+```
+
+This archives a blocked, failed, or passed job with its history and evidence,
+then starts the next queued job. FixLab refuses closure while an owned agent
+or Playwright process is active.
+
 Manual entry is the default intake path. The dashboard can also load a full
 Azure DevOps work-item URL or use a numeric ID with this optional profile
 section:
@@ -231,8 +242,22 @@ git status and effective-diff inspection, task-relevant symbol searches, and
 focused risk-scaled validation. It avoids unchanged-file rereads, repeated
 diagnosis, dependency reinstalls, and unjustified broad checks. Stage summaries
 are concise and the dashboard raw-log view is bounded. Git repositories use a
+command-output contract on every initial and resumed agent turn: finite,
+non-interactive commands use `fixlab exec`, and necessary returned data is
+inspected through bounded `fixlab evidence show` output. Interactive
+authentication and long-lived application startup remain on their approved
+execution paths. This requires agent compliance; dashboard display filtering
+does not intercept the runtime's native tool results. Background Playwright
+runs additionally record compact summaries and estimated output-token
+reduction, and forward only that summary on resumption. Detailed redacted
+command evidence stays Git-private rather than entering prompts or durable
+dashboard history. Git repositories also use a
 metadata-only cache under `.git/fixlab`, keyed by repository identity, `HEAD`,
 and profile hash. It reuses only sanitized profile shape, prior result, and
 stage summaries, with 20-entry and 64-KiB limits. It is not a repository scan
 or source cache. `HEAD` or profile changes miss automatically, instruction
 changes require rereading, and non-Git repositories skip durable reuse.
+`/close` archives an idle blocked, failed, or passed current job without
+rewriting its outcome. Its history and evidence remain visible, and the next
+queued job starts. FixLab refuses closure while an owned agent or Playwright
+process is active.

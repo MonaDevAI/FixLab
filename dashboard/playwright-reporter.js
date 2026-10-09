@@ -1,3 +1,20 @@
+import { basename } from "node:path";
+
+export function browserFailure(test, error) {
+  const message = String(error?.message ?? "").replace(/\u001b\[[0-9;]*[A-Za-z]/gu, "");
+  const assertionTimeout = message.match(/Timed out (\d+)ms waiting for expect/u);
+  const actionTimeout = message.match(/Timeout (\d+)ms exceeded/u);
+  const location = message.match(/\.(?:spec|test)\.[cm]?[jt]sx?:(\d+):\d+/u);
+  return {
+    kind: assertionTimeout ? "assertion-timeout"
+      : /browserType\.launch/u.test(message) ? "browser-launch"
+        : actionTimeout ? "action-timeout" : "test-failure",
+    file: test?.location?.file ? basename(test.location.file) : null,
+    line: location ? Number(location[1]) : (test?.location?.line ?? null),
+    timeoutMs: Number(assertionTimeout?.[1] ?? actionTimeout?.[1] ?? 0) || null
+  };
+}
+
 export default class PlaywrightProgressReporter {
   constructor() {
     this.tests = [];
@@ -17,8 +34,13 @@ export default class PlaywrightProgressReporter {
     console.log(`Browser step: ${action ?? step.category}`);
   }
 
-  onTestEnd(_test, result) {
+  onTestEnd(test, result) {
     console.log(`Playwright test finished: ${result.status}.`);
+    if (!["passed", "skipped"].includes(result.status)) {
+      console.log(`FIXLAB_BROWSER_FAILURE|${JSON.stringify(
+        browserFailure(test, result.errors?.[0] ?? result.error)
+      )}`);
+    }
   }
 
   onError() {

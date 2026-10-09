@@ -32,7 +32,11 @@ import {
   removeArtifactDirectory,
   storeScreenshots
 } from "./intake.js";
-import { sanitize } from "../bin/structured-command.js";
+import {
+  createStructuredOutput,
+  sanitize,
+  showStructuredEvidence
+} from "../bin/structured-command.js";
 import { runPlaywrightTest, withPlaywrightProgress } from "./playwright-runner.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
@@ -171,6 +175,7 @@ export function validateLiveTestProfile(profile, repository) {
   const testSynthesis = browserAutomation?.testSynthesis;
   const agentIdleTimeoutMinutes =
     profile?.validation?.agentIdleTimeoutMinutes;
+  const preflightRecovery = profile?.validation?.preflightRecovery;
   const requiredString = (value) =>
     typeof value === "string" && Boolean(value.trim());
 
@@ -183,6 +188,25 @@ export function validateLiveTestProfile(profile, repository) {
     missing.push(
       "validation.agentIdleTimeoutMinutes (integer from 1 to 120)"
     );
+  }
+  if (preflightRecovery !== undefined) {
+    if (preflightRecovery?.enabled !== true) {
+      missing.push("validation.preflightRecovery.enabled=true");
+    }
+    if (
+      !Number.isInteger(preflightRecovery?.maxAttempts) ||
+      preflightRecovery.maxAttempts < 1 ||
+      preflightRecovery.maxAttempts > 3
+    ) {
+      missing.push(
+        "validation.preflightRecovery.maxAttempts (integer from 1 to 3)"
+      );
+    }
+    if (preflightRecovery?.processCleanup !== "owned-only") {
+      missing.push(
+        "validation.preflightRecovery.processCleanup=owned-only"
+      );
+    }
   }
 
   if (!frontend || typeof frontend !== "object") {
@@ -347,6 +371,42 @@ function configuredTestSynthesis(profile) {
       configuration?.requireScenarioEvidence !== false,
     reported: false,
     scenario: ""
+  };
+}
+
+function configuredAuthenticatedTest(profile) {
+  const configuration = profile?.browserAutomation?.authenticatedTest;
+  if (!configuration || typeof configuration !== "object") {
+    return null;
+  }
+  const convention = {};
+  for (const field of [
+    "filePattern",
+    "project",
+    "fixtureImport",
+    "readinessHelper"
+  ]) {
+    convention[field] =
+      typeof configuration[field] === "string"
+        ? configuration[field].trim()
+        : "";
+  }
+  return Object.values(convention).some(Boolean) ? convention : null;
+}
+
+function configuredPreflightRecovery(profile) {
+  const configuration = profile?.validation?.preflightRecovery;
+  return {
+    enabled: configuration?.enabled !== false,
+    maxAttempts:
+      Number.isInteger(configuration?.maxAttempts) &&
+      configuration.maxAttempts >= 1 &&
+      configuration.maxAttempts <= 3
+        ? configuration.maxAttempts
+        : 2,
+    verifyRuntimeVersion: configuration?.verifyRuntimeVersion !== false,
+    requireExactHealthUrl: configuration?.requireExactHealthUrl !== false,
+    processCleanup: "owned-only"
   };
 }
 
@@ -532,7 +592,8 @@ function dashboardSnapshot(job) {
       ...job.browserRun,
       command: safePersistedSummary(job.browserRun.command),
       message: safePersistedSummary(job.browserRun.message),
-      currentStep: ""
+      currentStep: "",
+      commandSummary: ""
     } : null,
     branchNaming: job.branchNaming ?? null,
     intakeSource: job.intakeSource,
@@ -642,6 +703,8 @@ function restoreDashboardJob(snapshot, repository) {
     manualLocalhostTest: restored.manualLocalhostTest,
     manualLocalhostUrl: restored.manualLocalhostUrl,
     testEvidence: restored.testEvidence,
+    authenticatedTest: configuredAuthenticatedTest(profile),
+    preflightRecovery: configuredPreflightRecovery(profile),
     branchNaming: restored.branchNaming,
     intakeSource: restored.intakeSource,
     workItem: restored.workItem,
@@ -865,6 +928,14 @@ export function buildJobPrompt({
     mutationMode: "profile-defined",
     requireScenarioEvidence: true
   },
+  authenticatedTest = null,
+  preflightRecovery = {
+    enabled: true,
+    maxAttempts: 2,
+    verifyRuntimeVersion: true,
+    requireExactHealthUrl: true,
+    processCleanup: "owned-only"
+  },
   branchNaming = null,
   cacheSummary = null,
   intakeSource = "manual",
@@ -936,6 +1007,12 @@ export function buildJobPrompt({
 - Save the recording as WebM or MP4 under the repository-owned test-results, playwright-report, or artifacts directory. Keep it under 50 MiB and capture only the application surface: no credentials, browser profiles, personal windows, or unrelated data.
 - Keep the required screenshot evidence as the lightweight review artifact. If recording is unavailable, report that limitation explicitly instead of claiming video evidence exists.`
     : "- Playwright video recording was not requested. Preserve the required screenshot evidence and any repository-default traces.";
+  const authenticatedTestGuidance = authenticatedTest
+    ? `- For authenticated Playwright synthesis, follow the repository contract exactly: file pattern ${authenticatedTest.filePattern || "profile-defined"}, project ${authenticatedTest.project || "profile-defined"}, fixture import ${authenticatedTest.fixtureImport || "profile-defined"}, and readiness helper ${authenticatedTest.readinessHelper || "profile-defined"}. Do not substitute plain @playwright/test or storageState when the repository defines an authenticated fixture.`
+    : "- For authenticated Playwright synthesis, inspect the repository profile and existing Playwright fixtures/configuration before generating a test. Do not assume storageState is sufficient.";
+  const preflightRecoveryGuidance = preflightRecovery.enabled
+    ? `- Preflight recovery is bounded to ${preflightRecovery.maxAttempts} attempt(s). Verify the active runtime/version before retrying, use the exact configured health URL, and stop or clean up only processes started and owned by this FixLab job. Never terminate an arbitrary port owner. If recovery needs credentials, runtime installation, or another unsafe/user-owned action, block with that exact action.`
+    : "- Do not attempt automatic preflight recovery; block with the exact prerequisite.";
   const manualLocalhostGuidance = manualLocalhostTest
     ? `- Manual React localhost validation is enabled independently of Playwright. After required automated validation finishes, start or reuse only the profile-defined frontend and wait for its health check at ${manualLocalhostUrl || "the profile-defined local health URL"}.
 - Emit local-stack passed only after the React frontend is healthy. The dashboard will then open the localhost URL in the user's default browser.
@@ -989,6 +1066,7 @@ Use this concise metadata only to avoid repeated discovery. Verify task-specific
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all repository-owned instructions before acting.
 - Before diagnosis or source inspection, preflight the actual execution workspace: verify profile-defined frontend and backend restore commands have completed, the configured Playwright package and browser can launch, the selected environment has an explicit startup command, and every required browser-authentication status path exists.
+${preflightRecoveryGuidance}
 - Run missing profile-defined restores immediately in their configured working directories. If a private package feed returns 401/403 or authentication is interactive, block intake with the exact authentication action instead of deferring setup until live-test.
 - Do not start implementation while execution prerequisites are unresolved. Emit intake blocked and mark later stages skipped when restore, browser, environment startup, or required authentication cannot be made ready safely.
 - For repeat work, inspect the current git status and effective diff first, then search task-relevant symbols and files instead of rescanning the whole repository.
@@ -1011,6 +1089,7 @@ ${branchNamingGuidance}
 - Do not skip Playwright merely because an unrelated non-browser test, build, or backend startup is failed or blocked. If frontend startup, authentication, safe data, and the selected browser journey are independently ready, run the live-test gate and preserve the other blocker separately.
 - Use local-stack only for profile-defined application startup and health. Do not mark local-stack failed because a separate test, type-check, lint, or production build reports unrelated baseline diagnostics; preserve that exact validation limitation separately and continue browser execution when startup is healthy.
 - Before browser execution, synthesize the smallest focused Playwright scenario and measurable assertions from the reported behavior and expected outcome when an equivalent repository-owned scenario does not already exist.
+${authenticatedTestGuidance}
 - Treat a synthesized Playwright scenario as a transient validation artifact by default. Remove its source file and any validation-only configuration edits before diff review, commit, push, or pull-request creation.
 - Do not add a newly generated authenticated test such as \`*.auth.spec.ts\` to the product change unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.
 - Existing repository-owned Playwright tests may be changed only when the reported product behavior directly requires that regression update; do not broaden the pull request to repair unrelated or stale browser journeys.
@@ -1180,6 +1259,26 @@ function readMetrics(path) {
 }
 
 function updateJobMetrics(records, job) {
+  const retryCount = job.inputs.filter(
+    (input) => input.action === "retry"
+  ).length;
+  const resumeCount = job.inputs.filter((input) =>
+    ["retry", "continue", "skip", "manual-pass", "manual-fail"].includes(
+      input.action
+    )
+  ).length;
+  const validationReuseCount = job.logs.filter((entry) =>
+    /\bREUSED fixlab exec:/u.test(entry.message)
+  ).length;
+  const preflightRecoveryAttempts = job.logs.filter((entry) =>
+    /Playwright preflight recovery attempt/u.test(entry.message)
+  ).length;
+  const evidenceReductions = job.logs
+    .map((entry) =>
+      entry.message.match(/(\d+(?:\.\d+)?)% reduction/u)
+    )
+    .filter(Boolean)
+    .map((match) => Number(match[1]));
   const record = {
     id: job.id,
     createdAt: job.createdAt,
@@ -1196,6 +1295,16 @@ function updateJobMetrics(records, job) {
     queueWaitMs: job.startedAt
       ? Math.max(0, Date.parse(job.startedAt) - Date.parse(job.createdAt))
       : null,
+    retryCount,
+    resumeCount,
+    humanInterventionCount: job.inputs.length,
+    validationReuseCount,
+    browserRunAttempts: job.browserRunAttempts ?? 0,
+    preflightRecoveryAttempts,
+    commandEvidenceReductionPercent:
+      evidenceReductions.length > 0
+        ? Math.max(...evidenceReductions)
+        : null,
     ...job.usage
   };
   const next = [
@@ -1328,6 +1437,9 @@ function summarizeMetrics(records, period) {
     (total, record) => total + record.cachedInputTokens,
     0
   );
+  const evidenceReductionJobs = completed.filter((record) =>
+    Number.isFinite(record.commandEvidenceReductionPercent)
+  );
   return {
     period,
     queued: selected.length,
@@ -1337,6 +1449,42 @@ function summarizeMetrics(records, period) {
     blocked: completed.filter((record) => record.status === "blocked").length,
     cancelled: completed.filter((record) => record.status === "cancelled").length,
     bugs: selected.reduce((total, record) => total + record.bugCount, 0),
+    retries: selected.reduce(
+      (total, record) => total + (record.retryCount ?? 0),
+      0
+    ),
+    resumes: selected.reduce(
+      (total, record) => total + (record.resumeCount ?? 0),
+      0
+    ),
+    humanInterventions: selected.reduce(
+      (total, record) => total + (record.humanInterventionCount ?? 0),
+      0
+    ),
+    validationReuses: selected.reduce(
+      (total, record) => total + (record.validationReuseCount ?? 0),
+      0
+    ),
+    browserRunAttempts: selected.reduce(
+      (total, record) => total + (record.browserRunAttempts ?? 0),
+      0
+    ),
+    preflightRecoveryAttempts: selected.reduce(
+      (total, record) => total + (record.preflightRecoveryAttempts ?? 0),
+      0
+    ),
+    averageCommandEvidenceReductionPercent:
+      evidenceReductionJobs.length > 0
+        ? Math.round(
+            evidenceReductionJobs.reduce(
+              (total, record) =>
+                total + record.commandEvidenceReductionPercent,
+              0
+            ) *
+              10 /
+              evidenceReductionJobs.length
+          ) / 10
+        : null,
     averageDurationMs:
       completed.length > 0
         ? Math.round(
@@ -1574,6 +1722,14 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
     });
     const child = spawn(executable, invocation.args, {
       cwd: repository,
+      env: {
+        ...process.env,
+        FIXLAB_DASHBOARD_OUTPUT_COMPRESSION: "1",
+        FIXLAB_OUTPUT_REPOSITORY: repository,
+        FIXLAB_OUTPUT_SESSION_ID: sessionId,
+        FIXLAB_NODE_EXECUTABLE: process.execPath,
+        FIXLAB_OUTPUT_HOOK: join(packageRoot, "bin", "output-compression-hook.js")
+      },
       shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });
@@ -1686,6 +1842,10 @@ function publicJob(job) {
     manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: job.testEvidence,
     browserRun: job.browserRun ?? null,
+    execution: dashboardExecutionState(job),
+    runtimeApproval: requiresInteractiveApproval(job)
+      ? { command: job.interactiveApprovalCommand ?? null }
+      : null,
     intakeSource: job.intakeSource,
     workItem: publicWorkItem(job.workItem),
     workItems: job.workItems.map(publicWorkItem),
@@ -1722,6 +1882,58 @@ function publicJob(job) {
     logs: job.logs,
     droppedLogs: job.droppedLogs
   };
+}
+
+function requiresInteractiveApproval(job) {
+  if (!["blocked", "failed"].includes(job.status)) {
+    return false;
+  }
+  const messages = [
+    job.error ?? "",
+    ...Object.values(job.stages).filter((stage) => stage.status === "blocked")
+      .map((stage) => stage.message)
+  ].join("\n");
+  return /no interactive (?:user )?response.*available|interactive approval.*(?:required|unavailable)|permission denied.*interactive/iu.test(messages);
+}
+
+function dashboardExecutionState(job) {
+  if (job.browserRun?.status === "running") {
+    return { running: true, owner: "playwright", message: "Playwright is running; agent workflow gates remain separate." };
+  }
+  if (job.status === "running") {
+    return { running: true, owner: "agent", message: "The agent is running." };
+  }
+  if (job.browserRun && ["failed", "blocked", "timed-out", "cancelled"].includes(job.browserRun.status)) {
+    return {
+      running: false, owner: null,
+      message: `No process is running. Latest Playwright run: ${job.browserRun.status}. Agent workflow: ${job.status}.`
+    };
+  }
+  return {
+    running: false, owner: null,
+    message: requiresInteractiveApproval(job)
+      ? "No process is running. CLI permission approval requires an interactive terminal; Retry does not grant it."
+      : `No process is running. Agent workflow: ${job.status}.`
+  };
+}
+
+export function buildInteractiveResumeCommand({
+  repository, packageRoot, runtime, sessionId, platform = process.platform
+}) {
+  if (!FIXLAB_RUNTIMES.includes(runtime) ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(sessionId)) {
+    throw new Error("Interactive approval requires a supported runtime and a valid session ID.");
+  }
+  const quote = platform === "win32"
+    ? (value) => `'${String(value).replace(/'/gu, "''")}'`
+    : (value) => `'${String(value).replace(/'/gu, "'\\''")}'`;
+  const arguments_ = [
+    ...(runtime === "agency" ? ["copilot"] : []),
+    "--plugin-dir", packageRoot, "--agent", "fixlab:fixlab", `--resume=${sessionId}`
+  ].map(quote).join(" ");
+  return platform === "win32"
+    ? `Set-Location -LiteralPath ${quote(repository)}; & ${quote(runtime)} ${arguments_}`
+    : `cd -- ${quote(repository)} && ${quote(runtime)} ${arguments_}`;
 }
 
 function publicWorkItem(workItem) {
@@ -2154,6 +2366,38 @@ Resume requirements:
 - Do not call task_complete or return the final response until all required machine-readable lines are emitted.`;
 }
 
+function backgroundCommandSummary(job, repository) {
+  if (!job.browserRun) {
+    return "";
+  }
+  let summary = job.browserRun.commandSummary ?? "";
+  if (!summary && job.browserRun.evidenceId && job.cacheContext) {
+    try {
+      showStructuredEvidence(
+        ["show", job.browserRun.evidenceId],
+        repository,
+        { stdout: { write(text) { summary += text; } } }
+      );
+    } catch (error) {
+      return `Background command evidence is unavailable: ${safeSummary(error.message)}`;
+    }
+  }
+  return summary ? `Compact background command evidence (not raw logs):\n${summary}` : "";
+}
+
+function dashboardCommandOutputContract(packageRoot) {
+  return `
+Dashboard command-output contract for this turn:
+- Route every finite, non-interactive shell command through \`fixlab exec\`, not just validation. This includes repository discovery, Git queries and mutations, searches, dependency restores, browser tests, health probes, and external-data commands when already authorized.
+- Use the current Node executable ${JSON.stringify(process.execPath)} and installed CLI entrypoint ${JSON.stringify(join(packageRoot, "bin", "fixlab.js"))} when the global fixlab command is unavailable. Pass \`exec <repository> --cwd <repository-relative-directory> --stage <stage> -- <executable> [args...]\`.
+- Keep only the compact command summary in agent context. For successful commands whose returned data is needed, inspect the exact bounded redacted stdout using \`fixlab evidence show <evidence-id> --stream stdout --lines <count>\`. Do not dump full evidence or dashboard logs into prompts.
+- Do not recursively wrap \`fixlab exec\` or \`fixlab evidence show\` themselves. If the workspace has no Git metadata, report structured capture unavailable and use bounded tool output; do not initialize Git without authorization or claim compressed evidence was retained.
+- Compression does not authorize a command, enable caching, or turn a failed, skipped, cancelled, blocked, or timed-out gate into success. Preserve exit status, test counts, new diagnostics, evidence identifiers, and context-reduction measurements.
+- Never add \`--reuse\` to live checks, browser tests, installs, startup, authentication, external reads, or mutations.
+- Interactive authentication and long-lived applications must retain their existing approved execution and process-ownership paths. Report concise readiness or blocker summaries instead of returning their full output. Do not wrap an interactive program with a non-interactive command capture.
+- This contract also applies after retries, queued comments, and session resumption.`;
+}
+
 function buildFreshRetryPrompt(job, details) {
   return `${job.initialPrompt}
 
@@ -2446,6 +2690,9 @@ export function createDashboardServer({
       resumableSnapshot,
       resolvedRepository
     );
+    currentJob.interactiveApprovalCommand = buildInteractiveResumeCommand({
+      repository: resolvedRepository, packageRoot, runtime, sessionId: currentJob.id
+    });
     persistedJobs = persistedJobs.filter(
       (job) => job.id !== resumableSnapshot.id
     );
@@ -2552,7 +2799,8 @@ export function createDashboardServer({
       configuration: {
         package: browser.package,
         browser: browser.browser,
-        channel: browser.channel
+        channel: browser.channel,
+        preflightRecovery: configuredPreflightRecovery(profile)
       },
       policy: safeSummary(browser.dataSafety.policy),
       timeoutMs: timeoutMinutes * 60 * 1000
@@ -2584,6 +2832,9 @@ export function createDashboardServer({
   }
 
   function startJob(job, prompt, resume = false) {
+    job.interactiveApprovalCommand = buildInteractiveResumeCommand({
+      repository: resolvedRepository, packageRoot, runtime, sessionId: job.id
+    });
     const profileIdleTimeoutMinutes = Number(
       loadRepositoryProfile(resolvedRepository).validation
         ?.agentIdleTimeoutMinutes
@@ -2657,7 +2908,7 @@ export function createDashboardServer({
     job.lastActivityAt = new Date().toISOString();
     handle = executor({
       repository: resolvedRepository,
-      prompt,
+      prompt: `${prompt}\n${backgroundCommandSummary(job, resolvedRepository)}\n${dashboardCommandOutputContract(packageRoot)}`,
       sessionId: job.id,
       resume,
       onOutput(stream, text) {
@@ -2989,32 +3240,34 @@ export function createDashboardServer({
         });
         return;
       }
-      if (currentJob.status !== "failed") {
+      if (!["blocked", "failed", "passed"].includes(currentJob.status)) {
         sendJson(response, 409, {
-          error: "only a failed FixLab job can be dismissed"
+          error:
+            "only an idle blocked, failed, or passed FixLab job can be closed"
         });
         return;
       }
 
-      const dismissedJob = currentJob;
-      pushLog(dismissedJob, {
-        index: dismissedJob.nextLogIndex,
+      const closedJob = currentJob;
+      pushLog(closedJob, {
+        index: closedJob.nextLogIndex,
         timestamp: new Date().toISOString(),
         stream: "dashboard",
         message:
-          "Failed job dismissed by the user; its failed outcome remains in dashboard history."
+          `Job closed by the user; its ${closedJob.status} outcome and evidence remain in dashboard history.`
       });
-      if (dismissedJob.artifactDirectory) {
-        removeArtifactDirectory(dismissedJob.artifactDirectory);
-        artifactDirectories.delete(dismissedJob.artifactDirectory);
+      if (closedJob.artifactDirectory) {
+        removeArtifactDirectory(closedJob.artifactDirectory);
+        artifactDirectories.delete(closedJob.artifactDirectory);
       }
-      archiveJob(dismissedJob);
+      archiveJob(closedJob);
       currentJob = null;
       startNextJob();
       persistDashboardState();
       sendJson(response, 202, {
         job: publicJob(currentJob),
-        dismissedJob: publicJob(dismissedJob),
+        closedJob: publicJob(closedJob),
+        dismissedJob: publicJob(closedJob),
         queue: publicQueue(queuedJobs),
         history: dashboardHistory()
       });
@@ -3072,6 +3325,10 @@ export function createDashboardServer({
         return;
       }
       const action = body.action ?? "continue";
+      if (body.jobId && body.jobId !== currentJob.id) {
+        sendJson(response, 409, { error: "The selected FixLab job has changed; review the current job." });
+        return;
+      }
       if (
         ![
           "comment",
@@ -3104,6 +3361,16 @@ export function createDashboardServer({
       }
       const submittedDetails =
         typeof body.details === "string" ? body.details.trim() : "";
+      if (!running && requiresInteractiveApproval(currentJob) &&
+          ["continue", "retry", "comment"].includes(action) &&
+          body.runtimeApprovalHandled !== true) {
+        sendJson(response, 409, {
+          code: "interactive_approval_required",
+          error: "This session needs CLI permission approval in an interactive terminal. Another background retry cannot grant it.",
+          command: currentJob.interactiveApprovalCommand
+        });
+        return;
+      }
       const details = manualResult
         ? `The user completed manual React localhost validation and explicitly marked it ${
             action === "manual-pass" ? "passed" : "failed"
@@ -3126,7 +3393,9 @@ export function createDashboardServer({
 
       const input = {
         action,
-        details,
+        details: body.runtimeApprovalHandled === true
+          ? `${details}\nThe user reports completing interactive CLI approval and exiting the terminal. Verify actual runtime permissions; this acknowledgement does not grant permissions or mark any gate passed.`
+          : details,
         createdAt: new Date().toISOString()
       };
       currentJob.inputs.push(input);
@@ -3159,7 +3428,7 @@ export function createDashboardServer({
       const freshRetry = requiresFreshRetry(currentJob, action);
       const prompt = freshRetry
         ? buildFreshRetryPrompt(currentJob, details)
-        : buildResumePrompt(currentJob, { action, details });
+        : buildResumePrompt(currentJob, { action, details: input.details });
       resetJobForResume(currentJob);
       recordJobMetric(currentJob);
       try {
@@ -3581,6 +3850,8 @@ export function createDashboardServer({
         manualLocalhostTest,
         manualLocalhostUrl,
         testEvidence,
+        authenticatedTest: configuredAuthenticatedTest(repositoryProfile),
+        preflightRecovery: configuredPreflightRecovery(repositoryProfile),
         branchNaming,
         intakeSource,
         workItem,
@@ -3694,7 +3965,23 @@ export function createDashboardServer({
         return;
       }
       const job = currentJob;
+      let commandOutput;
+      try {
+        commandOutput = createStructuredOutput({
+          repository: job.cacheContext ? resolvedRepository : null,
+          command: plan.command,
+          cwd: plan.workingDirectory,
+          stage: "live-test",
+          tool: "Playwright"
+        });
+      } catch (error) {
+        sendJson(response, 500, {
+          error: `Could not prepare compact command evidence: ${safeSummary(error.message)}`
+        });
+        return;
+      }
       const startedAt = new Date().toISOString();
+      job.browserRunAttempts = (job.browserRunAttempts ?? 0) + 1;
       job.browserRun = {
         id: randomUUID(),
         status: "running",
@@ -3711,7 +3998,32 @@ export function createDashboardServer({
       };
       const partial = { stdout: "", stderr: "" };
       const oversized = { stdout: false, stderr: false };
+      let captureError = null;
       const logLine = (stream, text) => {
+        if (text.startsWith("FIXLAB_BROWSER_FAILURE|")) {
+          try {
+            const failure = JSON.parse(text.slice("FIXLAB_BROWSER_FAILURE|".length));
+            const kinds = ["assertion-timeout", "browser-launch", "action-timeout", "test-failure"];
+            if (!kinds.includes(failure.kind) ||
+                (failure.file !== null && !/^[\w.-]{1,160}$/u.test(failure.file)) ||
+                (failure.line !== null && (!Number.isSafeInteger(failure.line) || failure.line < 1)) ||
+                (failure.timeoutMs !== null && (!Number.isSafeInteger(failure.timeoutMs) || failure.timeoutMs < 1))) {
+              throw new Error("Invalid browser failure metadata.");
+            }
+            job.browserRun.failure = Object.fromEntries(
+              ["kind", "file", "line", "timeoutMs"].map((key) => [key, failure[key]])
+            );
+            const location = failure.file ? ` at ${failure.file}:${failure.line ?? "?"}` : "";
+            const duration = failure.timeoutMs ? ` (${failure.timeoutMs / 1000}s wait)` : "";
+            logLine("stderr", `Browser error: ${failure.kind}${location}${duration}; inspect the local report for the exact assertion.`);
+          } catch {
+            pushLog(job, {
+              index: job.nextLogIndex, timestamp: new Date().toISOString(),
+              stream: "dashboard", message: "Ignored invalid browser failure metadata."
+            });
+          }
+          return;
+        }
         if (text.startsWith("FIXLAB_BROWSER_RESULT|")) {
           try {
             const counts = JSON.parse(text.slice("FIXLAB_BROWSER_RESULT|".length));
@@ -3732,10 +4044,23 @@ export function createDashboardServer({
           }
           return;
         }
-        const message = sanitize(text)
+        const redacted = sanitize(text)
           .replace(/\u001b\[[0-9;]*[A-Za-z]/gu, "")
-          .replace(/https?:\/\/\S+/giu, "[omitted URL]")
-          .slice(0, 1000);
+          .replace(/https?:\/\/\S+/giu, "[omitted URL]");
+        if (!captureError) {
+          try {
+            commandOutput.write(stream, `${redacted}\n`);
+          } catch (error) {
+            captureError = error;
+            pushLog(job, {
+              index: job.nextLogIndex,
+              timestamp: new Date().toISOString(),
+              stream: "dashboard",
+              message: `Compact command evidence capture failed: ${safeSummary(error.message)}`
+            });
+          }
+        }
+        const message = redacted.slice(0, 1000);
         if (!message.trim()) {
           return;
         }
@@ -3776,6 +4101,38 @@ export function createDashboardServer({
           }
         }
         job.browserRun.message = safeSummary(result.message);
+        if (job.browserRun.status === "passed") {
+          delete job.browserRun.failure;
+        }
+        try {
+          if (captureError) {
+            throw captureError;
+          }
+          const compact = commandOutput.finish({
+            status: job.browserRun.status === "passed" ? 0 : (result.code || 1),
+            outcome: job.browserRun.status,
+            testCounts: job.browserRun.testCounts
+          });
+          job.browserRun.commandSummary = compact.summary;
+          job.browserRun.context = compact.context;
+          job.browserRun.evidenceId = compact.evidenceId;
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message: compact.summary
+          });
+        } catch (error) {
+          const message = `Could not retain compact command evidence: ${safeSummary(error.message)}`;
+          job.browserRun.status = "failed";
+          job.browserRun.message = message;
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message
+          });
+        }
         persistDashboardState();
       };
       const heartbeat = setInterval(() => {

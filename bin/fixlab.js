@@ -524,6 +524,53 @@ function detectBrowserAuthenticationStatusPaths(frontendDirectory) {
   return [...paths];
 }
 
+function detectAuthenticatedTestConvention(frontendDirectory) {
+  const convention = {
+    filePattern: "",
+    project: "",
+    fixtureImport: "",
+    readinessHelper: ""
+  };
+  for (const candidate of [
+    "playwright.config.ts",
+    "playwright.config.js",
+    "playwright.config.mjs"
+  ]) {
+    const path = join(frontendDirectory, candidate);
+    if (!existsSync(path) || statSync(path).size > 256 * 1024) {
+      continue;
+    }
+    const source = readFileSync(path, "utf8");
+    const project = source.match(
+      /name\s*:\s*["']([^"']*auth[^"']*)["']/iu
+    );
+    if (project) {
+      convention.project = project[1];
+    }
+    if (/\\\.auth\\\.spec\\\.[jt]s/u.test(source)) {
+      convention.filePattern = "*.auth.spec.ts";
+    }
+  }
+  for (const candidate of [
+    join("e2e", "fixtures.ts"),
+    join("e2e", "fixtures.js")
+  ]) {
+    const path = join(frontendDirectory, candidate);
+    if (!existsSync(path) || statSync(path).size > 256 * 1024) {
+      continue;
+    }
+    const source = readFileSync(path, "utf8");
+    convention.fixtureImport = "./fixtures";
+    const helper = source.match(
+      /\b(waitFor[A-Z][A-Za-z0-9]*(?:App|Ready|Authentication)[A-Za-z0-9]*)\b/u
+    );
+    if (helper) {
+      convention.readinessHelper = helper[1];
+    }
+  }
+  return Object.values(convention).some(Boolean) ? convention : null;
+}
+
 function detectBrowserHealthUrl(frontendDirectory, port) {
   for (const candidate of [
     "playwright.config.ts",
@@ -906,6 +953,8 @@ function createDetectedProfile(repository) {
         : packageManager === "yarn"
           ? "yarn playwright test"
           : "npx playwright test");
+    template.browserAutomation.authenticatedTest =
+      detectAuthenticatedTestConvention(frontend.directory);
     if (authenticationScript) {
       const authentication = template.browserAutomation.authentication;
       authentication.command = packageScript(
@@ -1040,6 +1089,16 @@ function init(repository) {
       if (profile?.browserAutomation?.testSynthesis === undefined) {
         console.log(
           "Profile upgrade required: add browserAutomation.testSynthesis with an approved data source, mutation mode, and scenario evidence requirement."
+        );
+      }
+      if (profile?.validation?.preflightRecovery === undefined) {
+        console.log(
+          "Profile upgrade available: add validation.preflightRecovery to bound retries and restrict cleanup to FixLab-owned processes."
+        );
+      }
+      if (profile?.browserAutomation?.authenticatedTest === undefined) {
+        console.log(
+          "Profile upgrade available: add browserAutomation.authenticatedTest when authenticated tests require a repository-specific filename, project, fixture, or readiness helper."
         );
       }
       if (Array.isArray(profile?.environments)) {

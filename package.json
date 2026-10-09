@@ -26,6 +26,7 @@
     "dashboard",
     "docs",
     "examples",
+    "hooks.json",
     "LICENSE",
     "mcp",
     "plugin.json",

@@ -251,7 +251,7 @@ function quoteWindowsCommandArgument(value, commandPath = false) {
   return `"${text}"`;
 }
 
-function resolveWindowsNpmCommand(command, args) {
+export function resolveWindowsNpmCommand(command, args) {
   if (
     process.platform !== "win32" ||
     basename(command).toLowerCase().replace(/\.cmd$/u, "") !== "npm"
@@ -453,6 +453,9 @@ function createCollector(path) {
   let durationMs = null;
 
   const appendSanitized = (value) => {
+    if (!path) {
+      return;
+    }
     if (capturedBytes >= MAX_CAPTURE_BYTES_PER_STREAM) {
       truncated = true;
       return;
@@ -474,7 +477,7 @@ function createCollector(path) {
   };
 
   const inspectLine = (rawLine) => {
-    const line = sanitize(rawLine).trim();
+    const line = sanitize(rawLine).trim().slice(0, 1000);
     lineCount += 1;
     if (!line) {
       return;
@@ -696,7 +699,7 @@ function summarizeDiagnostics(result, evidenceRoot) {
 
 function formatSummary(result, reused = false) {
   const lines = [
-    `${reused ? "REUSED" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${result.displayCommand} (${(result.durationMs / 1000).toFixed(1)}s)`,
+    `${reused ? "REUSED" : result.status === null ? "OUTPUT" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${result.displayCommand} (${(result.durationMs / 1000).toFixed(1)}s)`,
     `Tool: ${sanitize(result.tool ?? "command")}`
   ];
   const tests = result.stdout.tests ?? result.stderr.tests;
@@ -748,10 +751,17 @@ function formatSummary(result, reused = false) {
       `Evidence capture reached the ${MAX_CAPTURE_BYTES_PER_STREAM / 1024 / 1024} MiB per-stream safety limit.`
     );
   }
-  lines.push(`Evidence: ${result.evidenceDirectory}`);
-  lines.push(
-    `Inspect: fixlab evidence show ${basename(result.evidenceDirectory)} --stream stderr --lines ${DEFAULT_EVIDENCE_SHOW_LINES}`
-  );
+  if (result.outcome) {
+    lines.push(`Outcome: ${result.outcome}`);
+  }
+  if (result.evidenceDirectory) {
+    lines.push(`Evidence: ${result.evidenceDirectory}`);
+    lines.push(
+      `Inspect: fixlab evidence show ${basename(result.evidenceDirectory)} --stream stderr --lines ${DEFAULT_EVIDENCE_SHOW_LINES}`
+    );
+  } else {
+    lines.push("Evidence: unavailable without a Git-private evidence directory.");
+  }
   const rawBytes = result.stdout.totalBytes + result.stderr.totalBytes;
   const rawLines = result.stdout.lineCount + result.stderr.lineCount;
   const structuredLines = lines.length + 1;
@@ -790,6 +800,86 @@ function formatSummary(result, reused = false) {
   return { text, metrics };
 }
 
+export function createStructuredOutput({
+  repository,
+  command,
+  cwd,
+  stage,
+  tool,
+  sessionId,
+  now = Date.now
+}) {
+  const evidenceRoot = repository ? resolveEvidenceRoot(repository) : null;
+  const startedAt = now();
+  let evidenceDirectory = "";
+  if (evidenceRoot) {
+    mkdirSync(evidenceRoot, { recursive: true, mode: 0o700 });
+    pruneEvidence(evidenceRoot, startedAt);
+    const timestamp = new Date(startedAt)
+      .toISOString()
+      .replace(/[-:]/gu, "")
+      .replace(/\.\d{3}Z$/u, "");
+    evidenceDirectory = join(evidenceRoot, `${timestamp}-${randomUUID()}`);
+    mkdirSync(evidenceDirectory, { recursive: true, mode: 0o700 });
+  }
+  const collectors = Object.fromEntries(
+    ["stdout", "stderr"].map((stream) => [
+      stream,
+      createCollector(evidenceDirectory ? join(evidenceDirectory, `${stream}.log`) : "")
+    ])
+  );
+  let completed = false;
+  return {
+    write(stream, text) {
+      if (completed || !collectors[stream]) {
+        throw new Error("Cannot capture output for a completed command or invalid stream.");
+      }
+      collectors[stream].write(text);
+    },
+    finish({ status, outcome, testCounts }) {
+      if (completed) {
+        throw new Error("Command output has already been summarized.");
+      }
+      completed = true;
+      const finishedAt = now();
+      const result = {
+        version: 3,
+        status,
+        outcome,
+        stage,
+        ...(sessionId ? { sessionId } : {}),
+        displayCommand: sanitize(command),
+        tool,
+        cwd,
+        startedAt: new Date(startedAt).toISOString(),
+        finishedAt: new Date(finishedAt).toISOString(),
+        durationMs: Math.max(0, finishedAt - startedAt),
+        evidenceDirectory,
+        stdout: collectors.stdout.finish(),
+        stderr: collectors.stderr.finish()
+      };
+      if (testCounts) {
+        result.stdout.tests = { ...testCounts, cancelled: 0 };
+      }
+      if (evidenceRoot) {
+        result.diagnostics = summarizeDiagnostics(result, evidenceRoot);
+      }
+      const summary = formatSummary(result);
+      result.context = summary.metrics;
+      if (evidenceDirectory) {
+        writeFileSync(join(evidenceDirectory, "result.json"), `${JSON.stringify(result, null, 2)}\n`, {
+          mode: 0o600
+        });
+      }
+      return {
+        summary: summary.text,
+        context: summary.metrics,
+        evidenceId: evidenceDirectory ? basename(evidenceDirectory) : null
+      };
+    }
+  };
+}
+
 function readReusableResult(cachePath) {
   if (!existsSync(cachePath)) {
     return null;
@@ -814,13 +904,13 @@ export async function executeStructuredCommand(options, io = {}) {
   mkdirSync(evidenceRoot, { recursive: true, mode: 0o700 });
   pruneEvidence(evidenceRoot, now());
 
-  const state = repositoryState(options.repository);
-  const fingerprint = cacheFingerprint(options, state);
-  const cacheDirectory = join(evidenceRoot, "cache");
-  const cachePath = join(cacheDirectory, `${fingerprint}.json`);
   const reusable =
     options.reuse &&
     reusableValidationCommand(options.command, options.commandArgs);
+  const state = reusable ? repositoryState(options.repository) : null;
+  const fingerprint = reusable ? cacheFingerprint(options, state) : null;
+  const cacheDirectory = join(evidenceRoot, "cache");
+  const cachePath = join(cacheDirectory, `${fingerprint}.json`);
   if (reusable) {
     const cached = readReusableResult(cachePath);
     if (cached) {

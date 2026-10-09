@@ -125,6 +125,13 @@ const jobInputAction = document.querySelector("#job-input-action");
 const jobInputDetails = document.querySelector("#job-input-details");
 const jobInputSubmit = document.querySelector("#job-input-submit");
 const jobInputMessage = document.querySelector("#job-input-message");
+const executionStatus = document.querySelector("#execution-status");
+const runtimeApprovalPanel = document.querySelector("#runtime-approval-panel");
+const runtimeApprovalCommand = document.querySelector("#runtime-approval-command");
+const runtimeApprovalCopy = document.querySelector("#runtime-approval-copy");
+const runtimeApprovalCompleted = document.querySelector("#runtime-approval-completed");
+const runtimeApprovalResume = document.querySelector("#runtime-approval-resume");
+let runtimeApprovalJobId = null;
 const jobInputActionLabel = document.querySelector(
   "label[for='job-input-action']"
 );
@@ -167,7 +174,7 @@ const dismissFailedJobButton = document.createElement("button");
 dismissFailedJobButton.id = "dismiss-failed-job";
 dismissFailedJobButton.type = "button";
 dismissFailedJobButton.className = "secondary";
-dismissFailedJobButton.textContent = "Dismiss failed job and continue queue";
+dismissFailedJobButton.textContent = "Close job and continue queue";
 dismissFailedJobButton.hidden = true;
 const cancelQueuedJobButton = document.createElement("button");
 cancelQueuedJobButton.id = "cancel-queued-job";
@@ -477,6 +484,8 @@ function renderJob(job, currentActiveJob = job) {
   const isActive = Boolean(job?.id && job.id === currentActiveJob?.id);
   const browserRun = job?.browserRun;
   const browserRunning = browserRun?.status === "running";
+  executionStatus.textContent = job?.execution?.message ?? "";
+  const failure = browserRun?.failure;
   backgroundPlaywrightPanel.hidden = !job;
   backgroundPlaywrightStatus.textContent = browserRun
     ? `${browserRun.status} · ${browserRun.phase} · ${formatDuration(
@@ -486,9 +495,16 @@ function renderJob(job, currentActiveJob = job) {
     : "Not started";
   backgroundPlaywrightStatus.className = `badge ${browserRun?.status ?? ""}`;
   backgroundPlaywrightProgress.textContent = browserRun
-    ? `${browserRun.message} ${browserRun.currentStep || ""}`
+    ? `${browserRun.message} ${failure
+        ? `Failure: ${failure.kind}${failure.file ? ` at ${failure.file}:${failure.line ?? "?"}` : ""}${failure.timeoutMs ? ` (${failure.timeoutMs / 1000}s wait)` : ""}. `
+        : ""}${browserRunning ? (browserRun.currentStep || "") : ""}${browserRun.context
+        ? ` Output summary: ~${browserRun.context.estimatedRawTokens} → ~${browserRun.context.estimatedStructuredTokens} estimated tokens (${browserRun.context.reductionPercent}% reduction).`
+        : ""}`
     : "Select the current idle job to review its approved test command.";
   backgroundPlaywrightStart.disabled = !isActive || running || browserRunning || job?.status === "queued";
+  backgroundPlaywrightStart.textContent = browserRun?.status === "failed"
+    ? "Review and retry failed Playwright"
+    : "Review and run Playwright";
   backgroundPlaywrightStop.disabled = !isActive || !browserRunning;
   const activeNeedsQueue =
     currentActiveJob &&
@@ -653,11 +669,21 @@ function renderJob(job, currentActiveJob = job) {
   formError.textContent = job?.error ?? "";
 
   const canResume = isActive && Boolean(job?.canResume);
+  const needsRuntimeApproval = canResume && Boolean(job?.runtimeApproval);
+  runtimeApprovalPanel.hidden = !needsRuntimeApproval;
+  runtimeApprovalCommand.value = job?.runtimeApproval?.command ?? "";
+  if (runtimeApprovalJobId !== (needsRuntimeApproval ? job.id : null)) {
+    runtimeApprovalCompleted.checked = false;
+    runtimeApprovalJobId = needsRuntimeApproval ? job.id : null;
+  }
+  runtimeApprovalResume.disabled = !needsRuntimeApproval || !runtimeApprovalCompleted.checked;
+  runtimeApprovalCopy.disabled = !runtimeApprovalCommand.value;
   const canComment = isActive && Boolean(job?.canComment);
   const canRetryLiveTest =
     canResume &&
     job?.status === "blocked" &&
     job?.stages?.["live-test"]?.status === "blocked" &&
+    !needsRuntimeApproval &&
     !job?.manualLocalhostPending;
   const canConfirmManualLocalhost =
     canResume &&
@@ -668,18 +694,18 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
   const canDismissFailedJob =
-    canResume && job?.status === "failed";
+    canResume && ["blocked", "failed", "passed"].includes(job?.status);
   const canCancelQueuedJob =
     !isActive && job?.status === "queued";
   jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob);
   jobInputSubmit.disabled = !(canResume || canComment);
-  jobInputSubmit.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
-  jobInputAction.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
+  jobInputSubmit.hidden = canCancelQueuedJob || canConfirmManualLocalhost || needsRuntimeApproval;
+  jobInputAction.hidden = canCancelQueuedJob || canConfirmManualLocalhost || needsRuntimeApproval;
   jobInputActionLabel.hidden =
-    canCancelQueuedJob || canConfirmManualLocalhost;
-  jobInputDetails.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
+    canCancelQueuedJob || canConfirmManualLocalhost || needsRuntimeApproval;
+  jobInputDetails.hidden = canCancelQueuedJob || canConfirmManualLocalhost || needsRuntimeApproval;
   jobInputDetailsLabel.hidden =
-    canCancelQueuedJob || canConfirmManualLocalhost;
+    canCancelQueuedJob || canConfirmManualLocalhost || needsRuntimeApproval;
   openManualLocalhostButton.hidden = !canConfirmManualLocalhost;
   openManualLocalhostButton.disabled = !canConfirmManualLocalhost;
   passManualLocalhostButton.hidden = !canConfirmManualLocalhost;
@@ -699,7 +725,10 @@ function renderJob(job, currentActiveJob = job) {
   jobInputCount.textContent = job
     ? `${job.inputCount} update(s) · ${job.pendingInputCount} pending`
     : "";
-  if (canComment) {
+  if (needsRuntimeApproval) {
+    jobInputTitle.textContent = "CLI approval required";
+    jobInputGuidance.textContent = "The agent has stopped, not frozen. Continue or Retry cannot answer its permission prompt. Approve in the terminal, exit that agent, then explicitly resume below.";
+  } else if (canComment) {
     jobInputTitle.textContent = "Add comment to current job";
     jobInputGuidance.textContent =
       "The comment will be delivered to this same session automatically after its current agent turn finishes.";
@@ -1459,12 +1488,50 @@ jobInputSubmit.addEventListener("click", async () => {
   }
 });
 
+runtimeApprovalCompleted.addEventListener("change", () => {
+  runtimeApprovalResume.disabled = !runtimeApprovalCompleted.checked;
+});
+
+runtimeApprovalCopy.addEventListener("click", async () => {
+  try {
+    await navigator.clipboard.writeText(runtimeApprovalCommand.value);
+    jobInputMessage.textContent = "Approval command copied. Run it in your terminal, approve the exact permission, then exit that terminal agent.";
+  } catch (error) {
+    runtimeApprovalCommand.select();
+    jobInputMessage.textContent = `Copy failed: ${error.message}. Copy the selected command manually.`;
+  }
+});
+
+runtimeApprovalResume.addEventListener("click", async () => {
+  runtimeApprovalResume.disabled = true;
+  try {
+    if (!runtimeApprovalCompleted.checked) {
+      throw new Error("Confirm terminal approval and exit the terminal agent first.");
+    }
+    const body = await fetchJson("/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jobId: runtimeApprovalJobId,
+        action: "continue",
+        runtimeApprovalHandled: true,
+        details: "Continue the existing job after interactive CLI approval. Preserve completed evidence and verify remaining gates."
+      })
+    });
+    jobInputMessage.textContent = "Approval completion recorded; runtime permissions will still be checked.";
+    renderJob(body.job);
+  } catch (error) {
+    formError.textContent = error.message;
+    runtimeApprovalResume.disabled = !runtimeApprovalCompleted.checked;
+  }
+});
+
 dismissFailedJobButton.addEventListener("click", async () => {
   jobInputMessage.textContent = "";
   formError.textContent = "";
   if (
     !window.confirm(
-      "Dismiss this failed job? It will remain failed in dashboard history, its session will not resume, and the next queued job will start."
+      "Close this job? Its outcome and evidence will remain in dashboard history, its session will not resume, and the next queued job will start."
     )
   ) {
     return;
@@ -1475,13 +1542,13 @@ dismissFailedJobButton.addEventListener("click", async () => {
       method: "POST"
     });
     jobInputMessage.textContent = body.job
-      ? "Failed job dismissed. The next queued job has started."
-      : "Failed job dismissed. The queue is empty.";
-    if (body.dismissedJob) {
-      rememberJob(body.dismissedJob);
+      ? "Job closed. The next queued job has started."
+      : "Job closed. The queue is empty.";
+    if (body.closedJob) {
+      rememberJob(body.closedJob);
     }
     activeJob = body.job;
-    selectedJobId = body.job?.id ?? body.dismissedJob?.id ?? null;
+    selectedJobId = body.job?.id ?? body.closedJob?.id ?? null;
     if (body.job) {
       rememberJob(body.job);
     }

@@ -150,8 +150,12 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
       "const userDataDir = path.join(__dirname, '.edge-profile');"
     );
     writeFileSync(
+      join(frontend, "e2e", "fixtures.ts"),
+      "export async function waitForAuthenticatedApp() {}"
+    );
+    writeFileSync(
       join(frontend, "playwright.config.ts"),
-      "const baseURL = `http://localhost:${PORT}`;"
+      "const baseURL = `http://localhost:${PORT}`; const projects = [{ name: 'chromium-auth', testMatch: /.*\\.auth\\.spec\\.ts/ }];"
     );
     writeFileSync(join(backend, "Application.sln"), "");
     writeFileSync(
@@ -238,6 +242,19 @@ test("init discovers React, Node, Playwright, and ASP.NET settings", () => {
       profile.browserAutomation.authentication.statusPaths,
       ["e2e/.edge-profile"]
     );
+    assert.deepEqual(profile.browserAutomation.authenticatedTest, {
+      filePattern: "*.auth.spec.ts",
+      project: "chromium-auth",
+      fixtureImport: "./fixtures",
+      readinessHelper: "waitForAuthenticatedApp"
+    });
+    assert.deepEqual(profile.validation.preflightRecovery, {
+      enabled: true,
+      maxAttempts: 2,
+      verifyRuntimeVersion: true,
+      requireExactHealthUrl: true,
+      processCleanup: "owned-only"
+    });
     assert.deepEqual(profile.environments, {
       development: {
         frontendCommand: "npm run dev",

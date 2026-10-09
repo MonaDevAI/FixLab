@@ -608,6 +608,69 @@ test("background Playwright rejects changed profiles, unsafe contracts and cross
   }
 });
 
+test("dashboard initial and resumed turns use compact command evidence rather than raw logs", async () => {
+  const repository = createGitRepository();
+  const prompts = [];
+  const executor = (options) => {
+    prompts.push(options.prompt);
+    return blockedBrowserExecutor(options);
+  };
+  const start = () => startDashboard(repository, executor, null, {
+    playwrightExecutor({ onOutput }) {
+      for (let index = 0; index < 2000; index += 1) {
+        onOutput("stdout", `Browser step: locator.click ${index}\n`);
+      }
+      onOutput("stderr", "error: expected browser result; token=sensitive-value\n");
+      onOutput("stdout", 'FIXLAB_BROWSER_RESULT|{"total":2,"passed":1,"failed":1,"skipped":0}\n');
+      return {
+        completion: Promise.resolve({ status: "failed", code: 1, message: "Browser assertion failed." })
+      };
+    }
+  });
+  let { dashboard, url } = await start();
+  try {
+    const job = await backgroundTestJob(url);
+    assert.match(prompts[0], /Route every finite, non-interactive shell command through `fixlab exec`/u);
+    assert.match(prompts[0], /Git queries and mutations/u);
+    assert.match(prompts[0], /Interactive authentication and long-lived applications/u);
+    const { body: { plan } } = await jsonRequest(url, "/api/playwright/run");
+    await jsonRequest(url, "/api/playwright/run", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: job.id, approvalId: plan.approvalId, approved: true })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const result = await jsonRequest(url, "/api/job");
+    assert.equal(result.body.job.browserRun.status, "failed");
+    assert.ok(result.body.job.browserRun.context.reductionPercent > 90);
+    assert.ok(result.body.job.browserRun.evidenceId);
+    assert.match(result.body.job.browserRun.commandSummary, /expected browser result/u);
+    assert.doesNotMatch(result.body.job.browserRun.commandSummary, /sensitive-value|locator\.click/u);
+    const historyPath = join(
+      dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json"
+    );
+    const history = readFileSync(historyPath, "utf8");
+    assert.doesNotMatch(history, /expected browser result|locator\.click|sensitive-value/u);
+    await dashboard.close();
+    ({ dashboard, url } = await start());
+    const resumed = await jsonRequest(url, "/api/job/input", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "continue", details: "Inspect the compact browser result." })
+    });
+    assert.equal(resumed.response.status, 202);
+    const prompt = prompts.at(-1);
+    assert.match(prompt, /Dashboard command-output contract for this turn/u);
+    assert.match(prompt, /Compact background command evidence \(not raw logs\)/u);
+    assert.match(prompt, /Outcome: failed/u);
+    assert.match(prompt, /Tests: 1 passed, 1 failed/u);
+    assert.match(prompt, /expected browser result/u);
+    assert.doesNotMatch(prompt, /sensitive-value|locator\.click/u);
+    assert.ok(prompt.length < 7000);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("background Playwright bounds logs and preserves skipped results across dashboard restarts", async () => {
   const repository = createGitRepository();
   const start = () => startDashboard(repository, blockedBrowserExecutor, null, {
@@ -1316,6 +1379,13 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     );
     assert.match(receivedPrompt, /external with owner upstream-system/);
     assert.match(receivedPrompt, /Do not create an empty pull request/);
+    const closed = await jsonRequest(url, "/api/job/dismiss", {
+      method: "POST"
+    });
+    assert.equal(closed.response.status, 202);
+    assert.equal(closed.body.closedJob.status, "passed");
+    assert.equal(closed.body.job, null);
+    assert.equal(closed.body.history[0].status, "passed");
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -2007,7 +2077,7 @@ test("dashboard cancels waiting jobs without interrupting the active job", async
   }
 });
 
-test("dashboard dismisses a failed job and starts the next queued job", async () => {
+test("dashboard closes a failed job and starts the next queued job", async () => {
   const repository = createRepository();
   let executorCalls = 0;
   const executor = () => {
@@ -2054,6 +2124,7 @@ test("dashboard dismisses a failed job and starts the next queued job", async ()
       method: "POST"
     });
     assert.equal(dismissed.response.status, 202, JSON.stringify(dismissed.body));
+    assert.equal(dismissed.body.closedJob.status, "failed");
     assert.equal(dismissed.body.dismissedJob.status, "failed");
     assert.equal(dismissed.body.job.request, "Start this queued job after dismissal.");
     assert.equal(dismissed.body.job.status, "running");
@@ -2065,7 +2136,7 @@ test("dashboard dismisses a failed job and starts the next queued job", async ()
       method: "POST"
     });
     assert.equal(rejected.response.status, 409);
-    assert.match(rejected.body.error, /still running/);
+    assert.match(rejected.body.error, /still running or shutting down/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -2972,6 +3043,10 @@ test("terminal chat recognizes natural operational commands", () => {
     command: "/cancel-job",
     details: "4"
   });
+  assert.deepEqual(parseNaturalChatCommand("close current job"), {
+    command: "/close",
+    details: ""
+  });
   assert.deepEqual(parseNaturalChatCommand("manual test passed"), {
     command: "/manual-pass",
     details: ""
@@ -3414,6 +3489,8 @@ test("selected non-production data falls back to synthetic only when required", 
   assert.match(prompt, /health URL for dev is `http:\/\/localhost:3000`/);
   assert.match(prompt, /Browser authentication for dev is required/);
   assert.match(prompt, /Before diagnosis or source inspection, preflight the actual execution workspace/);
+  assert.match(prompt, /Preflight recovery is bounded to 2 attempt/);
+  assert.match(prompt, /Never terminate an arbitrary port owner/);
   assert.match(prompt, /private package feed returns 401\/403/);
   assert.match(prompt, /Do not fulfill or intercept business-data reads while the selected backend is available/);
   assert.match(prompt, /returns no safe records capable of exercising/);
@@ -3422,6 +3499,25 @@ test("selected non-production data falls back to synthetic only when required", 
   assert.match(prompt, /FIXLAB_TEST with source synthetic-intercepted and mutation mode intercepted/);
   assert.match(prompt, /A synthetic pass proves the UI behavior only/);
   assert.match(prompt, /do not claim the selected backend or its data was validated/);
+});
+
+test("prompt preserves repository authenticated-test conventions", () => {
+  const prompt = buildJobPrompt({
+    request: "Validate the authenticated journey.",
+    mode: "validate-only",
+    authenticatedTest: {
+      filePattern: "*.auth.spec.ts",
+      project: "chromium-auth",
+      fixtureImport: "./fixtures",
+      readinessHelper: "waitForAuthenticatedApp"
+    }
+  });
+
+  assert.match(prompt, /\*\.auth\.spec\.ts/);
+  assert.match(prompt, /chromium-auth/);
+  assert.match(prompt, /\.\/fixtures/);
+  assert.match(prompt, /waitForAuthenticatedApp/);
+  assert.match(prompt, /Do not substitute plain @playwright\/test or storageState/);
 });
 
 test("environment settings preserve explicit startup and authentication contracts", () => {

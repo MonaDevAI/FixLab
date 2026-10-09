@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "hooks": {
+    "postToolUse": [
+      {
+        "type": "command",
+        "matcher": ".*(?:powershell|bash|shell).*",
+        "powershell": "if ($env:FIXLAB_DASHBOARD_OUTPUT_COMPRESSION -eq '1') { & $env:FIXLAB_NODE_EXECUTABLE $env:FIXLAB_OUTPUT_HOOK }",
+        "bash": "if [ \"$FIXLAB_DASHBOARD_OUTPUT_COMPRESSION\" = \"1\" ]; then \"$FIXLAB_NODE_EXECUTABLE\" \"$FIXLAB_OUTPUT_HOOK\"; fi",
+        "timeoutSec": 30
+      }
+    ]
+  }
+}

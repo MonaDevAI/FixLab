@@ -162,6 +162,7 @@
           <h2>Job</h2>
           <span id="job-status" class="badge">Not started</span>
         </div>
+        <p id="execution-status" class="guidance" role="status" aria-live="polite"></p>
         <div id="test-evidence" class="test-evidence" hidden>
           <div>
             <span class="eyebrow">Test synthesis</span>
@@ -244,6 +245,14 @@
           <span id="job-input-count"></span>
         </div>
         <p id="job-input-guidance" class="guidance"></p>
+        <div id="runtime-approval-panel" hidden>
+          <p class="guidance">Approve the permission in an interactive terminal using this existing session. Terminal activity is not streamed to this dashboard. Exit the terminal agent before resuming here; do not run both agents at once.</p>
+          <label for="runtime-approval-command">Interactive approval command</label>
+          <textarea id="runtime-approval-command" rows="3" readonly></textarea>
+          <button id="runtime-approval-copy" type="button" class="secondary">Copy approval command</button>
+          <label><input id="runtime-approval-completed" type="checkbox"> I approved the CLI prompt and exited the terminal agent.</label>
+          <button id="runtime-approval-resume" type="button" disabled>Resume after terminal approval</button>
+        </div>
         <label for="job-input-action">Action</label>
         <select id="job-input-action">
           <option value="comment">Add comment to the current job</option>

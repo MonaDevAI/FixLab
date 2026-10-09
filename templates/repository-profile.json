@@ -35,7 +35,14 @@
     },
     "productionBuildTimeoutMinutes": 15,
     "agentIdleTimeoutMinutes": 20,
-    "blockerPolicy": "continue-on-owned-process-timeout"
+    "blockerPolicy": "continue-on-owned-process-timeout",
+    "preflightRecovery": {
+      "enabled": true,
+      "maxAttempts": 2,
+      "verifyRuntimeVersion": true,
+      "requireExactHealthUrl": true,
+      "processCleanup": "owned-only"
+    }
   },
   "applications": {
     "frontend": {
@@ -68,6 +75,7 @@
       "environment": {},
       "statusPaths": []
     },
+    "authenticatedTest": null,
     "dataSafety": {
       "policy": "Use local mock data or intercept every mutating request; require explicit approval before using non-production records.",
       "productionAllowed": false
