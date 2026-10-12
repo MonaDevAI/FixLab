@@ -1944,6 +1944,58 @@ test("dashboard persists privacy-safe token and duration metrics", async () => {
   rmSync(repository, { recursive: true, force: true });
 });
 
+test("dashboard dismisses a blocked job and continues the queue", async () => {
+  const repository = createGitRepository();
+  let executorCalls = 0;
+  const executor = ({ onOutput }) => {
+    executorCalls += 1;
+    if (executorCalls === 1) {
+      for (const stage of FIXLAB_STAGES.slice(0, -1)) {
+        onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|completed\n`);
+      }
+      onOutput(
+        "stdout",
+        "FIXLAB_STAGE|pr|blocked|Approval is required before creating the pull request.\n"
+      );
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const post = (request) =>
+      jsonRequest(url, "/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request,
+          requestType: "bug-fix",
+          mode: "validate-only"
+        })
+      });
+    await post("This job ends blocked.");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal((await jsonRequest(url, "/api/job")).body.job.status, "blocked");
+
+    const queued = await post("This job waits behind the blocked one.");
+    assert.equal(queued.body.queued, true);
+
+    const dismissed = await jsonRequest(url, "/api/job/dismiss", {
+      method: "POST"
+    });
+    assert.equal(dismissed.response.status, 202, JSON.stringify(dismissed.body));
+    assert.equal(dismissed.body.dismissedJob.status, "blocked");
+    assert.equal(dismissed.body.job.request, "This job waits behind the blocked one.");
+    assert.equal(dismissed.body.job.status, "running");
+    assert.equal(dismissed.body.history[0].status, "blocked");
+    assert.equal(executorCalls, 2);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard restores private job summaries and PR readiness after restart", async () => {
   const repository = createGitRepository();
   const executor = ({ onOutput }) => {

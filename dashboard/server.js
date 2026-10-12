@@ -2783,9 +2783,9 @@ export function createDashboardServer({
         });
         return;
       }
-      if (currentJob.status !== "failed") {
+      if (!["failed", "blocked"].includes(currentJob.status)) {
         sendJson(response, 409, {
-          error: "only a failed FixLab job can be dismissed"
+          error: "only a failed or blocked FixLab job can be dismissed"
         });
         return;
       }
@@ -2795,8 +2795,7 @@ export function createDashboardServer({
         index: dismissedJob.nextLogIndex,
         timestamp: new Date().toISOString(),
         stream: "dashboard",
-        message:
-          "Failed job dismissed by the user; its failed outcome remains in dashboard history."
+        message: `${dismissedJob.status === "blocked" ? "Blocked" : "Failed"} job dismissed by the user; its ${dismissedJob.status} outcome remains in dashboard history.`
       });
       if (dismissedJob.artifactDirectory) {
         removeArtifactDirectory(dismissedJob.artifactDirectory);

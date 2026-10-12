@@ -442,7 +442,11 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
   const canDismissFailedJob =
-    canResume && job?.status === "failed";
+    canResume && ["failed", "blocked"].includes(job?.status);
+  dismissFailedJobButton.textContent =
+    job?.status === "blocked"
+      ? "Dismiss blocked job and continue queue"
+      : "Dismiss failed job and continue queue";
   const canCancelQueuedJob =
     !isActive && job?.status === "queued";
   jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob);
@@ -1223,7 +1227,7 @@ dismissFailedJobButton.addEventListener("click", async () => {
   formError.textContent = "";
   if (
     !window.confirm(
-      "Dismiss this failed job? It will remain failed in dashboard history, its session will not resume, and the next queued job will start."
+      `Dismiss this ${activeJob?.status === "blocked" ? "blocked" : "failed"} job? It will remain ${activeJob?.status === "blocked" ? "blocked" : "failed"} in dashboard history, its session will not resume, and the next queued job will start.`
     )
   ) {
     return;
@@ -1234,8 +1238,8 @@ dismissFailedJobButton.addEventListener("click", async () => {
       method: "POST"
     });
     jobInputMessage.textContent = body.job
-      ? "Failed job dismissed. The next queued job has started."
-      : "Failed job dismissed. The queue is empty.";
+      ? "Job dismissed. The next queued job has started."
+      : "Job dismissed. The queue is empty.";
     if (body.dismissedJob) {
       rememberJob(body.dismissedJob);
     }
