@@ -103,6 +103,27 @@ FixLab replaces `{userId}` with the configured value and instructs the agent to
 create branches beneath the resolved prefix. It never substitutes `copilot`,
 `fixlab`, or another runtime name for the repository user's ID.
 
+## Optional private adapters
+
+Some organizations keep data-handling or policy helpers (for example, validation
+of security work-item data) in a private package. Public FixLab does not name,
+bundle, or install such packages. The owning team makes them discoverable:
+
+- Publish a short onboarding page in the private repository or internal wiki
+  that states the package name, the feed that hosts it, how to request access,
+  and who approves its use.
+- Authenticate to that feed with the owner's supported credential provider
+  before running `fixlab prepare`. FixLab never creates, copies, or persists
+  feed credentials.
+- Link the onboarding page from the repository's own `README` or contributor
+  guide so a first-time developer finds it without asking.
+- Keep the adapter's name, feed URL, and access instructions out of public
+  FixLab files and out of the profile's shared defaults; they belong in the
+  private repository.
+
+An adapter must not bypass approval gates. Publication approval, unsafe-data
+approval, and the no-automatic-closure rules for findings still apply.
+
 ## Profile review checklist
 
 - Commands run non-interactively.
