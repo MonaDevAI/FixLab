@@ -1498,7 +1498,14 @@ function findDirectExecutable(command) {
 }
 
 function createExecutor({ command, packageRoot, buildInvocation }) {
-  return ({ repository, prompt, sessionId, resume, onOutput }) => {
+  return ({
+    repository,
+    artifactDirectories = [],
+    prompt,
+    sessionId,
+    resume,
+    onOutput
+  }) => {
     const executable = findDirectExecutable(command);
     if (!executable) {
       throw new Error(
@@ -1510,7 +1517,10 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
       prompt,
       sessionId,
       resume,
-      additionalDirs: linkedDependencyDirectories(repository)
+      additionalDirs: [
+        ...linkedDependencyDirectories(repository),
+        ...artifactDirectories
+      ]
     });
     const child = spawn(executable, invocation.args, {
       cwd: repository,
@@ -2512,6 +2522,7 @@ export function createDashboardServer({
     job.lastActivityAt = new Date().toISOString();
     handle = executor({
       repository: resolvedRepository,
+      artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
       prompt,
       sessionId: job.id,
       resume,
