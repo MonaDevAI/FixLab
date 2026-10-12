@@ -240,5 +240,21 @@ dashboard or an autonomous job:
 fixlab doctor --runtime agency
 ```
 
+The package-manager probe waits 30 seconds by default. On a slow machine or a
+large repository, raise the limit (1,000 to 600,000 ms) for the current shell:
+
+```powershell
+$env:FIXLAB_DOCTOR_TIMEOUT_MS = "90000"
+fixlab doctor
+```
+
+## A job is rejected with "Preflight failed"
+
+Before queuing a job, the dashboard checks that the tools named in the
+repository profile's restore and startup commands (`npm`, `pnpm`, `yarn`,
+`dotnet`) are on `PATH`. The check is offline. It does not contact the
+application, DEV, or any maintenance window. Install the missing tool, open a
+new shell, and restart the dashboard from that shell.
+
 Do not bypass missing authentication, production exclusions, private-feed
 access, browser launch, or repository-profile safety requirements.

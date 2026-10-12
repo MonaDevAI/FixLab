@@ -34,6 +34,7 @@ import {
   removeArtifactDirectory,
   storeScreenshots
 } from "./intake.js";
+import { formatPreflightFailure } from "./preflight.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -2351,6 +2352,7 @@ export function createDashboardServer({
   executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader(),
   browserOpener = openLocalUrl,
+  preflight = null,
   executionIdleTimeoutMs,
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
@@ -3211,6 +3213,16 @@ export function createDashboardServer({
         return;
       }
       const repositoryProfile = loadRepositoryProfile(resolvedRepository);
+      const preflightIssues = preflight
+        ? preflight({ repository: resolvedRepository, profile: repositoryProfile })
+        : [];
+      if (preflightIssues.length > 0) {
+        sendJson(response, 400, {
+          error: formatPreflightFailure(preflightIssues),
+          preflight: preflightIssues
+        });
+        return;
+      }
       const allowedEnvironments =
         configuredValidationEnvironments(repositoryProfile);
       let targetEnvironment;
