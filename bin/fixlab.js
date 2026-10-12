@@ -21,6 +21,7 @@ import {
   DEFAULT_DASHBOARD_PORT,
   FIXLAB_RUNTIMES,
   inspectRepository,
+  linkedDependencyDirectories,
   validateTargetEnvironment,
   validateLiveTestProfile,
   validatePort
@@ -942,12 +943,14 @@ function launch(repository, request, runtime, targetEnvironment = "") {
       ? buildCopilotInvocation({
           packageRoot,
           prompt,
-          sessionId: randomUUID()
+          sessionId: randomUUID(),
+          additionalDirs: linkedDependencyDirectories(repository)
         })
       : buildAgencyInvocation({
           packageRoot,
           prompt,
-          sessionId: randomUUID()
+          sessionId: randomUUID(),
+          additionalDirs: linkedDependencyDirectories(repository)
         })
     : {
         args: [

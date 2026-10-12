@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -18,6 +19,7 @@ import {
   extname,
   isAbsolute,
   join,
+  parse,
   relative,
   resolve,
   sep
@@ -1341,11 +1343,95 @@ function writeCacheSummary(context, job) {
   }
 }
 
+// Linked dependency folders (for example a node_modules junction) resolve outside
+// the repository, and non-interactive agents cannot answer the path prompt they raise.
+// Only targets inside a profile-declared trustedDependencyRoots entry are granted, so a
+// repository-controlled symlink alone never widens the agent's file access.
+export function linkedDependencyDirectories(repository) {
+  let root;
+  let profile;
+  try {
+    root = realpathSync(repository);
+    profile = loadRepositoryProfile(root);
+  } catch {
+    return [];
+  }
+
+  const trustedRoots = (
+    Array.isArray(profile?.trustedDependencyRoots)
+      ? profile.trustedDependencyRoots
+      : []
+  )
+    .filter((value) => typeof value === "string" && isAbsolute(value))
+    .flatMap((value) => {
+      try {
+        const resolved = realpathSync(value);
+        return resolved === parse(resolved).root ? [] : [resolved];
+      } catch {
+        return [];
+      }
+    });
+  if (trustedRoots.length === 0) {
+    return [];
+  }
+
+  const isInside = (parent, child) => {
+    const relation = relative(parent, child);
+    return (
+      relation === "" ||
+      (!relation.startsWith("..") && !isAbsolute(relation))
+    );
+  };
+  const workingDirectories = new Set([root]);
+  for (const configured of [
+    profile.browserAutomation?.workingDirectory,
+    ...Object.values(profile.applications ?? {}).map(
+      (application) => application?.workingDirectory
+    )
+  ]) {
+    if (typeof configured !== "string") {
+      continue;
+    }
+    try {
+      const directory = realpathSync(resolve(root, configured));
+      if (isInside(root, directory)) {
+        workingDirectories.add(directory);
+      }
+    } catch {
+      // A missing working directory has no dependency link to grant.
+    }
+  }
+
+  const found = new Set();
+  for (const directory of workingDirectories) {
+    const candidate = join(directory, "node_modules");
+    try {
+      if (!lstatSync(candidate).isSymbolicLink()) {
+        continue;
+      }
+      const target = realpathSync(candidate);
+      if (
+        !isInside(root, target) &&
+        trustedRoots.some((trusted) => isInside(trusted, target))
+      ) {
+        found.add(target);
+      }
+    } catch {
+      // Missing or unreadable dependency folders need no extra access.
+    }
+  }
+  return [...found];
+}
+
+const additionalDirectoryArguments = (additionalDirs) =>
+  additionalDirs.flatMap((directory) => ["--add-dir", directory]);
+
 export function buildAgencyInvocation({
   packageRoot,
   prompt,
   sessionId,
-  resume = false
+  resume = false,
+  additionalDirs = []
 }) {
   if (!sessionId) {
     throw new Error("Agency invocation requires a session ID");
@@ -1358,6 +1444,7 @@ export function buildAgencyInvocation({
       "--agent",
       "fixlab:fixlab",
       "--allow-all-tools",
+      ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--stream",
       "on",
@@ -1371,7 +1458,8 @@ export function buildCopilotInvocation({
   packageRoot,
   prompt,
   sessionId,
-  resume = false
+  resume = false,
+  additionalDirs = []
 }) {
   if (!sessionId) {
     throw new Error("Copilot invocation requires a session ID");
@@ -1383,6 +1471,7 @@ export function buildCopilotInvocation({
       "--agent",
       "fixlab:fixlab",
       "--allow-all-tools",
+      ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--autopilot",
       "--stream",
@@ -1420,7 +1509,8 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
       packageRoot,
       prompt,
       sessionId,
-      resume
+      resume,
+      additionalDirs: linkedDependencyDirectories(repository)
     });
     const child = spawn(executable, invocation.args, {
       cwd: repository,
@@ -2741,9 +2831,9 @@ export function createDashboardServer({
         });
         return;
       }
-      if (currentJob.status !== "failed") {
+      if (!["failed", "blocked"].includes(currentJob.status)) {
         sendJson(response, 409, {
-          error: "only a failed FixLab job can be dismissed"
+          error: "only a failed or blocked FixLab job can be dismissed"
         });
         return;
       }
@@ -2753,8 +2843,7 @@ export function createDashboardServer({
         index: dismissedJob.nextLogIndex,
         timestamp: new Date().toISOString(),
         stream: "dashboard",
-        message:
-          "Failed job dismissed by the user; its failed outcome remains in dashboard history."
+        message: `${dismissedJob.status === "blocked" ? "Blocked" : "Failed"} job dismissed by the user; its ${dismissedJob.status} outcome remains in dashboard history.`
       });
       if (dismissedJob.artifactDirectory) {
         removeArtifactDirectory(dismissedJob.artifactDirectory);

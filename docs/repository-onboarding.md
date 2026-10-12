@@ -56,6 +56,12 @@ The profile must also declare:
 - `browserAutomation.dataSafety.policy`, describing mock, read-only, or intercepted-mutation behavior.
 - `browserAutomation.dataSafety.productionAllowed: false`.
 
+Optionally, declare `trustedDependencyRoots`, a list of absolute directories, when a
+working directory's `node_modules` is a link to a shared install outside the
+repository. Non-interactive agents cannot answer path-permission prompts, so FixLab
+passes `--add-dir` only for `node_modules` links under these roots, in the profile's
+working directories. Without this field, no external path is granted. Filesystem roots
+are ignored.
 Synthesized scenario source is transient by default. The agent must remove
 generated test files and validation-only configuration changes before the
 product pull request. A repository can require a permanent generated browser
