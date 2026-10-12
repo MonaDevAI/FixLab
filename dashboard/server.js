@@ -19,6 +19,7 @@ import {
   extname,
   isAbsolute,
   join,
+  parse,
   relative,
   resolve,
   sep
@@ -1344,33 +1345,80 @@ function writeCacheSummary(context, job) {
 
 // Linked dependency folders (for example a node_modules junction) resolve outside
 // the repository, and non-interactive agents cannot answer the path prompt they raise.
+// Only targets inside a profile-declared trustedDependencyRoots entry are granted, so a
+// repository-controlled symlink alone never widens the agent's file access.
 export function linkedDependencyDirectories(repository) {
-  const root = realpathSync(repository);
+  let root;
+  let profile;
+  try {
+    root = realpathSync(repository);
+    profile = loadRepositoryProfile(root);
+  } catch {
+    return [];
+  }
+
+  const trustedRoots = (
+    Array.isArray(profile?.trustedDependencyRoots)
+      ? profile.trustedDependencyRoots
+      : []
+  )
+    .filter((value) => typeof value === "string" && isAbsolute(value))
+    .flatMap((value) => {
+      try {
+        const resolved = realpathSync(value);
+        return resolved === parse(resolved).root ? [] : [resolved];
+      } catch {
+        return [];
+      }
+    });
+  if (trustedRoots.length === 0) {
+    return [];
+  }
+
+  const isInside = (parent, child) => {
+    const relation = relative(parent, child);
+    return (
+      relation === "" ||
+      (!relation.startsWith("..") && !isAbsolute(relation))
+    );
+  };
+  const workingDirectories = new Set([root]);
+  for (const configured of [
+    profile.browserAutomation?.workingDirectory,
+    ...Object.values(profile.applications ?? {}).map(
+      (application) => application?.workingDirectory
+    )
+  ]) {
+    if (typeof configured !== "string") {
+      continue;
+    }
+    try {
+      const directory = realpathSync(resolve(root, configured));
+      if (isInside(root, directory)) {
+        workingDirectories.add(directory);
+      }
+    } catch {
+      // A missing working directory has no dependency link to grant.
+    }
+  }
+
   const found = new Set();
-  const inspect = (directory) => {
+  for (const directory of workingDirectories) {
     const candidate = join(directory, "node_modules");
     try {
       if (!lstatSync(candidate).isSymbolicLink()) {
-        return;
+        continue;
       }
       const target = realpathSync(candidate);
-      const relation = relative(root, target);
-      if (relation.startsWith("..") || isAbsolute(relation)) {
+      if (
+        !isInside(root, target) &&
+        trustedRoots.some((trusted) => isInside(trusted, target))
+      ) {
         found.add(target);
       }
     } catch {
       // Missing or unreadable dependency folders need no extra access.
     }
-  };
-  inspect(root);
-  try {
-    for (const entry of readdirSync(root, { withFileTypes: true })) {
-      if (entry.isDirectory() && !entry.name.startsWith(".")) {
-        inspect(join(root, entry.name));
-      }
-    }
-  } catch {
-    // Directory listing is best effort.
   }
   return [...found];
 }

@@ -13,7 +13,7 @@ import {
 } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import test from "node:test";
 import {
@@ -42,15 +42,44 @@ const packageRoot = new URL("..", import.meta.url).pathname.replace(
   "$1"
 );
 
-test("non-interactive executors are granted linked node_modules directories", () => {
+test("linked node_modules directories are granted only inside trusted dependency roots", () => {
   const base = mkdtempSync(join(tmpdir(), "fixlab-linked-"));
   try {
     const repository = join(base, "repo");
-    const external = join(base, "external", "node_modules");
-    mkdirSync(join(repository, "app"), { recursive: true });
+    const trusted = join(base, "trusted");
+    const external = join(trusted, "web", "node_modules");
+    const untrusted = join(base, "untrusted", "node_modules");
+    mkdirSync(join(repository, "apps", "web"), { recursive: true });
+    mkdirSync(join(repository, "tools"), { recursive: true });
     mkdirSync(external, { recursive: true });
-    symlinkSync(external, join(repository, "app", "node_modules"), "junction");
+    mkdirSync(untrusted, { recursive: true });
+    symlinkSync(
+      external,
+      join(repository, "apps", "web", "node_modules"),
+      "junction"
+    );
+    symlinkSync(untrusted, join(repository, "tools", "node_modules"), "junction");
 
+    const writeProfile = (trustedDependencyRoots) => {
+      const directory = join(repository, ".github", "fixlab");
+      mkdirSync(directory, { recursive: true });
+      const profile = validProfile({ trustedDependencyRoots });
+      profile.browserAutomation.workingDirectory = "apps/web";
+      profile.applications.frontend.workingDirectory = "apps/web";
+      profile.applications.tools = { workingDirectory: "tools" };
+      writeFileSync(
+        join(directory, "repository-profile.json"),
+        JSON.stringify(profile)
+      );
+    };
+
+    writeProfile(undefined);
+    assert.deepEqual(linkedDependencyDirectories(repository), []);
+
+    writeProfile([parse(base).root]);
+    assert.deepEqual(linkedDependencyDirectories(repository), []);
+
+    writeProfile([trusted]);
     const directories = linkedDependencyDirectories(repository);
     assert.deepEqual(directories, [realpathSync(external)]);
 
