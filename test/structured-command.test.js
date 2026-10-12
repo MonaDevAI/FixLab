@@ -318,7 +318,11 @@ test("structured command arguments enforce repository containment", () => {
     );
     assert.throws(
       () => parseStructuredCommandArguments([repository, process.execPath]),
-      /usage: fixlab exec/
+      /usage: fixlab exec[\s\S]*quoted/u
+    );
+    assert.throws(
+      () => parseStructuredCommandArguments([repository, process.execPath]),
+      /do not wrap the command in cmd \/c/u
     );
     assert.throws(
       () =>

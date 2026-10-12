@@ -75,7 +75,10 @@ only for information that cannot be established safely from the repository.
    or create a pull request unless the developer explicitly requests it.
 
 Run verbose repository-owned tests, builds, linters, type checks, and package
-validation through `fixlab exec --stage <stage> -- <command> [args...]`. Keep
+validation through `fixlab exec --stage <stage> -- <command> [args...]`. In
+Windows PowerShell write the separator quoted (`'--'`) because an unquoted `--`
+is dropped, and never wrap `fixlab exec` in `cmd /c`; that wrapper is denied in
+non-interactive sessions. Keep
 the compact result in context and inspect its private evidence only when an
 exact diagnostic is needed. Use `--reuse` only for deterministic local
 validation with identical command and repository state. Never reuse startup,
