@@ -244,6 +244,60 @@ test("successful deterministic validation is reused only for identical repositor
   }
 });
 
+test("structured command fingerprints repositories containing a nested Git repository", async () => {
+  const repository = createRepository();
+  const nested = join(repository, ".nested-clone");
+  mkdirSync(nested);
+  git(nested, ["init", "--quiet"]);
+  writeFileSync(join(nested, "file.txt"), "nested\n");
+  git(nested, ["add", "file.txt"]);
+  git(nested, [
+    "-c",
+    "user.name=FixLab Test",
+    "-c",
+    "user.email=fixlab@example.test",
+    "commit",
+    "--quiet",
+    "-m",
+    "nested"
+  ]);
+  const spawn = () => {
+    const child = new EventEmitter();
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.kill = () => true;
+    queueMicrotask(() => {
+      child.stdout.end("tests 1\npass 1\nfail 0\n");
+      child.stderr.end();
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+  const errors = capture();
+  const output = capture();
+  try {
+    assert.equal(
+      await executeStructuredCommand(
+        {
+          repository,
+          cwd: repository,
+          stage: "validation",
+          reuse: true,
+          timeoutSeconds: 30,
+          command: process.execPath,
+          commandArgs: ["--test", "tracked.test.js"]
+        },
+        { stdout: output.stream, stderr: errors.stream, spawn }
+      ),
+      0,
+      errors.text()
+    );
+    assert.match(output.text(), /^PASS fixlab exec/mu);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("structured command arguments enforce repository containment", () => {
   const repository = createRepository();
   try {

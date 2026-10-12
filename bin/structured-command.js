@@ -95,9 +95,18 @@ function repositoryState(repository) {
     throw new Error("fixlab exec could not enumerate repository files");
   }
   const paths = files.stdout.split("\0").filter(Boolean);
-  const regularPaths = paths.filter((path) => !/[\r\n]/u.test(path));
-  const exceptionalPaths = paths.filter((path) => /[\r\n]/u.test(path));
+  // A nested Git repository is listed as a directory and cannot be hashed.
+  const nestedRepositories = paths.filter((path) => path.endsWith("/"));
+  const filePaths = paths.filter((path) => !path.endsWith("/"));
+  const regularPaths = filePaths.filter((path) => !/[\r\n]/u.test(path));
+  const exceptionalPaths = filePaths.filter((path) => /[\r\n]/u.test(path));
   const contentHashes = [];
+  for (const path of nestedRepositories) {
+    const nestedHead = git(join(repository, path), ["rev-parse", "HEAD"]);
+    contentHashes.push(
+      `${path}\0nested-repository:${nestedHead.status === 0 ? nestedHead.stdout.trim() : "unknown"}`
+    );
+  }
   if (regularPaths.length > 0) {
     const hashes = spawnSync(
       "git",
