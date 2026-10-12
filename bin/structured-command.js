@@ -284,7 +284,8 @@ export function parseStructuredCommandArguments(
   const separator = args.indexOf("--");
   if (separator < 0 || separator === args.length - 1) {
     throw new Error(
-      "usage: fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]"
+      "usage: fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]\n" +
+        "hint: in Windows PowerShell an unquoted -- is dropped; write '--' (quoted) and do not wrap the command in cmd /c."
     );
   }
 

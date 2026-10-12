@@ -12,6 +12,15 @@ repository:
 fixlab exec --cwd .\frontend --stage test -- npm test
 ```
 
+In Windows PowerShell an unquoted `--` is dropped, so `fixlab exec` prints its
+usage text instead of running. Quote the separator (`'--'`). Do not wrap the
+command in `cmd /c`: the wrapper is denied when no interactive user can approve
+it, which blocks the job.
+
+```powershell
+fixlab exec --cwd .\frontend --stage test '--' npm test
+```
+
 The `Evidence:` path is Git-private and contains redacted `stdout.log`,
 `stderr.log`, and `result.json`. A missing stream file means that stream was
 empty. The terminal `Context:` line and `result.json.context` report raw and

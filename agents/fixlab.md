@@ -51,7 +51,10 @@ instructions provide authoritative commands.
 10. Present evidence, skipped gates, and remaining risks.
 
 Run verbose repository-owned tests, builds, linters, type checks, and package
-validation through `fixlab exec --stage <stage> -- <command> [args...]`. Use
+validation through `fixlab exec --stage <stage> -- <command> [args...]`. In
+Windows PowerShell write the separator quoted (`'--'`) because an unquoted `--`
+is dropped, and never wrap `fixlab exec` in `cmd /c`; that wrapper is denied in
+non-interactive sessions. Use
 its compact result in agent context and refer to the private evidence path only
 when an exact diagnostic is needed. Add `--reuse` only for deterministic local
 validation when the command, arguments, Git state, working directory, profile,

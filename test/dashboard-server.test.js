@@ -1171,6 +1171,7 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.match(receivedPrompt, /commit changes and repository-profile or instruction changes as invalidation boundaries/i);
     assert.match(receivedPrompt, /do not feed unbounded raw output back into prompts/i);
     assert.match(receivedPrompt, /fixlab exec --stage <stage>/i);
+    assert.match(receivedPrompt, /never wrap `fixlab exec` in `cmd \/c`/u);
     assert.match(receivedPrompt, /Never reuse startup, health, authentication/i);
     assert.match(receivedPrompt, /FIXLAB_STAGE\|stage\|status\|message/);
     assert.match(receivedPrompt, /FIXLAB_BUG\|id\|outcome\|owner\|summary/);
