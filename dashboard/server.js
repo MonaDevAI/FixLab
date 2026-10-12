@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -1341,11 +1342,48 @@ function writeCacheSummary(context, job) {
   }
 }
 
+// Linked dependency folders (for example a node_modules junction) resolve outside
+// the repository, and non-interactive agents cannot answer the path prompt they raise.
+export function linkedDependencyDirectories(repository) {
+  const root = realpathSync(repository);
+  const found = new Set();
+  const inspect = (directory) => {
+    const candidate = join(directory, "node_modules");
+    try {
+      if (!lstatSync(candidate).isSymbolicLink()) {
+        return;
+      }
+      const target = realpathSync(candidate);
+      const relation = relative(root, target);
+      if (relation.startsWith("..") || isAbsolute(relation)) {
+        found.add(target);
+      }
+    } catch {
+      // Missing or unreadable dependency folders need no extra access.
+    }
+  };
+  inspect(root);
+  try {
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory() && !entry.name.startsWith(".")) {
+        inspect(join(root, entry.name));
+      }
+    }
+  } catch {
+    // Directory listing is best effort.
+  }
+  return [...found];
+}
+
+const additionalDirectoryArguments = (additionalDirs) =>
+  additionalDirs.flatMap((directory) => ["--add-dir", directory]);
+
 export function buildAgencyInvocation({
   packageRoot,
   prompt,
   sessionId,
-  resume = false
+  resume = false,
+  additionalDirs = []
 }) {
   if (!sessionId) {
     throw new Error("Agency invocation requires a session ID");
@@ -1358,6 +1396,7 @@ export function buildAgencyInvocation({
       "--agent",
       "fixlab:fixlab",
       "--allow-all-tools",
+      ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--stream",
       "on",
@@ -1371,7 +1410,8 @@ export function buildCopilotInvocation({
   packageRoot,
   prompt,
   sessionId,
-  resume = false
+  resume = false,
+  additionalDirs = []
 }) {
   if (!sessionId) {
     throw new Error("Copilot invocation requires a session ID");
@@ -1383,6 +1423,7 @@ export function buildCopilotInvocation({
       "--agent",
       "fixlab:fixlab",
       "--allow-all-tools",
+      ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--autopilot",
       "--stream",
@@ -1420,7 +1461,8 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
       packageRoot,
       prompt,
       sessionId,
-      resume
+      resume,
+      additionalDirs: linkedDependencyDirectories(repository)
     });
     const child = spawn(executable, invocation.args, {
       cwd: repository,

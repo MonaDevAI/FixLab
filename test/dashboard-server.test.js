@@ -6,7 +6,9 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from "node:fs";
 import { createServer } from "node:net";
@@ -27,6 +29,7 @@ import {
   createProcessCompletion,
   FIXLAB_STAGES,
   inspectRepository,
+  linkedDependencyDirectories,
   MAX_JOB_ACTIVITY_ENTRIES,
   MAX_CACHE_BYTES,
   MAX_CACHE_ENTRIES,
@@ -38,6 +41,31 @@ const packageRoot = new URL("..", import.meta.url).pathname.replace(
   /^\/([A-Za-z]:)/,
   "$1"
 );
+
+test("non-interactive executors are granted linked node_modules directories", () => {
+  const base = mkdtempSync(join(tmpdir(), "fixlab-linked-"));
+  try {
+    const repository = join(base, "repo");
+    const external = join(base, "external", "node_modules");
+    mkdirSync(join(repository, "app"), { recursive: true });
+    mkdirSync(external, { recursive: true });
+    symlinkSync(external, join(repository, "app", "node_modules"), "junction");
+
+    const directories = linkedDependencyDirectories(repository);
+    assert.deepEqual(directories, [realpathSync(external)]);
+
+    const invocation = buildCopilotInvocation({
+      packageRoot: "C:\\FixLab",
+      prompt: "x",
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      additionalDirs: directories
+    });
+    const index = invocation.args.indexOf("--add-dir");
+    assert.equal(invocation.args[index + 1], realpathSync(external));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
 
 test("Agency executor keeps long prompts out of process arguments", () => {
   const prompt = `Fix this batch:\n${"x".repeat(40000)}`;
