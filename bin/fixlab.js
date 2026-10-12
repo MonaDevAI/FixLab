@@ -27,6 +27,7 @@ import {
   validatePort
 } from "../dashboard/server.js";
 import { runChat } from "../dashboard/chat.js";
+import { probeTimeoutMs, runJobPreflight } from "../dashboard/preflight.js";
 import {
   parseKeepAwakeMinutes,
   runKeepAwake,
@@ -204,11 +205,12 @@ function checkPackageManager(command, workingDirectory) {
   }
 
   const manager = match[1];
+  const timeout = probeTimeoutMs();
   const result = spawnSync(`${manager} --version`, {
     cwd: workingDirectory,
     encoding: "utf8",
     shell: true,
-    timeout: 15000,
+    timeout,
     windowsHide: true
   });
   const version = result.stdout?.trim();
@@ -216,6 +218,11 @@ function checkPackageManager(command, workingDirectory) {
     result.error?.message ??
     result.stderr?.trim().split(/\r?\n/, 1)[0] ??
     `${manager} --version failed`;
+  const timedOut = (error) =>
+    error?.code === "ETIMEDOUT"
+      ? `${error.message} after ${timeout} ms; set FIXLAB_DOCTOR_TIMEOUT_MS to allow more time on a slow machine`
+      : error?.message;
+  failure = timedOut(result.error) ?? failure;
   if (result.status === 0 && version) {
     if (/^npm(?:\.cmd)?$/i.test(manager)) {
       const integrityResult = spawnSync(
@@ -224,7 +231,7 @@ function checkPackageManager(command, workingDirectory) {
           cwd: packageRoot,
           encoding: "utf8",
           shell: true,
-          timeout: 15000,
+          timeout,
           windowsHide: true
         }
       );
@@ -243,7 +250,7 @@ function checkPackageManager(command, workingDirectory) {
         };
       }
       failure =
-        integrityResult.error?.message ??
+        timedOut(integrityResult.error) ??
         internalFailure?.[0]?.replace(/[",]+$/, "") ??
         "npm dependency graph probe failed internally";
     } else {
@@ -1276,7 +1283,8 @@ async function dashboard(
   const dashboardServer = createDashboardServer({
     repository,
     packageRoot,
-    runtime
+    runtime,
+    preflight: runJobPreflight
   });
   let address;
   try {

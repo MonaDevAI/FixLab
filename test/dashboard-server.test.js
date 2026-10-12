@@ -539,6 +539,38 @@ test("dashboard reports readiness and serves only known static assets", async ()
   }
 });
 
+test("dashboard rejects a job when preflight finds a missing tool", async () => {
+  const repository = createRepository();
+  const { dashboard, url } = await startDashboard(
+    repository,
+    () => {
+      throw new Error("executor should not run");
+    },
+    undefined,
+    {
+      preflight: () => [{ check: "npm on PATH", detail: "npm was not found" }]
+    }
+  );
+
+  try {
+    const result = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Fix the defect.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    assert.equal(result.response.status, 400);
+    assert.match(result.body.error, /Preflight failed: npm on PATH/);
+    assert.equal(result.body.preflight.length, 1);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("loads Azure DevOps intake and passes local screenshots without caching them", async () => {
   const repository = createGitRepository();
   const profilePath = join(
