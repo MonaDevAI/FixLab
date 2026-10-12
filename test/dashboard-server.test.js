@@ -586,8 +586,10 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
   };
   let loaderInput;
   let receivedPrompt;
-  const executor = ({ prompt, onOutput }) => {
+  let receivedArtifactDirectories;
+  const executor = ({ prompt, artifactDirectories, onOutput }) => {
     receivedPrompt = prompt;
+    receivedArtifactDirectories = artifactDirectories;
     onOutput(
       "stdout",
       "FIXLAB_BUG|71|external|upstream-system|The upstream system owns the rejected request; no repository change is required.\n"
@@ -658,6 +660,7 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     screenshotPath = pathLine?.slice(2);
     assert.ok(screenshotPath);
     assert.equal(existsSync(screenshotPath), true);
+    assert.deepEqual(receivedArtifactDirectories, [dirname(screenshotPath)]);
     assert.match(receivedPrompt, /Loaded Azure DevOps selection/);
     assert.match(
       receivedPrompt,
