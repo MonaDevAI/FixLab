@@ -607,6 +607,16 @@ test("Copilot dashboard retains model defaults, overrides and queue state throug
     assert.equal(recovered.body.history.find((job) => job.id === unconfigured.body.queue[1].id).model, "");
     await post("/api/job/input", { action: "continue", details: "Resume the saved model." });
     assert.equal(calls.at(-1).model, "hydrafusion");
+    await current.dashboard.close();
+    current = await startDashboard(repository, () => {
+      throw new Error("Cross-runtime recovery must not start an executor.");
+    });
+    const incompatible = await jsonRequest(current.url, "/api/status");
+    assert.equal(incompatible.body.job, null);
+    assert.ok(incompatible.body.history.some((job) => job.runtime === "copilot"));
+    const rejected = await post("/api/job/input", { action: "continue", details: "Wrong runtime." });
+    assert.equal(rejected.response.status, 404);
+    assert.match(rejected.body.error, /no FixLab job/);
   } finally {
     await current.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -1721,14 +1731,15 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.equal(started.body.started, true);
 
     let status;
-    for (let attempt = 0; attempt < 20; attempt += 1) {
+    const authenticationDeadline = Date.now() + 10000;
+    while (Date.now() < authenticationDeadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
       status = await jsonRequest(url, "/api/playwright/status");
       if (!status.body.running) {
         break;
       }
     }
-    assert.equal(status.body.ready, true);
+    assert.equal(status.body.ready, true, JSON.stringify(status.body));
     assert.equal(status.body.lastResult.ok, true);
     assert.equal(status.body.paths[0].path, "e2e/.auth/user.json");
 
@@ -1916,7 +1927,7 @@ async function checkFrontendCleanup(cleanup) {
   );
   writeFileSync(
     join(repository, "frontend-launcher.js"),
-    `require("node:child_process").spawn(process.execPath, ["frontend.js"], { stdio: "inherit" });`
+    `require("node:child_process").spawn(process.execPath, ["frontend.js"], { stdio: "inherit", detached: process.platform === "win32" }); process.exit(0);`
   );
   const { dashboard, url } = await startDashboard(repository, () => ({
     completion: new Promise(() => {}),
@@ -2059,6 +2070,7 @@ test("dashboard does not restart a frontend that is already healthy", async () =
 
 for (const scenario of [
   { environment: "local", prestartFrontend: true, warm: true },
+  { environment: "LOCAL", prestartFrontend: true, warm: true },
   { environment: "local", prestartFrontend: false, warm: false },
   { environment: "dev", prestartFrontend: true, warm: false }
 ]) {
@@ -2068,6 +2080,7 @@ for (const scenario of [
     writeFileSync(
       join(repository, ".github", "fixlab", "repository-profile.json"),
       JSON.stringify(validProfile({
+        environments: scenario.environment === "LOCAL" ? ["LOCAL", "dev", "sit"] : ["local", "dev", "sit"],
         applications: {
           frontend: {
             command: "node frontend.js",
@@ -2756,7 +2769,7 @@ test("dashboard recovery preserves a completed manual localhost gate", async () 
       resumedPrompt,
       /Persisted manual React localhost result: passed/
     );
-    assert.match(resumedPrompt, /stop only the FixLab-owned frontend process/);
+    assert.match(resumedPrompt, /stop only frontend processes owned by the current job/);
   } finally {
     await second.dashboard.close();
   }
@@ -2888,59 +2901,6 @@ test("dashboard stops an executor that exceeds the output idle timeout", async (
       })
     });
 
-    test("idle finalization retains the atomic lease and blocks resume until executor termination", async () => {
-      const repository = createGitRepository();
-      let finish;
-      const { dashboard, url } = await startDashboard(repository, () => ({
-        completion: new Promise((resolve) => { finish = resolve; }),
-        terminate() {}
-      }), null, { executionIdleTimeoutMs: 25, deferTermination: true });
-      const contender = createExecutorLease(repository, randomUUID());
-      try {
-        await jsonRequest(url, "/api/jobs", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            request: "Wait for confirmed termination before retrying.",
-            requestType: "bug-fix",
-            mode: "validate-only"
-          })
-        });
-        let status;
-        for (let attempt = 0; attempt < 40; attempt += 1) {
-          status = await jsonRequest(url, "/api/job");
-          if (status.body.job.status === "failed") {
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        assert.equal(status.body.job.status, "failed");
-        assert.equal(status.body.job.canResume, false);
-        assert.throws(() => contender.acquire("racing-retry"), /lease is reserved/);
-        const resume = await jsonRequest(url, "/api/job/input", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "retry", details: "Retry too soon." })
-        });
-        assert.equal(resume.response.status, 409);
-        finish({ code: null, signal: "SIGTERM" });
-        for (let attempt = 0; attempt < 40; attempt += 1) {
-          status = await jsonRequest(url, "/api/job");
-          if (status.body.job.canResume) {
-            break;
-          }
-          await new Promise((resolve) => setTimeout(resolve, 10));
-        }
-        assert.equal(status.body.job.canResume, true);
-        const acquired = contender.acquire("after-exit");
-        acquired.release();
-      } finally {
-        finish?.({ code: null });
-        await dashboard.close();
-        rmSync(repository, { recursive: true, force: true });
-      }
-    });
-
     let status;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -2955,6 +2915,58 @@ test("dashboard stops an executor that exceeds the output idle timeout", async (
     assert.match(status.body.job.error, /produced no output/);
     assert.ok(status.body.job.lastActivityAt);
   } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("idle finalization retains the atomic lease and blocks resume until executor termination", async () => {
+  const repository = createGitRepository();
+  let finish;
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise((resolve) => { finish = resolve; }),
+    terminate() {}
+  }), null, { executionIdleTimeoutMs: 25, deferTermination: true });
+  const contender = createExecutorLease(repository, randomUUID());
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Wait for confirmed termination before retrying.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    let status;
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      status = await jsonRequest(url, "/api/job");
+      if (status.body.job.status === "failed") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(status.body.job.status, "failed");
+    assert.equal(status.body.job.canResume, false);
+    assert.throws(() => contender.acquire("racing-retry"), /lease is reserved/);
+    const resume = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "retry", details: "Retry too soon." })
+    });
+    assert.equal(resume.response.status, 409);
+    finish({ code: null, signal: "SIGTERM" });
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      status = await jsonRequest(url, "/api/job");
+      if (status.body.job.canResume) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(status.body.job.canResume, true);
+    contender.acquire("after-exit").release();
+  } finally {
+    finish?.({ code: null });
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
@@ -3759,6 +3771,46 @@ test("dashboard shutdown terminates only its active executor handle", async () =
     await dashboard.close();
     assert.equal(terminated, 1);
   } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("shutdown completes frontend and HTTP cleanup even when executor termination throws", async () => {
+  const repository = createRepository();
+  const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+  const profile = validProfile();
+  const port = await availablePort();
+  profile.applications.frontend = {
+    workingDirectory: ".",
+    command: 'node -e "setInterval(() => {}, 1000)"',
+    port,
+    healthUrl: `http://127.0.0.1:${port}`
+  };
+  writeFileSync(profilePath, JSON.stringify(profile));
+  let finish;
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise((resolve) => { finish = resolve; }),
+    terminate() { throw new Error("Synthetic executor termination error"); }
+  }));
+  try {
+    const start = await jsonRequest(url, "/api/frontend/start", { method: "POST" });
+    assert.equal(start.response.status, 202);
+    const session = await jsonRequest(url, "/api/session");
+    const pid = session.body.frontend.pid;
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Exercise settled shutdown.", mode: "validate-only" })
+    });
+    await assert.rejects(dashboard.close(), (error) =>
+      error instanceof AggregateError &&
+      error.errors.some((failure) => /Synthetic executor termination error/.test(failure.message)));
+    await assert.rejects(fetch(`${url}/api/status`));
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    finish({ code: null });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    finish?.({ code: null });
     rmSync(repository, { recursive: true, force: true });
   }
 });

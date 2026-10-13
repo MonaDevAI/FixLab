@@ -950,6 +950,7 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
   }
 
   const guidance = [
+    "Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise coding-change description. Use the repository's PR template with clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.",
     "Treat runtime-synthesized Playwright scenarios as transient validation artifacts by default. Remove their source files and validation-only configuration edits before review, commit, push, or pull-request creation. Do not add newly generated authenticated tests such as *.auth.spec.ts unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.",
     ...(selectedEnvironment
       ? [

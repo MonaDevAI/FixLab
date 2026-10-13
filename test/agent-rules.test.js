@@ -104,10 +104,14 @@ test("cross-runtime validation guidance stays aligned", () => {
     );
   }
 
-  for (const entryPoint of agentEntryPoints) {
+  for (const entryPoint of [...agentEntryPoints, "bin/fixlab.js"]) {
     const content = readFileSync(join(root, entryPoint), "utf8");
     assert.match(content, /`FLAB:`/, `${entryPoint} must identify FixLab-created PRs`);
     assert.match(content, /repository's PR template/, `${entryPoint} must format PR bodies`);
+  }
+
+  for (const entryPoint of agentEntryPoints) {
+    const content = readFileSync(join(root, entryPoint), "utf8");
     assert.match(
       content,
       /profile selects `non-production-read-only`[\s\S]{0,160}selects any profile-approved non-production environment[\s\S]{0,220}primary business-data source/,

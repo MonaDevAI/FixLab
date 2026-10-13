@@ -503,8 +503,8 @@ Open the printed URL manually, request `open dashboard` in terminal chat, or
 opt in explicitly with `fixlab dashboard --open`. Onboarding and dashboard
 reconnections do not automatically open another tab.
 
-It binds only to `127.0.0.1`, uses port `4317` by default, and opens the system
-browser. Select another repository or port, or suppress browser opening:
+It binds only to `127.0.0.1` and uses port `4317` by default. Browser opening
+requires explicit opt-in. Select another repository or port:
 
 ```powershell
 fixlab dashboard C:\source\application --port 4318 --no-open

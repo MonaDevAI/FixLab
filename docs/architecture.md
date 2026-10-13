@@ -20,6 +20,9 @@ own default. HydraFusion adds `--experimental --model hydrafusion` and remains
 an account-dependent research preview, not a guaranteed cost or speed saving.
 Stage markers are requested before tools and parsed even when adjacent in
 rendered output, but model-dependent buffering can still delay visible updates.
+Snapshots also retain their originating runtime. A dashboard restores only
+compatible jobs; other-runtime or ambiguous legacy contexts remain in history
+rather than being silently resumed through a different executor.
 
 ```text
 Defect or pull request
@@ -90,9 +93,21 @@ enable resume before the executor's termination promise settles. Unverified
 termination, partial reservations and owner crashes remain fail-closed; neither
 an HTTP timeout nor PID reuse authorizes automatic reclamation.
 
-Windows whole-executor-tree assurance remains a merge gate: the current
-default executor's completion check observes launcher exit only. It does not
-yet prove that every owned Windows descendant has stopped.
+Windows executors launch suspended, enter a non-breakaway Windows Job Object,
+then resume. The supervisor terminates remaining descendants after launcher
+exit or an owned stop request, and records a nonce-bound proof only after the
+job's active process count reaches zero. Lease release requires both supervisor
+exit and that proof; a supervisor crash remains fail-closed. This uses built-in
+Windows PowerShell and its C# compiler, with no native package dependency.
+Unavailable containment or missing proof is an explicit failure, never a
+fallback to launcher-only checks. Dedicated Windows CI exercises real detached
+descendants, explicit stop, wrapper crash and lease succession.
+
+Manual localhost validation must use a frontend managed outside the Windows
+executor, such as the dashboard's React session, and verify it serves the
+validated checkout. Dashboard-managed applications remain under session
+controls rather than being terminated by an agent. Missing checkout or health
+evidence remains a blocker.
 
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
 require evidence-backed diagnosis and reproduction. Small enhancements use a
