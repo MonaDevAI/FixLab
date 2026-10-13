@@ -221,8 +221,14 @@ profile. **Connect Playwright** runs only the configured local command.
 **Check status** reports whether every configured path exists without reading
 or returning its contents.
 
+When a job is blocked at live-test, **Connect Playwright, then retry live test**
+runs the same configured command, waits for you to sign in, and retries the
+live test automatically only after the command exits successfully. Sign-in
+always stays with you; FixLab never handles credentials.
+
 The dashboard remains **Not ready** until the profile also includes a frontend
-startup command, loopback health URL, Playwright test command, explicit
+
+The dashboard remains **Not ready** until the profile also includes a frontend **Not ready** until the profile also includes a frontendstartup command, loopback health URL, Playwright test command, explicit
 authentication requirement, and a production-excluding data-safety policy.
 
 With `testSynthesis` enabled, FixLab converts the reported behavior into the
