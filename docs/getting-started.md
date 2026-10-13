@@ -226,6 +226,14 @@ runs the same configured command, waits for you to sign in, and retries the
 live test automatically only after the command exits successfully. Sign-in
 always stays with you; FixLab never handles credentials.
 
+The **React frontend** panel starts the profile's `applications.frontend.command`
+in `applications.frontend.workingDirectory` ahead of time and watches
+`healthUrl`. Connect Playwright starts it automatically, so authentication and
+live tests reuse a warm server instead of waiting for a cold compile. FixLab
+stops only the process it started, when you click **Stop React** or the
+dashboard exits, and never touches a server that was already running. A
+Playwright config that sets `reuseExistingServer` picks up the running server.
+
 The dashboard remains **Not ready** until the profile also includes a frontend
 
 The dashboard remains **Not ready** until the profile also includes a frontend **Not ready** until the profile also includes a frontendstartup command, loopback health URL, Playwright test command, explicit

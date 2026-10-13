@@ -23,6 +23,21 @@ test("connect-then-retry starts the profile authentication through the API", () 
   assert.match(handler, /method: "POST"/u);
 });
 
+test("connecting Playwright starts the frontend first", () => {
+  for (const marker of [
+    'playwrightConnect.addEventListener("click"',
+    'connectRetryLiveTestButton.addEventListener("click"'
+  ]) {
+    const handler = appSource.slice(appSource.indexOf(marker));
+    assert.ok(
+      handler.indexOf("await startFrontend()") <
+        handler.indexOf("/api/playwright/connect"),
+      marker
+    );
+  }
+  assert.match(appSource, /\/api\/frontend\/start/u);
+});
+
 test("the live test is retried only after successful authentication", () => {
   const start = appSource.indexOf("async function resumeAfterConnect");
   const body = appSource.slice(

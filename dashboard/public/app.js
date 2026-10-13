@@ -121,6 +121,10 @@ const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
 const playwrightCheck = document.querySelector("#playwright-check");
 const playwrightConnect = document.querySelector("#playwright-connect");
+const frontendStatusBadge = document.querySelector("#frontend-status");
+const frontendGuidance = document.querySelector("#frontend-guidance");
+const frontendStart = document.querySelector("#frontend-start");
+const frontendStop = document.querySelector("#frontend-stop");
 const onboardingStatus = document.querySelector("#onboarding-status");
 const onboardingOrganization = document.querySelector(
   "#onboarding-organization"
@@ -571,6 +575,64 @@ async function resumeAfterConnect(status) {
     await retryLiveTest();
   }
 }
+
+function renderFrontendStatus(status) {
+  frontendStatusBadge.textContent = !status.configured
+    ? "Not configured"
+    : status.healthy
+      ? "Ready"
+      : status.running
+        ? "Starting…"
+        : "Stopped";
+  frontendStart.disabled =
+    !status.configured || status.running || status.healthy;
+  frontendStop.disabled = !status.running;
+  frontendGuidance.textContent = status.error
+    ? status.error
+    : status.healthy
+      ? `React is answering at ${status.healthUrl}. Playwright authentication and live tests reuse it.`
+      : status.running
+        ? "React is compiling. The first start can take several minutes; this updates automatically."
+        : status.lastResult && !status.lastResult.ok
+          ? status.lastResult.message
+          : "Start the profile-defined React frontend ahead of time so Playwright authentication and live tests reuse it instead of waiting for a cold compile.";
+}
+
+async function refreshFrontendStatus() {
+  try {
+    renderFrontendStatus(await fetchJson("/api/frontend/status"));
+  } catch (error) {
+    frontendGuidance.textContent = error.message;
+  }
+}
+
+async function startFrontend() {
+  try {
+    renderFrontendStatus(
+      await fetchJson("/api/frontend/start", { method: "POST" })
+    );
+  } catch {
+    await refreshFrontendStatus();
+  }
+}
+
+frontendStart.addEventListener("click", () => {
+  formError.textContent = "";
+  frontendStart.disabled = true;
+  void startFrontend();
+});
+
+frontendStop.addEventListener("click", async () => {
+  frontendStop.disabled = true;
+  try {
+    renderFrontendStatus(
+      await fetchJson("/api/frontend/stop", { method: "POST" })
+    );
+  } catch (error) {
+    formError.textContent = error.message;
+    await refreshFrontendStatus();
+  }
+});
 
 async function refreshPlaywrightStatus() {
   try {
@@ -1371,6 +1433,7 @@ connectRetryLiveTestButton.addEventListener("click", async () => {
   connectRetryLiveTestButton.disabled = true;
   try {
     pendingRetryAfterConnectJobId = activeJob?.id ?? null;
+    await startFrontend();
     renderPlaywrightStatus(
       await fetchJson("/api/playwright/connect", { method: "POST" })
     );
@@ -1447,6 +1510,7 @@ playwrightConnect.addEventListener("click", async () => {
   formError.textContent = "";
   playwrightConnect.disabled = true;
   try {
+    await startFrontend();
     renderPlaywrightStatus(
       await fetchJson("/api/playwright/connect", { method: "POST" })
     );
@@ -1486,9 +1550,11 @@ onboardingSave.addEventListener("click", async () => {
 refresh();
 refreshMetrics();
 refreshPlaywrightStatus();
+refreshFrontendStatus();
 refreshPlaywrightEvidence();
 refreshOnboarding();
 setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);
+setInterval(refreshFrontendStatus, 5000);
 setInterval(refreshPlaywrightEvidence, 10000);
