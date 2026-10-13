@@ -35,6 +35,7 @@ import {
   storeScreenshots
 } from "./intake.js";
 import { formatPreflightFailure } from "./preflight.js";
+import { createSessionRegistry } from "./sessions.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -364,6 +365,7 @@ function publicQueue(jobs) {
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
+    prestartFrontend: job.prestartFrontend ?? false,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: job.manualLocalhostUrl,
@@ -403,6 +405,7 @@ function dashboardSnapshot(job) {
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
+    prestartFrontend: job.prestartFrontend ?? false,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: "",
@@ -872,6 +875,7 @@ ${testDataGuidance}
 - Start long-running independent validation commands in parallel when the runtime supports it. While those commands run, prepare or refresh the authorized draft PR description with the confirmed symptom, scoped change, checks already passed, checks still running, and known risks.
 - Push later reviewed checkpoints to the same branch only after their affected focused checks pass. Reuse the same draft PR and update its evidence instead of waiting to publish one large final update or creating duplicates.
 - Keep the pull request draft and clearly marked validation-in-progress while any required gate is pending, running, blocked, skipped with unaccepted risk, or failed. Never mark it ready for review or report the pr stage passed until all required gates pass or repository policy records an explicitly accepted outcome.
+- Prefix FixLab-created pull-request titles with FLAB: followed by a concise description of the coding change. Format the body with the repository's PR template, clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.
 - Emit one browser evidence line after the scenario is selected and again if the actual source or mutation behavior changes:
   FIXLAB_TEST|source|mutation-mode|scenario
 - source must be one of: ${[...testDataSources].join(", ")}.
@@ -1526,6 +1530,7 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
     const child = spawn(executable, invocation.args, {
       cwd: repository,
       shell: false,
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"]
     });
 
@@ -1542,7 +1547,7 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
       completion,
       terminate() {
         if (child.exitCode === null && child.signalCode === null) {
-          child.kill();
+          stopProcessTree(child);
         }
       }
     };
@@ -2223,13 +2228,22 @@ function stopProcessTree(child) {
     return;
   }
   if (process.platform === "win32" && child.pid) {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+    const result = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true
     });
+    if (result.error || result.status !== 0) {
+      throw result.error ?? new Error(`could not stop the owned process tree (exit ${result.status})`);
+    }
     return;
   }
-  child.kill();
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch (error) {
+    if (error.code !== "ESRCH") {
+      throw error;
+    }
+  }
 }
 
 async function frontendStatus(repository, connection) {
@@ -2239,18 +2253,18 @@ async function frontendStatus(repository, connection) {
   } catch (error) {
     return {
       configured: false,
-      running: Boolean(connection.handle),
+      running: Boolean(connection.handle) || connection.starting === true,
       healthy: false,
-      owned: Boolean(connection.handle),
+      owned: Boolean(connection.handle) || connection.starting === true,
       error: error.message,
       lastResult: connection.lastResult
     };
   }
   return {
     configured: true,
-    running: Boolean(connection.handle),
+    running: Boolean(connection.handle) || connection.starting === true,
     healthy: await frontendIsHealthy(healthUrl),
-    owned: Boolean(connection.handle),
+    owned: Boolean(connection.handle) || connection.starting === true,
     healthUrl,
     error: "",
     lastResult: connection.lastResult
@@ -2434,9 +2448,97 @@ export function createDashboardServer({
   const completedJobs = [];
   const artifactDirectories = new Set();
   const playwrightConnection = { handle: null, lastResult: null };
-  const frontendConnection = { handle: null, lastResult: null };
+  const frontendConnection = { handle: null, lastResult: null, starting: false };
+  let frontendStartGeneration = 0;
   const playwrightArtifacts = new Map();
   const cacheContext = createCacheContext(resolvedRepository);
+  const sessions = createSessionRegistry(
+    cacheContext?.repositoryIdentityHash ?? resolvedRepository
+  );
+  let dashboardUrl = "";
+  let closing = false;
+
+  async function launchFrontend() {
+    const generation = frontendStartGeneration;
+    const configuration = frontendStartConfig(resolvedRepository);
+    if (frontendConnection.handle || frontendConnection.starting) {
+      throw new Error("FixLab already started the frontend");
+    }
+    frontendConnection.starting = true;
+    try {
+      const owners = await sessions.list();
+      const conflict = owners.find((owner) =>
+        owner.id !== sessions.id && owner.available && owner.frontend?.running
+      );
+      if (conflict) {
+        throw new Error(`Frontend is owned by FixLab dashboard ${conflict.id}; reconnect or confirm stopping that owner.`);
+      }
+      if (closing || generation !== frontendStartGeneration) {
+        throw new Error("frontend startup was cancelled");
+      }
+      if (await frontendIsHealthy(configuration.healthUrl)) {
+        return { started: false };
+      }
+      if (closing || generation !== frontendStartGeneration) {
+        throw new Error("frontend startup was cancelled");
+      }
+      frontendConnection.lastResult = null;
+      const child = spawn(configuration.command, {
+        cwd: configuration.workingDirectory,
+        shell: true,
+        detached: process.platform !== "win32",
+        stdio: "ignore",
+        windowsHide: true
+      });
+      frontendConnection.handle = child;
+      child.once("error", (error) => {
+        frontendConnection.lastResult = {
+          ok: false,
+          message: error.message,
+          finishedAt: new Date().toISOString()
+        };
+        if (frontendConnection.handle === child) {
+          frontendConnection.handle = null;
+        }
+      });
+      child.once("close", (code) => {
+        if (frontendConnection.handle === child) {
+          frontendConnection.handle = null;
+          frontendConnection.lastResult = {
+            ok: code === 0,
+            message: `Frontend process exited with code ${code ?? "unknown"}.`,
+            finishedAt: new Date().toISOString()
+          };
+        }
+      });
+      return { started: true };
+    } finally {
+      frontendConnection.starting = false;
+    }
+  }
+
+  async function prewarmFrontend(job) {
+    try {
+      const result = frontendConnection.handle || frontendConnection.starting
+        ? { started: false }
+        : await launchFrontend();
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: result.started
+          ? "React warm-up started in parallel with the agent. Live testing must wait for health and verify the server serves the validated checkout."
+          : "React warm-up reuses the existing frontend; live testing must verify its health and checkout."
+      });
+    } catch (error) {
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: `React warm-up did not start: ${error.message}. The agent must report any live-test prerequisite that remains blocked.`
+      });
+    }
+  }
   const metricsPath = cacheContext
     ? join(dirname(cacheContext.cachePath), "dashboard-metrics.json")
     : null;
@@ -2523,6 +2625,9 @@ export function createDashboardServer({
   }
 
   function startJob(job, prompt, resume = false) {
+    if (closing) {
+      throw new Error("the dashboard is shutting down");
+    }
     const profileIdleTimeoutMinutes = Number(
       loadRepositoryProfile(resolvedRepository).validation
         ?.agentIdleTimeoutMinutes
@@ -2597,7 +2702,9 @@ export function createDashboardServer({
     handle = executor({
       repository: resolvedRepository,
       artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
-      prompt,
+      prompt: job.prestartFrontend && job.targetEnvironment === "local"
+        ? `${prompt}\nReact warm-up is requested in parallel in the dashboard repository. Before live testing, reuse that server only after its profile health check passes and you verify it serves the checkout containing the changes being validated. If using another isolated worktree, start the correct checkout instead; a healthy baseline server does not prove the fix. Never mark local-stack passed merely because warm-up was requested.`
+        : prompt,
       sessionId: job.id,
       resume,
       onOutput(stream, text) {
@@ -2640,16 +2747,29 @@ export function createDashboardServer({
       }
     });
     activeHandle = handle;
+    if (job.prestartFrontend && job.targetEnvironment === "local") {
+      void prewarmFrontend(job);
+    }
     armIdleWatchdog();
     heartbeatTimer = setInterval(emitHeartbeat, executionHeartbeatMs);
     heartbeatTimer.unref?.();
     Promise.race([Promise.resolve(handle.completion), idleCompletion])
       .then((result) => {
         finishJob(job, result);
+        if (job.stopRequested) {
+          job.status = "blocked";
+          job.error = "Session stopped by the user; resume when ready.";
+          delete job.stopRequested;
+        }
         recordJobMetric(job);
       })
       .catch((error) => {
         finishJob(job, { code: null, error });
+        if (job.stopRequested) {
+          job.status = "blocked";
+          job.error = "Session stopped by the user; resume when ready.";
+          delete job.stopRequested;
+        }
         recordJobMetric(job);
       })
       .finally(() => {
@@ -2657,6 +2777,9 @@ export function createDashboardServer({
         clearInterval(heartbeatTimer);
         if (activeHandle === handle) {
           activeHandle = null;
+        }
+        if (closing) {
+          return;
         }
         if (job.pendingInputs.length > 0) {
           const pendingInputs = job.pendingInputs.splice(0);
@@ -2681,11 +2804,11 @@ export function createDashboardServer({
           }
           return;
         }
-        startNextJob();
+        return startNextJob();
       });
   }
 
-  function startNextJob() {
+  async function startNextJob() {
     if (
       activeHandle ||
       queuedJobs.length === 0 ||
@@ -2704,6 +2827,13 @@ export function createDashboardServer({
     currentJob.lastActivityAt = currentJob.startedAt;
     recordJobMetric(currentJob);
     try {
+      const owners = await sessions.list();
+      const conflict = owners.find((owner) =>
+        owner.id !== sessions.id && owner.available && owner.job?.running
+      );
+      if (conflict) {
+        throw new Error(`Queued job cannot start while FixLab dashboard ${conflict.id} owns the repository's agent session. Reconnect or confirm stopping that owner.`);
+      }
       startJob(currentJob, currentJob.pendingPrompt);
       delete currentJob.pendingPrompt;
     } catch (error) {
@@ -2718,6 +2848,143 @@ export function createDashboardServer({
       request.url,
       `http://${request.headers.host ?? DASHBOARD_HOST}`
     );
+
+    if (closing && request.method === "POST") {
+      sendJson(response, 503, { error: "the dashboard is shutting down" });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/session") {
+      sendJson(response, 200, {
+        id: sessions.id,
+        scopeId: sessions.scopeId,
+        repository: resolvedRepository,
+        job: currentJob ? {
+          id: currentJob.id,
+          status: currentJob.status,
+          running: Boolean(activeHandle),
+          canResume: publicJob(currentJob).canResume
+        } : null,
+        frontend: {
+          running: Boolean(frontendConnection.handle) || frontendConnection.starting,
+          pid: frontendConnection.handle?.pid ?? null
+        },
+        authentication: { running: Boolean(playwrightConnection.handle) }
+      });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/sessions") {
+      try {
+        sendJson(response, 200, {
+          ownerId: sessions.id,
+          sessions: await sessions.list()
+        });
+      } catch (error) {
+        sendJson(response, 500, { error: error.message });
+      }
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      ["/api/sessions/control", "/api/session/control"].includes(requestUrl.pathname)
+    ) {
+      try {
+        if (!request.headers["content-type"]?.startsWith("application/json")) {
+          throw new Error("Content-Type must be application/json");
+        }
+        const body = await readJsonBody(request);
+        if (
+          !["stop", "resume", "shutdown"].includes(body.action) ||
+          !["job", "frontend", "all"].includes(body.resource) ||
+          typeof body.ownerId !== "string"
+        ) {
+          throw new Error("a session owner, action and resource are required");
+        }
+        if (body.action !== "resume" && body.confirmed !== true) {
+          sendJson(response, 409, { error: "explicit confirmation is required" });
+          return;
+        }
+        if (requestUrl.pathname === "/api/sessions/control") {
+          const result = await sessions.control(body.ownerId, body);
+          sendJson(response, result.status, result.body);
+          return;
+        }
+        if (body.ownerId !== sessions.id) {
+          sendJson(response, 409, { error: "the session owner has changed" });
+          return;
+        }
+        if (
+          ["job", "all"].includes(body.resource) &&
+          body.jobId !== (currentJob?.id ?? null)
+        ) {
+          sendJson(response, 409, { error: "the owned job has changed; refresh before continuing" });
+          return;
+        }
+        if (body.action === "resume" && body.resource === "all") {
+          throw new Error("resume a job or frontend individually");
+        }
+        if (body.action === "shutdown") {
+          if (body.resource !== "all") {
+            throw new Error("shutdown requires resource all");
+          }
+          stopProcessTree(playwrightConnection.handle);
+          playwrightConnection.handle = null;
+        }
+        const paths = body.resource === "all"
+          ? ["/api/frontend/stop", ...(activeHandle ? ["/api/job/stop"] : [])]
+          : body.resource === "frontend"
+            ? [body.action === "resume" ? "/api/frontend/start" : "/api/frontend/stop"]
+            : body.action === "resume" && activeHandle
+              ? []
+              : [body.action === "resume" ? "/api/job/input" : "/api/job/stop"];
+        for (const path of paths) {
+          const result = await fetch(`${dashboardUrl}${path}`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              action: "continue",
+              details: "Resume the stopped FixLab session using its saved context and existing evidence."
+            }),
+            signal: AbortSignal.timeout(10000),
+            redirect: "error"
+          });
+          const resultBody = await result.json();
+          if (!result.ok) {
+            sendJson(response, result.status, resultBody);
+            return;
+          }
+        }
+        sendJson(response, 202, { accepted: true, ownerId: sessions.id });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      ["/api/jobs", "/api/job/input", "/api/frontend/start"].includes(requestUrl.pathname)
+    ) {
+      try {
+        const resource = requestUrl.pathname === "/api/frontend/start" ? "frontend" : "job";
+        const owners = await sessions.list();
+        const conflict = owners.find((owner) =>
+          owner.id !== sessions.id && owner.available && owner[resource]?.running
+        );
+        if (conflict) {
+          sendJson(response, 409, {
+            error: `Another FixLab dashboard owns the ${resource} session. Reconnect to its dashboard or confirm stopping it in Session controls.`,
+            owner: conflict
+          });
+          return;
+        }
+      } catch (error) {
+        sendJson(response, 503, { error: `Could not verify session ownership: ${error.message}` });
+        return;
+      }
+    }
 
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
       persistDashboardState();
@@ -2936,7 +3203,7 @@ export function createDashboardServer({
       }
       archiveJob(dismissedJob);
       currentJob = null;
-      startNextJob();
+      await startNextJob();
       persistDashboardState();
       sendJson(response, 202, {
         job: publicJob(currentJob),
@@ -3127,10 +3394,12 @@ export function createDashboardServer({
         timestamp: new Date().toISOString(),
         stream: "dashboard",
         message:
-          "Stop requested from FixLab chat; stopping only the owned executor."
+          "Stop requested by the user; stopping only the owned executor process tree."
       });
       try {
         activeHandle.terminate();
+        currentJob.pendingInputs = [];
+        currentJob.stopRequested = true;
       } catch (error) {
         sendJson(response, 500, {
           error: `could not stop the FixLab-owned executor: ${error.message}`
@@ -3282,6 +3551,11 @@ export function createDashboardServer({
         sendJson(response, 400, {
           error: "recordPlaywrightVideo must be a boolean"
         });
+        return;
+      }
+      const prestartFrontend = body.prestartFrontend ?? false;
+      if (typeof prestartFrontend !== "boolean") {
+        sendJson(response, 400, { error: "prestartFrontend must be a boolean" });
         return;
       }
       const repositoryProfile = loadRepositoryProfile(resolvedRepository);
@@ -3442,6 +3716,7 @@ export function createDashboardServer({
         pullRequestStrategy,
         runAllUiScenarios,
         targetEnvironment,
+        prestartFrontend,
         recordPlaywrightVideo,
         manualLocalhostTest,
         manualLocalhostUrl,
@@ -3679,6 +3954,7 @@ export function createDashboardServer({
         cwd: configuration.workingDirectory,
         env: { ...process.env, ...configuration.environment },
         shell: true,
+        detached: process.platform !== "win32",
         stdio: "ignore",
         windowsHide: false
       });
@@ -3730,54 +4006,19 @@ export function createDashboardServer({
       request.method === "POST" &&
       requestUrl.pathname === "/api/frontend/start"
     ) {
-      let configuration;
-      try {
-        configuration = frontendStartConfig(resolvedRepository);
-      } catch (error) {
-        sendJson(response, 400, { error: error.message });
-        return;
-      }
-      if (frontendConnection.handle) {
+      if (frontendConnection.handle || frontendConnection.starting) {
         sendJson(response, 409, { error: "FixLab already started the frontend" });
         return;
       }
-      if (await frontendIsHealthy(configuration.healthUrl)) {
-        sendJson(response, 200, {
+      try {
+        const result = await launchFrontend();
+        sendJson(response, result.started ? 202 : 200, {
           ...(await frontendStatus(resolvedRepository, frontendConnection)),
-          started: false
+          ...result
         });
-        return;
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
       }
-      frontendConnection.lastResult = null;
-      const child = spawn(configuration.command, {
-        cwd: configuration.workingDirectory,
-        shell: true,
-        stdio: "ignore",
-        windowsHide: true
-      });
-      frontendConnection.handle = child;
-      child.once("error", (error) => {
-        frontendConnection.lastResult = {
-          ok: false,
-          message: error.message,
-          finishedAt: new Date().toISOString()
-        };
-        frontendConnection.handle = null;
-      });
-      child.once("close", (code) => {
-        if (frontendConnection.handle === child) {
-          frontendConnection.handle = null;
-        }
-        frontendConnection.lastResult = {
-          ok: code === 0,
-          message: `Frontend process exited with code ${code ?? "unknown"}.`,
-          finishedAt: new Date().toISOString()
-        };
-      });
-      sendJson(response, 202, {
-        ...(await frontendStatus(resolvedRepository, frontendConnection)),
-        started: true
-      });
       return;
     }
 
@@ -3786,11 +4027,18 @@ export function createDashboardServer({
       requestUrl.pathname === "/api/frontend/stop"
     ) {
       const child = frontendConnection.handle;
+      const wasStarting = frontendConnection.starting;
+      frontendStartGeneration += 1;
+      try {
+        stopProcessTree(child);
+      } catch (error) {
+        sendJson(response, 500, { error: error.message });
+        return;
+      }
       frontendConnection.handle = null;
-      stopProcessTree(child);
       sendJson(response, 200, {
         ...(await frontendStatus(resolvedRepository, frontendConnection)),
-        stopped: Boolean(child)
+        stopped: Boolean(child) || wasStarting
       });
       return;
     }
@@ -3828,6 +4076,13 @@ export function createDashboardServer({
         server.listen(validatedPort, DASHBOARD_HOST, resolveListen);
       });
       const address = server.address();
+      dashboardUrl = `http://${DASHBOARD_HOST}:${address.port}`;
+      try {
+        sessions.register(dashboardUrl);
+      } catch (error) {
+        await new Promise((resolveClose) => server.close(resolveClose));
+        throw error;
+      }
       return {
         host: DASHBOARD_HOST,
         port: address.port,
@@ -3835,6 +4090,8 @@ export function createDashboardServer({
       };
     },
     async close() {
+      closing = true;
+      frontendStartGeneration += 1;
       persistDashboardState();
       if (activeHandle?.terminate) {
         activeHandle.terminate();
@@ -3844,8 +4101,9 @@ export function createDashboardServer({
         playwrightConnection.handle.exitCode === null &&
         playwrightConnection.handle.signalCode === null
       ) {
-        playwrightConnection.handle.kill();
+        stopProcessTree(playwrightConnection.handle);
       }
+      playwrightConnection.handle = null;
       stopProcessTree(frontendConnection.handle);
       frontendConnection.handle = null;
       for (const directory of artifactDirectories) {
@@ -3860,6 +4118,7 @@ export function createDashboardServer({
         }
         server.close((error) => (error ? reject(error) : resolveClose()));
       });
+      sessions.unregister();
     }
   };
 }

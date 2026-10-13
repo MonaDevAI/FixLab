@@ -87,7 +87,7 @@ Usage:
   fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
-  fixlab dashboard [repository] [--port <number>] [--no-open] [--keep-awake-minutes <minutes>] [--runtime <agency|copilot>]
+  fixlab dashboard [repository] [--port <number>] [--open|--no-open] [--keep-awake-minutes <minutes>] [--runtime <agency|copilot>]
   fixlab chat [repository] [--port <number>] [--runtime <agency|copilot>]
   fixlab keep-awake --minutes <minutes>
   fixlab --help
@@ -1037,10 +1037,14 @@ function parseValidateArguments(args) {
 function parseDashboardArguments(args) {
   let repositoryArgument;
   let port = DEFAULT_DASHBOARD_PORT;
-  let open = true;
+  let open = false;
   let keepAwakeMinutes = 0;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
+    if (argument === "--open") {
+      open = true;
+      continue;
+    }
     if (argument === "--no-open") {
       open = false;
       continue;
@@ -1234,7 +1238,7 @@ async function onboard({
     return doctorResult;
   }
   if (startDashboard) {
-    return dashboard(repository, DEFAULT_DASHBOARD_PORT, true, runtime);
+    return dashboard(repository, DEFAULT_DASHBOARD_PORT, false, runtime);
   }
 
   console.log("");

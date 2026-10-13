@@ -125,6 +125,9 @@ const frontendStatusBadge = document.querySelector("#frontend-status");
 const frontendGuidance = document.querySelector("#frontend-guidance");
 const frontendStart = document.querySelector("#frontend-start");
 const frontendStop = document.querySelector("#frontend-stop");
+const sessionsList = document.querySelector("#sessions-list");
+const sessionsMessage = document.querySelector("#sessions-message");
+const sessionsRefresh = document.querySelector("#sessions-refresh");
 const onboardingStatus = document.querySelector("#onboarding-status");
 const onboardingOrganization = document.querySelector(
   "#onboarding-organization"
@@ -611,7 +614,8 @@ async function startFrontend() {
     renderFrontendStatus(
       await fetchJson("/api/frontend/start", { method: "POST" })
     );
-  } catch {
+  } catch (error) {
+    formError.textContent = error.message;
     await refreshFrontendStatus();
   }
 }
@@ -622,9 +626,88 @@ frontendStart.addEventListener("click", () => {
   void startFrontend();
 });
 
+async function refreshSessions() {
+  try {
+    const body = await fetchJson("/api/sessions");
+    sessionsList.replaceChildren();
+    for (const session of body.sessions) {
+      const row = document.createElement("article");
+      const description = document.createElement("p");
+      description.className = "guidance";
+      description.textContent = session.available
+        ? `${session.id === body.ownerId ? "This dashboard" : "Other FixLab dashboard"} · ${session.id} · Job ${session.job?.id ?? "none"} (${session.job?.status ?? "not started"}) · React ${session.frontend.running ? `running (PID ${session.frontend.pid})` : "stopped"}`
+        : `Owner ${session.id} is unavailable: ${session.error}. No process will be stopped.`;
+      row.append(description);
+      if (session.available) {
+        const controls = document.createElement("div");
+        controls.className = "button-row";
+        const reconnect = document.createElement("a");
+        reconnect.href = session.url;
+        reconnect.textContent = "Reconnect to live dashboard";
+        controls.append(reconnect);
+        const actions = [
+          { label: "Resume job", action: "resume", resource: "job", enabled: session.job?.canResume || session.job?.running },
+          { label: "Stop agent", action: "stop", resource: "job", enabled: session.job?.running },
+          { label: "Start / resume React", action: "resume", resource: "frontend", enabled: !session.frontend.running },
+          { label: "Stop React", action: "stop", resource: "frontend", enabled: session.frontend.running },
+          { label: "Shutdown sessions", action: "shutdown", resource: "all", enabled: session.job?.running || session.frontend.running || session.authentication.running }
+        ];
+        for (const control of actions) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "secondary";
+          button.textContent = control.label;
+          button.disabled = !control.enabled;
+          button.addEventListener("click", async () => {
+            const destructive = control.action !== "resume";
+            if (destructive && !window.confirm(
+              `${control.label} for FixLab owner ${session.id} at ${session.url}, job ${session.job?.id ?? "none"}? Only this owner's processes will be stopped; saved job context remains resumable.`
+            )) {
+              return;
+            }
+            button.disabled = true;
+            try {
+              await fetchJson("/api/sessions/control", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  ownerId: session.id,
+                  jobId: session.job?.id ?? null,
+                  action: control.action,
+                  resource: control.resource,
+                  confirmed: destructive
+                })
+              });
+              sessionsMessage.textContent = `${control.label} accepted for owner ${session.id}.`;
+              await refreshSessions();
+              await refresh();
+              await refreshFrontendStatus();
+            } catch (error) {
+              sessionsMessage.textContent = error.message;
+              button.disabled = false;
+            }
+          });
+          controls.append(button);
+        }
+        row.append(controls);
+      }
+      sessionsList.append(row);
+    }
+  } catch (error) {
+    sessionsMessage.textContent = error.message;
+  }
+}
+
+sessionsRefresh.addEventListener("click", refreshSessions);
+
 frontendStop.addEventListener("click", async () => {
   frontendStop.disabled = true;
   try {
+    const owner = await fetchJson("/api/session");
+    if (!window.confirm(`Stop React owned by FixLab dashboard ${owner.id}? Only its frontend process tree will be stopped.`)) {
+      await refreshFrontendStatus();
+      return;
+    }
     renderFrontendStatus(
       await fetchJson("/api/frontend/stop", { method: "POST" })
     );
@@ -1260,6 +1343,7 @@ form.addEventListener("submit", async (event) => {
           : "common",
         runAllUiScenarios: data.get("runAllUiScenarios") === "on",
         targetEnvironment: data.get("targetEnvironment"),
+        prestartFrontend: data.get("prestartFrontend") === "on",
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",
         manualLocalhostTest:
@@ -1557,4 +1641,6 @@ setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);
 setInterval(refreshFrontendStatus, 5000);
+void refreshSessions();
+setInterval(refreshSessions, 5000);
 setInterval(refreshPlaywrightEvidence, 10000);

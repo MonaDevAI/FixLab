@@ -73,6 +73,11 @@ keep validation status and risks current in the PR, and never mark it ready for
 review until every required gate passes or repository policy records an
 explicitly accepted outcome.
 
+Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise
+description of the coding change. Use the repository's PR template and clear
+Markdown sections for the problem, changes, validation and risks. Keep
+validation checkboxes accurate; do not describe a pending gate as passed.
+
 Runtime-synthesized Playwright scenarios are transient validation artifacts by
 default. Remove their source files and validation-only configuration edits
 before review, commit, push, or pull-request creation. Do not add newly

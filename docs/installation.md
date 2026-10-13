@@ -492,12 +492,16 @@ repository path. It can also be supplied directly:
 fixlab chat C:\source\application
 ```
 
-Use `fixlab dashboard` when the browser UI should be started explicitly:
+Use `fixlab dashboard` to start the local UI server without opening a browser:
 
 ```powershell
 fixlab dashboard
 fixlab dashboard --runtime copilot
 ```
+
+Open the printed URL manually, request `open dashboard` in terminal chat, or
+opt in explicitly with `fixlab dashboard --open`. Onboarding and dashboard
+reconnections do not automatically open another tab.
 
 It binds only to `127.0.0.1`, uses port `4317` by default, and opens the system
 browser. Select another repository or port, or suppress browser opening:

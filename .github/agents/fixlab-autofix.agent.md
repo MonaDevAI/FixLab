@@ -95,6 +95,11 @@ push later reviewed checkpoints to the same branch, and never mark the PR ready
 until every required gate passes or the developer explicitly accepts the
 recorded outcome.
 
+Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise
+description of the coding change. Use the repository's PR template and clear
+Markdown sections for the problem, changes, validation and risks. Keep
+validation checkboxes accurate; do not describe a pending gate as passed.
+
 ## Guardrails
 
 - Handle one bug at a time; do not bundle unrelated fixes or refactors.

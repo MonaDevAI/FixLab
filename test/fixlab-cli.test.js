@@ -790,6 +790,24 @@ test("dashboard rejects unknown options before starting", () => {
   assert.match(result.stderr, /unknown dashboard option/);
 });
 
+test("dashboard browser opening is opt-in, including after onboarding", () => {
+  const content = readFileSync(cli, "utf8");
+  assert.match(
+    content,
+    /function parseDashboardArguments\(args\) \{[\s\S]*?let open = false;/
+  );
+  assert.match(content, /if \(argument === "--open"\) \{\s+open = true;/);
+  assert.match(
+    content,
+    /return dashboard\(repository, DEFAULT_DASHBOARD_PORT, false, runtime\);/
+  );
+  const missing = join(tmpdir(), `fixlab-browser-opt-in-${process.pid}`);
+  const result = run(["dashboard", missing, "--open"], process.cwd());
+  assert.equal(result.status, 1);
+  assert.doesNotMatch(result.stderr, /unknown dashboard option/);
+  assert.match(result.stderr, /Cannot start FixLab dashboard/);
+});
+
 test("keep-awake validates bounded timers", () => {
   assert.equal(parseKeepAwakeMinutes("90"), 90);
   assert.throws(

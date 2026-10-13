@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -1645,7 +1646,7 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
   }
 });
 
-test("dashboard starts, reuses and stops the profile-defined frontend", async () => {
+async function checkFrontendCleanup(cleanup) {
   const repository = createRepository();
   const port = await availablePort();
   writeFileSync(
@@ -1655,7 +1656,7 @@ test("dashboard starts, reuses and stops the profile-defined frontend", async ()
         applications: {
           frontend: {
             workingDirectory: ".",
-            command: "node frontend.js",
+            command: "node frontend-launcher.js",
             port,
             healthUrl: `http://127.0.0.1:${port}`
           }
@@ -1667,7 +1668,15 @@ test("dashboard starts, reuses and stops the profile-defined frontend", async ()
     join(repository, "frontend.js"),
     `require("node:http").createServer((q, s) => s.end("ok")).listen(${port}, "127.0.0.1");`
   );
+  writeFileSync(
+    join(repository, "frontend-launcher.js"),
+    `require("node:child_process").spawn(process.execPath, ["frontend.js"], { stdio: "inherit" });`
+  );
   const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  }));
+  const observer = await startDashboard(repository, () => ({
     completion: new Promise(() => {}),
     terminate() {}
   }));
@@ -1698,23 +1707,58 @@ test("dashboard starts, reuses and stops the profile-defined frontend", async ()
       method: "POST"
     });
     assert.equal(again.response.status, 409);
-
-    const stopped = await jsonRequest(url, "/api/frontend/stop", {
+    const conflict = await jsonRequest(observer.url, "/api/frontend/start", {
       method: "POST"
     });
-    assert.equal(stopped.body.stopped, true);
+    assert.equal(conflict.response.status, 409);
+    const ownerId = conflict.body.owner.id;
+
+    if (cleanup === "close") {
+      await dashboard.close();
+    } else {
+      const stopped = await jsonRequest(observer.url, "/api/sessions/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ownerId,
+          resource: "frontend",
+          action: "stop",
+          confirmed: true
+        })
+      });
+      assert.equal(stopped.response.status, 202);
+    }
+    let healthy = true;
     for (let attempt = 0; attempt < 50; attempt += 1) {
-      status = await jsonRequest(url, "/api/frontend/status");
-      if (!status.body.healthy) {
+      try {
+        const response = await fetch(`http://127.0.0.1:${port}`, {
+          signal: AbortSignal.timeout(1000)
+        });
+        await response.body?.cancel();
+      } catch (error) {
+        if (["ECONNRESET", "UND_ERR_SOCKET"].includes(error.cause?.code)) {
+          continue;
+        }
+        assert.equal(error.cause?.code, "ECONNREFUSED");
+        healthy = false;
         break;
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
-    assert.equal(status.body.healthy, false);
+    assert.equal(healthy, false);
   } finally {
     await dashboard.close();
+    await observer.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
+}
+
+test("dashboard starts, reuses and stops the profile-defined frontend", async () => {
+  await checkFrontendCleanup("stop");
+});
+
+test("dashboard shutdown stops the frontend process tree", async () => {
+  await checkFrontendCleanup("close");
 });
 
 test("dashboard does not restart a frontend that is already healthy", async () => {
@@ -1754,12 +1798,89 @@ test("dashboard does not restart a frontend that is already healthy", async () =
     assert.equal(result.body.started, false);
     assert.equal(result.body.healthy, true);
     assert.equal(result.body.owned, false);
+    const stopped = await jsonRequest(url, "/api/frontend/stop", {
+      method: "POST"
+    });
+    assert.equal(stopped.body.stopped, false);
+    assert.equal(stopped.body.healthy, true);
   } finally {
     await dashboard.close();
     await new Promise((resolve) => external.close(resolve));
     rmSync(repository, { recursive: true, force: true });
   }
 });
+
+for (const scenario of [
+  { environment: "local", prestartFrontend: true, warm: true },
+  { environment: "local", prestartFrontend: false, warm: false },
+  { environment: "dev", prestartFrontend: true, warm: false }
+]) {
+  test(`React warm-up is parallel and environment-bound (${scenario.environment}, ${scenario.prestartFrontend})`, async () => {
+    const repository = createRepository();
+    const port = await availablePort();
+    writeFileSync(
+      join(repository, ".github", "fixlab", "repository-profile.json"),
+      JSON.stringify(validProfile({
+        applications: {
+          frontend: {
+            command: "node frontend.js",
+            workingDirectory: ".",
+            port,
+            healthUrl: `http://127.0.0.1:${port}`
+          }
+        }
+      }))
+    );
+    writeFileSync(
+      join(repository, "frontend.js"),
+      `setTimeout(() => require("node:http").createServer((q, s) => s.end("ok")).listen(${port}, "127.0.0.1"), 500);`
+    );
+    let invocation;
+    const { dashboard, url } = await startDashboard(repository, (input) => {
+      invocation = input;
+      return { completion: new Promise(() => {}), terminate() {} };
+    });
+    try {
+      const result = await jsonRequest(url, "/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request: "Warm the local app while diagnosing.",
+          requestType: "bug-fix",
+          mode: "validate-only",
+          targetEnvironment: scenario.environment,
+          prestartFrontend: scenario.prestartFrontend
+        })
+      });
+      assert.equal(result.response.status, 202);
+      assert.ok(invocation, "the agent must start before React finishes compilation");
+      if (scenario.warm) {
+        assert.match(invocation.prompt, /healthy baseline server does not prove the fix/);
+        let healthy = false;
+        for (let attempt = 0; attempt < 80; attempt += 1) {
+          const status = await jsonRequest(url, "/api/frontend/status");
+          healthy = status.body.healthy;
+          if (healthy) {
+            break;
+          }
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        assert.equal(healthy, true);
+        const job = await jsonRequest(url, "/api/job");
+        assert.equal(job.body.job.status, "running");
+        assert.equal(job.body.job.stages["local-stack"].status, "pending");
+        assert.ok(job.body.job.logs.some((entry) => /warm-up started in parallel/.test(entry.message)));
+      } else {
+        const session = await jsonRequest(url, "/api/session");
+        assert.equal(session.body.frontend.running, false);
+        assert.doesNotMatch(invocation.prompt, /React warm-up is requested/);
+      }
+    } finally {
+      await dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
 
 test("zero exit with missing terminal markers fails as incomplete", async () => {
   const repository = createRepository();
@@ -3240,6 +3361,97 @@ test("dashboard shutdown terminates only its active executor handle", async () =
     await dashboard.close();
     assert.equal(terminated, 1);
   } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("same-repository session controls confirm the owner, stop and resume saved job context", async () => {
+  const repository = createGitRepository();
+  const calls = [];
+  let finish;
+  let stopped = 0;
+  const owner = await startDashboard(repository, (input) => {
+    calls.push(input);
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() {
+        stopped += 1;
+        finish({ code: null });
+      }
+    };
+  });
+  const other = await startDashboard(repository, () => {
+    throw new Error("the other dashboard must not start an agent");
+  });
+  const post = (url, path, body) => jsonRequest(url, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  try {
+    const job = await post(owner.url, "/api/jobs", {
+      request: "Retain this session context.",
+      requestType: "bug-fix",
+      mode: "validate-only"
+    });
+    const listed = await jsonRequest(other.url, "/api/sessions");
+    assert.equal(listed.body.sessions.length, 2);
+    const session = listed.body.sessions.find((entry) => entry.job?.running);
+    assert.equal(session.job.id, job.body.job.id);
+    assert.equal(session.url, owner.url);
+    const conflict = await post(other.url, "/api/jobs", {
+      request: "This must not start while another owner holds the repository.",
+      requestType: "bug-fix",
+      mode: "validate-only"
+    });
+    assert.equal(conflict.response.status, 409);
+    assert.equal(conflict.body.owner.id, session.id);
+    const control = {
+      ownerId: session.id,
+      jobId: session.job.id,
+      resource: "job",
+      action: "stop"
+    };
+    const unconfirmed = await post(other.url, "/api/sessions/control", control);
+    assert.equal(unconfirmed.response.status, 409);
+    assert.equal(stopped, 0);
+    const stale = await post(other.url, "/api/sessions/control", {
+      ...control, confirmed: true, jobId: randomUUID()
+    });
+    assert.equal(stale.response.status, 409);
+    assert.equal(stopped, 0);
+    const reconnect = await post(other.url, "/api/sessions/control", {
+      ...control, action: "resume"
+    });
+    assert.equal(reconnect.response.status, 202);
+    assert.equal(calls.length, 1);
+    const confirmed = await post(other.url, "/api/sessions/control", {
+      ...control, confirmed: true
+    });
+    assert.equal(confirmed.response.status, 202);
+    assert.equal(stopped, 1);
+    const blocked = await jsonRequest(owner.url, "/api/job");
+    assert.equal(blocked.body.job.status, "blocked");
+    assert.equal(blocked.body.job.canResume, true);
+    const resumed = await post(other.url, "/api/sessions/control", {
+      ...control, action: "resume"
+    });
+    assert.equal(resumed.response.status, 202);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].sessionId, calls[0].sessionId);
+    assert.equal(calls[1].resume, true);
+    const shutdown = await post(other.url, "/api/sessions/control", {
+      ...control, action: "shutdown", resource: "all", confirmed: true
+    });
+    assert.equal(shutdown.response.status, 202);
+    assert.equal(stopped, 2);
+    assert.equal((await jsonRequest(owner.url, "/api/status")).response.status, 200);
+    await owner.dashboard.close();
+    const remaining = await jsonRequest(other.url, "/api/sessions");
+    assert.equal(remaining.body.sessions.length, 1);
+  } finally {
+    await owner.dashboard.close();
+    await other.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });

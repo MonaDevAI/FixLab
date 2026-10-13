@@ -1,15 +1,24 @@
 import { expect, test } from "@playwright/test";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { createServer as createPortProbe } from "node:net";
 import { createDashboardServer } from "../dashboard/server.js";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 let repository;
 let dashboard;
 let baseUrl;
+
+async function availablePort() {
+  const probe = createPortProbe();
+  await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const port = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  return port;
+}
 
 function executor({ onOutput }) {
   onOutput(
@@ -116,17 +125,87 @@ test.beforeAll(async () => {
     executor,
     workItemLoader
   });
-  await new Promise((resolve, reject) => {
-    dashboard.server.once("error", reject);
-    dashboard.server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = dashboard.server.address();
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  baseUrl = (await dashboard.listen({ port: await availablePort() })).url;
 });
 
 test.afterAll(async () => {
   await dashboard.close();
   rmSync(repository, { recursive: true, force: true });
+});
+
+test("session controls reconnect, confirm another owner and resume its stopped job", async ({ page }) => {
+  const sessionRepository = mkdtempSync(join(tmpdir(), "fixlab-session-e2e-"));
+  const directory = join(sessionRepository, ".github", "fixlab");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    join(directory, "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json"))
+  );
+  let finish;
+  let stops = 0;
+  const calls = [];
+  const owner = createDashboardServer({
+    repository: sessionRepository,
+    packageRoot,
+    executor: (input) => {
+      calls.push(input);
+      return {
+        completion: new Promise((resolve) => { finish = resolve; }),
+        terminate() {
+          stops += 1;
+          finish({ code: null });
+        }
+      };
+    }
+  });
+  const observer = createDashboardServer({
+    repository: sessionRepository,
+    packageRoot,
+    executor: () => { throw new Error("only the owner can start the job"); }
+  });
+  try {
+    const ownerUrl = (await owner.listen({ port: await availablePort() })).url;
+    const observerUrl = (await observer.listen({ port: await availablePort() })).url;
+    const started = await fetch(`${ownerUrl}/api/jobs`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Resume this live session.",
+        requestType: "bug-fix",
+        mode: "validate-only"
+      })
+    });
+    expect(started.status).toBe(202);
+    const identity = await (await fetch(`${ownerUrl}/api/session`)).json();
+    await page.goto(observerUrl);
+    const row = page.locator("#sessions-list article").filter({ hasText: identity.id });
+    await expect(row).toContainText("Other FixLab dashboard");
+    await expect(row.getByRole("link", { name: "Reconnect to live dashboard" }))
+      .toHaveAttribute("href", ownerUrl);
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await row.getByRole("button", { name: "Stop agent", exact: true }).click();
+    expect(stops).toBe(0);
+    page.once("dialog", (dialog) => {
+      expect(dialog.message()).toContain(identity.id);
+      return dialog.accept();
+    });
+    await row.getByRole("button", { name: "Stop agent", exact: true }).click();
+    await expect(row).toContainText("(blocked)");
+    expect(stops).toBe(1);
+    await row.getByRole("button", { name: "Resume job", exact: true }).click();
+    await expect(row).toContainText("(running)");
+    expect(calls).toHaveLength(2);
+    expect(calls[1].sessionId).toBe(calls[0].sessionId);
+    expect(calls[1].resume).toBe(true);
+    page.once("dialog", (dialog) => dialog.accept());
+    await row.getByRole("button", { name: "Shutdown sessions", exact: true }).click();
+    await expect(row).toContainText("(blocked)");
+    expect(stops).toBe(2);
+  } finally {
+    await owner.close();
+    await observer.close();
+    rmSync(sessionRepository, { recursive: true, force: true });
+  }
 });
 
 test("dashboard exposes repository readiness through the running server", async ({

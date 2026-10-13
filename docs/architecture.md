@@ -63,6 +63,14 @@ Git directory so bug outcomes and pull-request readiness remain visible after
 a dashboard update or restart. It is not the durable, authenticated team broker
 described below.
 
+Same-repository dashboard instances publish private, temporary loopback
+ownership records and verify the random instance ID at the live endpoint
+before forwarding a session-control request. The session panel reconnects to
+live owners or resumes their saved job context; stop and shutdown require
+explicit owner confirmation. Shutdown leaves the HTTP dashboard available
+and stops only its tracked agent, frontend and authentication processes.
+Conflicting reachable owners are reported rather than automatically killed.
+
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
 require evidence-backed diagnosis and reproduction. Small enhancements use a
 risk-scaled fast path: a concise acceptance contract, affected-surface and
