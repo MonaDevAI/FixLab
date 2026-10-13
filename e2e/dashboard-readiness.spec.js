@@ -661,6 +661,71 @@ test("dashboard explains how to resume a failed job and release the queue", asyn
   );
 });
 
+test("dashboard resumes a failed job without requiring extra details", async ({
+  page
+}) => {
+  let submittedInput;
+  const failedJob = {
+    id: "failed-job",
+    status: "failed",
+    request: "Resume this interrupted validation.",
+    requestType: "bug-fix",
+    mode: "fix-and-validate",
+    error: "The executor exceeded its output idle timeout.",
+    stages: {},
+    bugs: [],
+    logs: [],
+    canResume: true,
+    canComment: false,
+    inputCount: 0,
+    pendingInputCount: 0
+  };
+  await page.route("**/api/status", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        readiness: {
+          repository: "C:\\repo",
+          repositoryReady: true,
+          profileReady: true,
+          profileName: "One-click resume",
+          error: null
+        },
+        job: failedJob,
+        queue: [],
+        history: []
+      })
+    });
+  });
+  await page.route("**/api/job/input", async (route) => {
+    submittedInput = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      contentType: "application/json",
+      body: JSON.stringify({
+        job: {
+          ...failedJob,
+          status: "running",
+          error: null,
+          canResume: false,
+          canComment: true,
+          inputCount: 1
+        },
+        queue: []
+      })
+    });
+  });
+
+  await page.goto(baseUrl);
+  await page.getByRole("button", { name: "Resume FixLab" }).click();
+
+  await expect.poll(() => submittedInput?.action).toBe("continue");
+  expect(submittedInput.details).toContain("retained workflow state");
+  await expect(page.locator("#job-input-message")).toContainText(
+    "resumed the same session"
+  );
+});
+
 test("dashboard retries a blocked Playwright gate without shell input", async ({
   page
 }) => {
