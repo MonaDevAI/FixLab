@@ -61,6 +61,12 @@ retryLiveTestButton.id = "retry-live-test";
 retryLiveTestButton.type = "button";
 retryLiveTestButton.textContent = "Retry Playwright live test";
 retryLiveTestButton.hidden = true;
+const connectRetryLiveTestButton = document.createElement("button");
+connectRetryLiveTestButton.id = "connect-and-retry-live-test";
+connectRetryLiveTestButton.type = "button";
+connectRetryLiveTestButton.textContent =
+  "Connect Playwright, then retry live test";
+connectRetryLiveTestButton.hidden = true;
 const skipLiveTestButton = document.createElement("button");
 skipLiveTestButton.id = "skip-live-test";
 skipLiveTestButton.type = "button";
@@ -105,6 +111,7 @@ jobInputSubmit.before(
   passManualLocalhostButton,
   failManualLocalhostButton,
   retryLiveTestButton,
+  connectRetryLiveTestButton,
   skipLiveTestButton,
   approvePullRequestButton,
   dismissFailedJobButton,
@@ -154,6 +161,7 @@ let loadedWorkItems = [];
 let selectedScreenshots = [];
 let activeJob = null;
 let selectedJobId = null;
+let pendingRetryAfterConnectJobId = null;
 const observedJobs = new Map();
 const expandedJobIds = new Set();
 let renderedEvidenceJobId = null;
@@ -466,6 +474,9 @@ function renderJob(job, currentActiveJob = job) {
   failManualLocalhostButton.disabled = !canConfirmManualLocalhost;
   retryLiveTestButton.hidden = !canRetryLiveTest;
   retryLiveTestButton.disabled = !canRetryLiveTest;
+  connectRetryLiveTestButton.hidden = !canRetryLiveTest;
+  connectRetryLiveTestButton.disabled =
+    !canRetryLiveTest || Boolean(pendingRetryAfterConnectJobId);
   skipLiveTestButton.hidden = !canRetryLiveTest;
   skipLiveTestButton.disabled = !canRetryLiveTest;
   approvePullRequestButton.hidden = !canApprovePullRequest;
@@ -499,7 +510,7 @@ function renderJob(job, currentActiveJob = job) {
               job?.stages?.["live-test"]?.status === "blocked"
             ? `The React app is running at ${job.manualLocalhostUrl || "the profile-defined localhost URL"}. Validate it in the browser, then confirm Passed or Failed before FixLab closes the job.`
           : job?.stages?.["live-test"]?.status === "blocked"
-          ? "The browser gate could not finish. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
+          ? "The browser gate could not finish. If authentication is needed, choose Connect Playwright, then retry: sign in in the Edge window and FixLab retries automatically. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
           : "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
     } else if (job.status === "failed") {
       jobInputTitle.textContent = "Retry or correct this job";
@@ -531,6 +542,7 @@ function renderPlaywrightStatus(status) {
         ? "Not connected"
         : "Not configured";
   playwrightConnect.disabled = status.running || !status.configured;
+  void resumeAfterConnect(status);
   const pathSummary = status.paths
     .map((entry) => `${entry.ready ? "ready" : "missing"}: ${entry.path}`)
     .join(" · ");
@@ -539,6 +551,25 @@ function renderPlaywrightStatus(status) {
     status.lastResult?.message ||
     pathSummary ||
     "Add browserAutomation.authentication to the repository profile.";
+}
+
+async function resumeAfterConnect(status) {
+  if (!pendingRetryAfterConnectJobId || status.running) {
+    return;
+  }
+  const jobId = pendingRetryAfterConnectJobId;
+  const result = status.lastResult;
+  if (!result) {
+    return;
+  }
+  pendingRetryAfterConnectJobId = null;
+  if (!result.ok) {
+    formError.textContent = `${result.message} The live test was not retried.`;
+    return;
+  }
+  if (activeJob?.id === jobId && activeJob.status === "blocked") {
+    await retryLiveTest();
+  }
 }
 
 async function refreshPlaywrightStatus() {
@@ -1306,7 +1337,7 @@ failManualLocalhostButton.addEventListener("click", () =>
   submitManualLocalhostResult(false)
 );
 
-retryLiveTestButton.addEventListener("click", async () => {
+async function retryLiveTest() {
   jobInputMessage.textContent = "";
   formError.textContent = "";
   retryLiveTestButton.disabled = true;
@@ -1329,6 +1360,27 @@ retryLiveTestButton.addEventListener("click", async () => {
   } catch (error) {
     formError.textContent = error.message;
     retryLiveTestButton.disabled = false;
+  }
+}
+
+retryLiveTestButton.addEventListener("click", retryLiveTest);
+
+connectRetryLiveTestButton.addEventListener("click", async () => {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  connectRetryLiveTestButton.disabled = true;
+  try {
+    pendingRetryAfterConnectJobId = activeJob?.id ?? null;
+    renderPlaywrightStatus(
+      await fetchJson("/api/playwright/connect", { method: "POST" })
+    );
+    jobInputMessage.textContent =
+      "Sign in in the Edge window that opened. FixLab retries the live test automatically when authentication completes.";
+  } catch (error) {
+    pendingRetryAfterConnectJobId = null;
+    formError.textContent = error.message;
+    connectRetryLiveTestButton.disabled = false;
+    await refreshPlaywrightStatus();
   }
 });
 
