@@ -70,6 +70,12 @@ retryLiveTestButton.id = "retry-live-test";
 retryLiveTestButton.type = "button";
 retryLiveTestButton.textContent = "Retry Playwright live test";
 retryLiveTestButton.hidden = true;
+const connectRetryLiveTestButton = document.createElement("button");
+connectRetryLiveTestButton.id = "connect-and-retry-live-test";
+connectRetryLiveTestButton.type = "button";
+connectRetryLiveTestButton.textContent =
+  "Connect Playwright, then retry live test";
+connectRetryLiveTestButton.hidden = true;
 const skipLiveTestButton = document.createElement("button");
 skipLiveTestButton.id = "skip-live-test";
 skipLiveTestButton.type = "button";
@@ -114,6 +120,7 @@ jobInputSubmit.before(
   passManualLocalhostButton,
   failManualLocalhostButton,
   retryLiveTestButton,
+  connectRetryLiveTestButton,
   skipLiveTestButton,
   approvePullRequestButton,
   dismissFailedJobButton,
@@ -123,6 +130,10 @@ const playwrightStatus = document.querySelector("#playwright-status");
 const playwrightGuidance = document.querySelector("#playwright-guidance");
 const playwrightCheck = document.querySelector("#playwright-check");
 const playwrightConnect = document.querySelector("#playwright-connect");
+const frontendStatusBadge = document.querySelector("#frontend-status");
+const frontendGuidance = document.querySelector("#frontend-guidance");
+const frontendStart = document.querySelector("#frontend-start");
+const frontendStop = document.querySelector("#frontend-stop");
 const onboardingStatus = document.querySelector("#onboarding-status");
 const onboardingOrganization = document.querySelector(
   "#onboarding-organization"
@@ -163,6 +174,7 @@ let loadedWorkItems = [];
 let selectedScreenshots = [];
 let activeJob = null;
 let selectedJobId = null;
+let pendingRetryAfterConnectJobId = null;
 const observedJobs = new Map();
 const expandedJobIds = new Set();
 let renderedEvidenceJobId = null;
@@ -451,7 +463,11 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
   const canDismissFailedJob =
-    canResume && job?.status === "failed";
+    canResume && ["failed", "blocked"].includes(job?.status);
+  dismissFailedJobButton.textContent =
+    job?.status === "blocked"
+      ? "Dismiss blocked job and continue queue"
+      : "Dismiss failed job and continue queue";
   const canCancelQueuedJob =
     !isActive && job?.status === "queued";
   const canHoldJob =
@@ -486,6 +502,9 @@ function renderJob(job, currentActiveJob = job) {
   failManualLocalhostButton.disabled = !canConfirmManualLocalhost;
   retryLiveTestButton.hidden = !canRetryLiveTest;
   retryLiveTestButton.disabled = !canRetryLiveTest;
+  connectRetryLiveTestButton.hidden = !canRetryLiveTest;
+  connectRetryLiveTestButton.disabled =
+    !canRetryLiveTest || Boolean(pendingRetryAfterConnectJobId);
   skipLiveTestButton.hidden = !canRetryLiveTest;
   skipLiveTestButton.disabled = !canRetryLiveTest;
   approvePullRequestButton.hidden = !canApprovePullRequest;
@@ -519,7 +538,7 @@ function renderJob(job, currentActiveJob = job) {
               job?.stages?.["live-test"]?.status === "blocked"
             ? `The React app is running at ${job.manualLocalhostUrl || "the profile-defined localhost URL"}. Validate it in the browser, then confirm Passed or Failed before FixLab closes the job.`
           : job?.stages?.["live-test"]?.status === "blocked"
-          ? "The browser gate could not finish. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
+          ? "The browser gate could not finish. If authentication is needed, choose Connect Playwright, then retry: sign in in the Edge window and FixLab retries automatically. Retry reuses saved authentication and runs only Playwright; Skip records the missing browser evidence and continues under repository PR policy."
           : "Provide the missing authentication, safe data, approval, or manual result, then resume the same FixLab session.";
     } else if (job.status === "failed") {
       jobInputTitle.textContent = "Retry or correct this job";
@@ -551,6 +570,7 @@ function renderPlaywrightStatus(status) {
         ? "Not connected"
         : "Not configured";
   playwrightConnect.disabled = status.running || !status.configured;
+  void resumeAfterConnect(status);
   const pathSummary = status.paths
     .map((entry) => `${entry.ready ? "ready" : "missing"}: ${entry.path}`)
     .join(" · ");
@@ -560,6 +580,83 @@ function renderPlaywrightStatus(status) {
     pathSummary ||
     "Add browserAutomation.authentication to the repository profile.";
 }
+
+async function resumeAfterConnect(status) {
+  if (!pendingRetryAfterConnectJobId || status.running) {
+    return;
+  }
+  const jobId = pendingRetryAfterConnectJobId;
+  const result = status.lastResult;
+  if (!result) {
+    return;
+  }
+  pendingRetryAfterConnectJobId = null;
+  if (!result.ok) {
+    formError.textContent = `${result.message} The live test was not retried.`;
+    return;
+  }
+  if (activeJob?.id === jobId && activeJob.status === "blocked") {
+    await retryLiveTest();
+  }
+}
+
+function renderFrontendStatus(status) {
+  frontendStatusBadge.textContent = !status.configured
+    ? "Not configured"
+    : status.healthy
+      ? "Ready"
+      : status.running
+        ? "Starting…"
+        : "Stopped";
+  frontendStart.disabled =
+    !status.configured || status.running || status.healthy;
+  frontendStop.disabled = !status.running;
+  frontendGuidance.textContent = status.error
+    ? status.error
+    : status.healthy
+      ? `React is answering at ${status.healthUrl}. Playwright authentication and live tests reuse it.`
+      : status.running
+        ? "React is compiling. The first start can take several minutes; this updates automatically."
+        : status.lastResult && !status.lastResult.ok
+          ? status.lastResult.message
+          : "Start the profile-defined React frontend ahead of time so Playwright authentication and live tests reuse it instead of waiting for a cold compile.";
+}
+
+async function refreshFrontendStatus() {
+  try {
+    renderFrontendStatus(await fetchJson("/api/frontend/status"));
+  } catch (error) {
+    frontendGuidance.textContent = error.message;
+  }
+}
+
+async function startFrontend() {
+  try {
+    renderFrontendStatus(
+      await fetchJson("/api/frontend/start", { method: "POST" })
+    );
+  } catch {
+    await refreshFrontendStatus();
+  }
+}
+
+frontendStart.addEventListener("click", () => {
+  formError.textContent = "";
+  frontendStart.disabled = true;
+  void startFrontend();
+});
+
+frontendStop.addEventListener("click", async () => {
+  frontendStop.disabled = true;
+  try {
+    renderFrontendStatus(
+      await fetchJson("/api/frontend/stop", { method: "POST" })
+    );
+  } catch (error) {
+    formError.textContent = error.message;
+    await refreshFrontendStatus();
+  }
+});
 
 async function refreshPlaywrightStatus() {
   try {
@@ -1395,7 +1492,7 @@ dismissFailedJobButton.addEventListener("click", async () => {
   formError.textContent = "";
   if (
     !window.confirm(
-      "Dismiss this failed job? It will remain failed in dashboard history, its session will not resume, and the next queued job will start."
+      `Dismiss this ${activeJob?.status === "blocked" ? "blocked" : "failed"} job? It will remain ${activeJob?.status === "blocked" ? "blocked" : "failed"} in dashboard history, its session will not resume, and the next queued job will start.`
     )
   ) {
     return;
@@ -1406,8 +1503,8 @@ dismissFailedJobButton.addEventListener("click", async () => {
       method: "POST"
     });
     jobInputMessage.textContent = body.job
-      ? "Failed job dismissed. The next queued job has started."
-      : "Failed job dismissed. The queue is empty.";
+      ? "Job dismissed. The next queued job has started."
+      : "Job dismissed. The queue is empty.";
     if (body.dismissedJob) {
       rememberJob(body.dismissedJob);
     }
@@ -1474,7 +1571,7 @@ failManualLocalhostButton.addEventListener("click", () =>
   submitManualLocalhostResult(false)
 );
 
-retryLiveTestButton.addEventListener("click", async () => {
+async function retryLiveTest() {
   jobInputMessage.textContent = "";
   formError.textContent = "";
   retryLiveTestButton.disabled = true;
@@ -1497,6 +1594,28 @@ retryLiveTestButton.addEventListener("click", async () => {
   } catch (error) {
     formError.textContent = error.message;
     retryLiveTestButton.disabled = false;
+  }
+}
+
+retryLiveTestButton.addEventListener("click", retryLiveTest);
+
+connectRetryLiveTestButton.addEventListener("click", async () => {
+  jobInputMessage.textContent = "";
+  formError.textContent = "";
+  connectRetryLiveTestButton.disabled = true;
+  try {
+    pendingRetryAfterConnectJobId = activeJob?.id ?? null;
+    await startFrontend();
+    renderPlaywrightStatus(
+      await fetchJson("/api/playwright/connect", { method: "POST" })
+    );
+    jobInputMessage.textContent =
+      "Sign in in the Edge window that opened. FixLab retries the live test automatically when authentication completes.";
+  } catch (error) {
+    pendingRetryAfterConnectJobId = null;
+    formError.textContent = error.message;
+    connectRetryLiveTestButton.disabled = false;
+    await refreshPlaywrightStatus();
   }
 });
 
@@ -1563,6 +1682,7 @@ playwrightConnect.addEventListener("click", async () => {
   formError.textContent = "";
   playwrightConnect.disabled = true;
   try {
+    await startFrontend();
     renderPlaywrightStatus(
       await fetchJson("/api/playwright/connect", { method: "POST" })
     );
@@ -1602,9 +1722,11 @@ onboardingSave.addEventListener("click", async () => {
 refresh();
 refreshMetrics();
 refreshPlaywrightStatus();
+refreshFrontendStatus();
 refreshPlaywrightEvidence();
 refreshOnboarding();
 setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);
+setInterval(refreshFrontendStatus, 5000);
 setInterval(refreshPlaywrightEvidence, 10000);

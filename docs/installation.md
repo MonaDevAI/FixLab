@@ -433,9 +433,18 @@ repository owner's supported credential provider, then rerun preparation.
 FixLab does not create, copy, or persist private-feed credentials.
 
 For a long local batch, run `/keep-alive` in GitHub Copilot CLI before starting
-the job. Locking the screen does not stop ordinary commands, but system sleep,
-hibernation, process termination, and network loss can interrupt a local
-runner. Browser interactions may still require an unlocked desktop.
+the job, or start a bounded FixLab timer:
+
+```powershell
+fixlab keep-awake --minutes 180
+fixlab dashboard C:\source\application --keep-awake-minutes 180
+```
+
+The FixLab timer prevents system sleep without changing permanent power-plan
+settings and releases when the duration ends or the owning process stops.
+Locking the screen does not stop ordinary commands, but hibernation, process
+termination, and network loss can interrupt a local runner. Interactive browser
+or authentication steps may still require an unlocked desktop.
 
 The repository profile controls the Playwright check:
 

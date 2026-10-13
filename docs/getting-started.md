@@ -53,9 +53,9 @@ language for bugs.
 For a UI bug:
 
 ```text
-The Product Hierarchy Excel template is missing the PFAM formatting. Reproduce
-the issue in the React UI, make the smallest fix, run focused tests and
-type-check/build, start the required local applications, validate with
+The exported inventory spreadsheet is missing the configured date formatting.
+Reproduce the issue in the React UI, make the smallest fix, run focused tests
+and type-check/build, start the required local applications, validate with
 Playwright, capture evidence, and create or update the PR.
 ```
 
@@ -158,6 +158,29 @@ fixlab dashboard --runtime copilot
 
 The same selection can be made with `FIXLAB_RUNTIME=copilot`.
 
+For verbose local validation, execute the repository-owned command through the
+structured evidence boundary:
+
+```powershell
+fixlab exec --stage validation -- npm test
+fixlab exec --stage build --reuse -- dotnet build .\src\Application.csproj
+fixlab exec --cwd .\frontend --stage typecheck --reuse -- npm run type-check
+```
+
+The terminal receives a compact pass/fail summary, unique diagnostics, test
+counts, duration, and a private evidence path instead of the complete command
+stream. Its `Context:` line shows raw versus retained lines, bytes, estimated
+tokens, omitted lines, and reduction percentage. Open the private
+`result.json` and inspect its `context` object to compare those measurements
+across runs. Estimated tokens use `bytes / 4`; they show relative context
+reduction, not exact provider billing. The child command's exit code is
+preserved. `--reuse` skips a prior
+successful deterministic validation only when its command, arguments, stage,
+working directory, Git `HEAD`, tracked and untracked content, worktree status,
+and FixLab profile are
+identical. Omit it for startup, health, authentication, browser, environment,
+installation, deployment, and mutating commands.
+
 To enable the dashboard authentication controls, define the repository-owned
 login command and the local files or directories that prove the session is
 ready:
@@ -198,8 +221,22 @@ profile. **Connect Playwright** runs only the configured local command.
 **Check status** reports whether every configured path exists without reading
 or returning its contents.
 
+When a job is blocked at live-test, **Connect Playwright, then retry live test**
+runs the same configured command, waits for you to sign in, and retries the
+live test automatically only after the command exits successfully. Sign-in
+always stays with you; FixLab never handles credentials.
+
+The **React frontend** panel starts the profile's `applications.frontend.command`
+in `applications.frontend.workingDirectory` ahead of time and watches
+`healthUrl`. Connect Playwright starts it automatically, so authentication and
+live tests reuse a warm server instead of waiting for a cold compile. FixLab
+stops only the process it started, when you click **Stop React** or the
+dashboard exits, and never touches a server that was already running. A
+Playwright config that sets `reuseExistingServer` picks up the running server.
+
 The dashboard remains **Not ready** until the profile also includes a frontend
-startup command, loopback health URL, Playwright test command, explicit
+
+The dashboard remains **Not ready** until the profile also includes a frontend **Not ready** until the profile also includes a frontendstartup command, loopback health URL, Playwright test command, explicit
 authentication requirement, and a production-excluding data-safety policy.
 
 With `testSynthesis` enabled, FixLab converts the reported behavior into the
@@ -268,8 +305,8 @@ owned process running, and pauses before completion. Confirm **Passed** or
 **Failed** in the same dashboard job to stop the frontend and continue.
 
 Set `pullRequests.branchNaming.userId` during onboarding. With
-`"prefixTemplate": "users/{userId}"`, a configured user ID of `mobiswal`
-produces branches beneath `users/mobiswal/`.
+`"prefixTemplate": "users/{userId}"`, a configured user ID of `developer`
+produces branches beneath `users/developer/`.
 
 The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
 IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,

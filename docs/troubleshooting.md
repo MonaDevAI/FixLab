@@ -3,6 +3,44 @@
 Run FixLab commands from the root of the local application repository unless a
 command explicitly accepts another path.
 
+## Structured command output or reuse is unexpected
+
+Run the command after `--`; use `--cwd` only for a directory inside the
+repository:
+
+```powershell
+fixlab exec --cwd .\frontend --stage test -- npm test
+```
+
+In Windows PowerShell an unquoted `--` is dropped, so `fixlab exec` prints its
+usage text instead of running. Quote the separator (`'--'`). Do not wrap the
+command in `cmd /c`: the wrapper is denied when no interactive user can approve
+it, which blocks the job.
+
+```powershell
+fixlab exec --cwd .\frontend --stage test '--' npm test
+```
+
+The `Evidence:` path is Git-private and contains redacted `stdout.log`,
+`stderr.log`, and `result.json`. A missing stream file means that stream was
+empty. The terminal `Context:` line and `result.json.context` report raw and
+structured lines, bytes, estimated tokens, omitted lines, and reduction
+percentage. These estimates measure command-output reduction only; they do not
+represent the complete session context or provider billing. `--reuse` applies
+only to supported deterministic validation commands.
+If it reports that reuse was ignored, run normally or select an eligible local
+test, build, lint, type-check, or validation command.
+
+A cache miss is expected after any command, argument, stage, working-directory,
+Git `HEAD`, tracked/untracked worktree, or FixLab-profile change. Timeouts
+return exit code 124 after terminating the child; increase
+`--timeout-seconds` only when the repository-owned command legitimately needs
+more time; values above 2,147,483 seconds are rejected. On Windows, `.cmd` and
+`.bat` wrapper arguments containing shell metacharacters are rejected instead
+of being interpreted or silently changed. Invoke the underlying executable
+directly when such an argument is required. Never use reuse for live or
+external checks.
+
 ## `fixlab` is not recognized
 
 Verify the global npm prefix and command:
@@ -210,6 +248,22 @@ dashboard or an autonomous job:
 ```powershell
 fixlab doctor --runtime agency
 ```
+
+The package-manager probe waits 30 seconds by default. On a slow machine or a
+large repository, raise the limit (1,000 to 600,000 ms) for the current shell:
+
+```powershell
+$env:FIXLAB_DOCTOR_TIMEOUT_MS = "90000"
+fixlab doctor
+```
+
+## A job is rejected with "Preflight failed"
+
+Before queuing a job, the dashboard checks that the tools named in the
+repository profile's restore and startup commands (`npm`, `pnpm`, `yarn`,
+`dotnet`) are on `PATH`. The check is offline. It does not contact the
+application, DEV, or any maintenance window. Install the missing tool, open a
+new shell, and restart the dashboard from that shell.
 
 Do not bypass missing authentication, production exclusions, private-feed
 access, browser launch, or repository-profile safety requirements.

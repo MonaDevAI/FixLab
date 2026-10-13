@@ -6,12 +6,15 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, parse } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
 import test from "node:test";
 import {
@@ -27,6 +30,7 @@ import {
   createProcessCompletion,
   FIXLAB_STAGES,
   inspectRepository,
+  linkedDependencyDirectories,
   MAX_JOB_ACTIVITY_ENTRIES,
   MAX_CACHE_BYTES,
   MAX_CACHE_ENTRIES,
@@ -38,6 +42,60 @@ const packageRoot = new URL("..", import.meta.url).pathname.replace(
   /^\/([A-Za-z]:)/,
   "$1"
 );
+
+test("linked node_modules directories are granted only inside trusted dependency roots", () => {
+  const base = mkdtempSync(join(tmpdir(), "fixlab-linked-"));
+  try {
+    const repository = join(base, "repo");
+    const trusted = join(base, "trusted");
+    const external = join(trusted, "web", "node_modules");
+    const untrusted = join(base, "untrusted", "node_modules");
+    mkdirSync(join(repository, "apps", "web"), { recursive: true });
+    mkdirSync(join(repository, "tools"), { recursive: true });
+    mkdirSync(external, { recursive: true });
+    mkdirSync(untrusted, { recursive: true });
+    symlinkSync(
+      external,
+      join(repository, "apps", "web", "node_modules"),
+      "junction"
+    );
+    symlinkSync(untrusted, join(repository, "tools", "node_modules"), "junction");
+
+    const writeProfile = (trustedDependencyRoots) => {
+      const directory = join(repository, ".github", "fixlab");
+      mkdirSync(directory, { recursive: true });
+      const profile = validProfile({ trustedDependencyRoots });
+      profile.browserAutomation.workingDirectory = "apps/web";
+      profile.applications.frontend.workingDirectory = "apps/web";
+      profile.applications.tools = { workingDirectory: "tools" };
+      writeFileSync(
+        join(directory, "repository-profile.json"),
+        JSON.stringify(profile)
+      );
+    };
+
+    writeProfile(undefined);
+    assert.deepEqual(linkedDependencyDirectories(repository), []);
+
+    writeProfile([parse(base).root]);
+    assert.deepEqual(linkedDependencyDirectories(repository), []);
+
+    writeProfile([trusted]);
+    const directories = linkedDependencyDirectories(repository);
+    assert.deepEqual(directories, [realpathSync(external)]);
+
+    const invocation = buildCopilotInvocation({
+      packageRoot: "C:\\FixLab",
+      prompt: "x",
+      sessionId: "11111111-1111-4111-8111-111111111111",
+      additionalDirs: directories
+    });
+    const index = invocation.args.indexOf("--add-dir");
+    assert.equal(invocation.args[index + 1], realpathSync(external));
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
 
 test("Agency executor keeps long prompts out of process arguments", () => {
   const prompt = `Fix this batch:\n${"x".repeat(40000)}`;
@@ -482,6 +540,38 @@ test("dashboard reports readiness and serves only known static assets", async ()
   }
 });
 
+test("dashboard rejects a job when preflight finds a missing tool", async () => {
+  const repository = createRepository();
+  const { dashboard, url } = await startDashboard(
+    repository,
+    () => {
+      throw new Error("executor should not run");
+    },
+    undefined,
+    {
+      preflight: () => [{ check: "npm on PATH", detail: "npm was not found" }]
+    }
+  );
+
+  try {
+    const result = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        request: "Fix the defect.",
+        requestType: "bug-fix",
+        mode: "fix-and-validate"
+      })
+    });
+    assert.equal(result.response.status, 400);
+    assert.match(result.body.error, /Preflight failed: npm on PATH/);
+    assert.equal(result.body.preflight.length, 1);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("loads Azure DevOps intake and passes local screenshots without caching them", async () => {
   const repository = createGitRepository();
   const profilePath = join(
@@ -529,8 +619,10 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
   };
   let loaderInput;
   let receivedPrompt;
-  const executor = ({ prompt, onOutput }) => {
+  let receivedArtifactDirectories;
+  const executor = ({ prompt, artifactDirectories, onOutput }) => {
     receivedPrompt = prompt;
+    receivedArtifactDirectories = artifactDirectories;
     onOutput(
       "stdout",
       "FIXLAB_BUG|71|external|upstream-system|The upstream system owns the rejected request; no repository change is required.\n"
@@ -601,6 +693,7 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     screenshotPath = pathLine?.slice(2);
     assert.ok(screenshotPath);
     assert.equal(existsSync(screenshotPath), true);
+    assert.deepEqual(receivedArtifactDirectories, [dirname(screenshotPath)]);
     assert.match(receivedPrompt, /Loaded Azure DevOps selection/);
     assert.match(
       receivedPrompt,
@@ -1078,6 +1171,9 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     assert.match(receivedPrompt, /reinstall available dependencies/i);
     assert.match(receivedPrompt, /commit changes and repository-profile or instruction changes as invalidation boundaries/i);
     assert.match(receivedPrompt, /do not feed unbounded raw output back into prompts/i);
+    assert.match(receivedPrompt, /fixlab exec --stage <stage>/i);
+    assert.match(receivedPrompt, /never wrap `fixlab exec` in `cmd \/c`/u);
+    assert.match(receivedPrompt, /Never reuse startup, health, authentication/i);
     assert.match(receivedPrompt, /FIXLAB_STAGE\|stage\|status\|message/);
     assert.match(receivedPrompt, /FIXLAB_BUG\|id\|outcome\|owner\|summary/);
     assert.match(receivedPrompt, /Never generate markers through shell/);
@@ -1545,6 +1641,122 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.match(receivedPrompt, /Save the recording as WebM or MP4/);
   } finally {
     await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard starts, reuses and stops the profile-defined frontend", async () => {
+  const repository = createRepository();
+  const port = await availablePort();
+  writeFileSync(
+    join(repository, ".github", "fixlab", "repository-profile.json"),
+    JSON.stringify(
+      validProfile({
+        applications: {
+          frontend: {
+            workingDirectory: ".",
+            command: "node frontend.js",
+            port,
+            healthUrl: `http://127.0.0.1:${port}`
+          }
+        }
+      })
+    )
+  );
+  writeFileSync(
+    join(repository, "frontend.js"),
+    `require("node:http").createServer((q, s) => s.end("ok")).listen(${port}, "127.0.0.1");`
+  );
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  }));
+
+  try {
+    const initial = await jsonRequest(url, "/api/frontend/status");
+    assert.equal(initial.body.configured, true);
+    assert.equal(initial.body.healthy, false);
+
+    const started = await jsonRequest(url, "/api/frontend/start", {
+      method: "POST"
+    });
+    assert.equal(started.response.status, 202);
+    assert.equal(started.body.started, true);
+
+    let status;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      status = await jsonRequest(url, "/api/frontend/status");
+      if (status.body.healthy) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(status.body.healthy, true);
+    assert.equal(status.body.owned, true);
+
+    const again = await jsonRequest(url, "/api/frontend/start", {
+      method: "POST"
+    });
+    assert.equal(again.response.status, 409);
+
+    const stopped = await jsonRequest(url, "/api/frontend/stop", {
+      method: "POST"
+    });
+    assert.equal(stopped.body.stopped, true);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      status = await jsonRequest(url, "/api/frontend/status");
+      if (!status.body.healthy) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(status.body.healthy, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard does not restart a frontend that is already healthy", async () => {
+  const repository = createRepository();
+  const port = await availablePort();
+  writeFileSync(
+    join(repository, ".github", "fixlab", "repository-profile.json"),
+    JSON.stringify(
+      validProfile({
+        applications: {
+          frontend: {
+            workingDirectory: ".",
+            command: "node does-not-exist.js",
+            port,
+            healthUrl: `http://127.0.0.1:${port}`
+          }
+        }
+      })
+    )
+  );
+  const external = await new Promise((resolve) => {
+    const instance = createHttpServer((request, response) =>
+      response.end("ok")
+    );
+    instance.listen(port, "127.0.0.1", () => resolve(instance));
+  });
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  }));
+
+  try {
+    const result = await jsonRequest(url, "/api/frontend/start", {
+      method: "POST"
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.started, false);
+    assert.equal(result.body.healthy, true);
+    assert.equal(result.body.owned, false);
+  } finally {
+    await dashboard.close();
+    await new Promise((resolve) => external.close(resolve));
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -2248,6 +2460,58 @@ test("dashboard persists privacy-safe token and duration metrics", async () => {
   }
 
   rmSync(repository, { recursive: true, force: true });
+});
+
+test("dashboard dismisses a blocked job and continues the queue", async () => {
+  const repository = createGitRepository();
+  let executorCalls = 0;
+  const executor = ({ onOutput }) => {
+    executorCalls += 1;
+    if (executorCalls === 1) {
+      for (const stage of FIXLAB_STAGES.slice(0, -1)) {
+        onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|completed\n`);
+      }
+      onOutput(
+        "stdout",
+        "FIXLAB_STAGE|pr|blocked|Approval is required before creating the pull request.\n"
+      );
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+
+  try {
+    const post = (request) =>
+      jsonRequest(url, "/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request,
+          requestType: "bug-fix",
+          mode: "validate-only"
+        })
+      });
+    await post("This job ends blocked.");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal((await jsonRequest(url, "/api/job")).body.job.status, "blocked");
+
+    const queued = await post("This job waits behind the blocked one.");
+    assert.equal(queued.body.queued, true);
+
+    const dismissed = await jsonRequest(url, "/api/job/dismiss", {
+      method: "POST"
+    });
+    assert.equal(dismissed.response.status, 202, JSON.stringify(dismissed.body));
+    assert.equal(dismissed.body.dismissedJob.status, "blocked");
+    assert.equal(dismissed.body.job.request, "This job waits behind the blocked one.");
+    assert.equal(dismissed.body.job.status, "running");
+    assert.equal(dismissed.body.history[0].status, "blocked");
+    assert.equal(executorCalls, 2);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
 });
 
 test("dashboard restores private job summaries and PR readiness after restart", async () => {
@@ -3052,7 +3316,7 @@ test("terminal chat confirms and switches the connected repository", async () =>
     const alternate = url.startsWith("http://127.0.0.1:4318");
     return new Response(JSON.stringify({
       readiness: {
-        repository: alternate ? "C:\\repos\\admin-ui" : "C:\\repos\\fmdm",
+        repository: alternate ? "C:\\repos\\admin-ui" : "C:\\repos\\storefront",
         repositoryReady: true,
         profileReady: true
       },
@@ -3071,7 +3335,7 @@ test("terminal chat confirms and switches the connected repository", async () =>
     fetchImpl,
     pollIntervalMs: 10000,
     selectRepository: async ({ readiness }) => {
-      assert.equal(readiness.repository, "C:\\repos\\fmdm");
+      assert.equal(readiness.repository, "C:\\repos\\storefront");
       return "http://127.0.0.1:4318";
     }
   });
@@ -3145,7 +3409,7 @@ test("terminal chat opens the dashboard from natural language", async () => {
   const fetchImpl = async () =>
     new Response(JSON.stringify({
       readiness: {
-        repository: "C:\\repos\\fmdm",
+        repository: "C:\\repos\\storefront",
         repositoryReady: true,
         profileReady: true
       },
@@ -3190,7 +3454,7 @@ test("terminal chat creates a separate bug job from natural language", async () 
     if (url.endsWith("/api/status")) {
       return new Response(JSON.stringify({
         readiness: {
-          repository: "C:\\repos\\fmdm",
+          repository: "C:\\repos\\storefront",
           repositoryReady: true,
           profileReady: true
         },
@@ -3263,7 +3527,7 @@ test("terminal chat cancels a waiting job by queue position", async () => {
     if (url.endsWith("/api/status")) {
       return new Response(JSON.stringify({
         readiness: {
-          repository: "C:\\repos\\fmdm",
+          repository: "C:\\repos\\storefront",
           repositoryReady: true,
           profileReady: true
         },

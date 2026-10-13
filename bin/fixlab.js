@@ -21,11 +21,20 @@ import {
   DEFAULT_DASHBOARD_PORT,
   FIXLAB_RUNTIMES,
   inspectRepository,
+  linkedDependencyDirectories,
   validateTargetEnvironment,
   validateLiveTestProfile,
   validatePort
 } from "../dashboard/server.js";
 import { runChat } from "../dashboard/chat.js";
+import { probeTimeoutMs, runJobPreflight } from "../dashboard/preflight.js";
+import {
+  parseKeepAwakeMinutes,
+  runKeepAwake,
+  startKeepAwake,
+  stopKeepAwake
+} from "./keep-awake.js";
+import { runStructuredCommand } from "./structured-command.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -75,10 +84,12 @@ Usage:
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
   fixlab authenticate [repository] [--yes]
+  fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]
   fixlab run [repository] [--runtime <agency|copilot>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>]
-  fixlab dashboard [repository] [--port <number>] [--no-open] [--runtime <agency|copilot>]
+  fixlab dashboard [repository] [--port <number>] [--no-open] [--keep-awake-minutes <minutes>] [--runtime <agency|copilot>]
   fixlab chat [repository] [--port <number>] [--runtime <agency|copilot>]
+  fixlab keep-awake --minutes <minutes>
   fixlab --help
 
 Commands:
@@ -92,10 +103,13 @@ Commands:
             Plan or install the repository-local Playwright package and browser.
   authenticate
             Plan or run the repository-owned browser authentication command.
+  exec      Run a command with compact structured output and private evidence.
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
   dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
   chat      Chat with the active dashboard job, starting it when necessary.
+  keep-awake
+            Temporarily prevent system sleep for a bounded number of minutes.
 
 Runtime:
   agency    Use Agency Copilot (default).
@@ -191,11 +205,12 @@ function checkPackageManager(command, workingDirectory) {
   }
 
   const manager = match[1];
+  const timeout = probeTimeoutMs();
   const result = spawnSync(`${manager} --version`, {
     cwd: workingDirectory,
     encoding: "utf8",
     shell: true,
-    timeout: 15000,
+    timeout,
     windowsHide: true
   });
   const version = result.stdout?.trim();
@@ -203,6 +218,11 @@ function checkPackageManager(command, workingDirectory) {
     result.error?.message ??
     result.stderr?.trim().split(/\r?\n/, 1)[0] ??
     `${manager} --version failed`;
+  const timedOut = (error) =>
+    error?.code === "ETIMEDOUT"
+      ? `${error.message} after ${timeout} ms; set FIXLAB_DOCTOR_TIMEOUT_MS to allow more time on a slow machine`
+      : error?.message;
+  failure = timedOut(result.error) ?? failure;
   if (result.status === 0 && version) {
     if (/^npm(?:\.cmd)?$/i.test(manager)) {
       const integrityResult = spawnSync(
@@ -211,7 +231,7 @@ function checkPackageManager(command, workingDirectory) {
           cwd: packageRoot,
           encoding: "utf8",
           shell: true,
-          timeout: 15000,
+          timeout,
           windowsHide: true
         }
       );
@@ -230,7 +250,7 @@ function checkPackageManager(command, workingDirectory) {
         };
       }
       failure =
-        integrityResult.error?.message ??
+        timedOut(integrityResult.error) ??
         internalFailure?.[0]?.replace(/[",]+$/, "") ??
         "npm dependency graph probe failed internally";
     } else {
@@ -930,12 +950,14 @@ function launch(repository, request, runtime, targetEnvironment = "") {
       ? buildCopilotInvocation({
           packageRoot,
           prompt,
-          sessionId: randomUUID()
+          sessionId: randomUUID(),
+          additionalDirs: linkedDependencyDirectories(repository)
         })
       : buildAgencyInvocation({
           packageRoot,
           prompt,
-          sessionId: randomUUID()
+          sessionId: randomUUID(),
+          additionalDirs: linkedDependencyDirectories(repository)
         })
     : {
         args: [
@@ -1016,6 +1038,7 @@ function parseDashboardArguments(args) {
   let repositoryArgument;
   let port = DEFAULT_DASHBOARD_PORT;
   let open = true;
+  let keepAwakeMinutes = 0;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--no-open") {
@@ -1034,6 +1057,23 @@ function parseDashboardArguments(args) {
       index += 1;
       continue;
     }
+    if (argument === "--keep-awake-minutes") {
+      if (!args[index + 1]) {
+        return {
+          error: "dashboard requires a value after --keep-awake-minutes"
+        };
+      }
+      try {
+        keepAwakeMinutes = parseKeepAwakeMinutes(
+          args[index + 1],
+          "--keep-awake-minutes"
+        );
+      } catch (error) {
+        return { error: error.message };
+      }
+      index += 1;
+      continue;
+    }
     if (argument.startsWith("-")) {
       return { error: `unknown dashboard option: ${argument}` };
     }
@@ -1045,7 +1085,8 @@ function parseDashboardArguments(args) {
   return {
     repository: resolveRepository(repositoryArgument),
     port,
-    open
+    open,
+    keepAwakeMinutes
   };
 }
 
@@ -1227,7 +1268,13 @@ function openBrowser(url) {
   child.unref();
 }
 
-async function dashboard(repository, port, shouldOpen, runtime) {
+async function dashboard(
+  repository,
+  port,
+  shouldOpen,
+  runtime,
+  keepAwakeMinutes = 0
+) {
   const readiness = inspectRepository(repository);
   if (!readiness.repositoryReady) {
     console.error(`Cannot start FixLab dashboard: ${readiness.error}`);
@@ -1236,7 +1283,8 @@ async function dashboard(repository, port, shouldOpen, runtime) {
   const dashboardServer = createDashboardServer({
     repository,
     packageRoot,
-    runtime
+    runtime,
+    preflight: runJobPreflight
   });
   let address;
   try {
@@ -1249,6 +1297,24 @@ async function dashboard(repository, port, shouldOpen, runtime) {
   console.log(`FixLab dashboard: ${address.url}`);
   console.log(`Repository: ${repository}`);
   console.log(`Runtime: ${runtime}`);
+  let keepAwakeHandle;
+  if (keepAwakeMinutes > 0) {
+    try {
+      keepAwakeHandle = startKeepAwake(keepAwakeMinutes);
+      await keepAwakeHandle.ready;
+      keepAwakeHandle.child.once("error", (error) => {
+        console.error(`Keep-awake timer failed: ${error.message}`);
+      });
+      console.log(
+        `Keep-awake timer: ${keepAwakeMinutes} minute(s); screen locking is allowed, but interactive browser steps may require an unlocked desktop.`
+      );
+    } catch (error) {
+      stopKeepAwake(keepAwakeHandle);
+      await dashboardServer.close();
+      console.error(`Cannot start keep-awake timer: ${error.message}`);
+      return 1;
+    }
+  }
   console.log("Press Ctrl+C to stop the local dashboard.");
   if (shouldOpen) {
     openBrowser(address.url);
@@ -1260,6 +1326,7 @@ async function dashboard(repository, port, shouldOpen, runtime) {
       return;
     }
     closing = true;
+    stopKeepAwake(keepAwakeHandle);
     await dashboardServer.close();
   };
   process.once("SIGINT", close);
@@ -1488,6 +1555,10 @@ async function main(args) {
     );
   }
 
+  if (command === "exec") {
+    return runStructuredCommand(rest, process.cwd());
+  }
+
   if (command === "run") {
     const parsed = parseRuntimeArguments(rest);
     if (parsed.error) {
@@ -1540,8 +1611,25 @@ async function main(args) {
       parsed.repository,
       parsed.port,
       parsed.open,
-      runtimeArguments.runtime
+      runtimeArguments.runtime,
+      parsed.keepAwakeMinutes
     );
+  }
+
+  if (command === "keep-awake") {
+    if (
+      rest.length !== 2 ||
+      rest[0] !== "--minutes"
+    ) {
+      console.error("keep-awake requires --minutes <minutes>");
+      return 1;
+    }
+    try {
+      return runKeepAwake(parseKeepAwakeMinutes(rest[1]));
+    } catch (error) {
+      console.error(error.message);
+      return 1;
+    }
   }
 
   if (command === "chat") {

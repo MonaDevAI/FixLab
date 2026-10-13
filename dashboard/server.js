@@ -3,6 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import {
   createReadStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -18,6 +19,7 @@ import {
   extname,
   isAbsolute,
   join,
+  parse,
   relative,
   resolve,
   sep
@@ -32,6 +34,7 @@ import {
   removeArtifactDirectory,
   storeScreenshots
 } from "./intake.js";
+import { formatPreflightFailure } from "./preflight.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -877,6 +880,8 @@ ${branchNamingGuidance}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
 - ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
+- Run verbose repository-owned tests, builds, linters, type checks, and package validation through \`fixlab exec --stage <stage> -- <command> [args...]\`. In Windows PowerShell quote the separator (\`'--'\`) because an unquoted \`--\` is dropped, and never wrap \`fixlab exec\` in \`cmd /c\`; that wrapper is denied in non-interactive sessions. Keep its compact result in context and inspect the private evidence path only when an exact diagnostic is needed.
+- Add \`--reuse\` only for deterministic local validation when command, arguments, Git state, working directory, profile, and stage are unchanged. Never reuse startup, health, authentication, Playwright or live-environment validation, external-data checks, dependency installation, deployments, or mutating commands.
 - Do not skip Playwright merely because an unrelated non-browser test, build, or backend startup is failed or blocked. If frontend startup, authentication, safe data, and the selected browser journey are independently ready, run the live-test gate and preserve the other blocker separately.
 - Use local-stack only for profile-defined application startup and health. Do not mark local-stack failed because a separate test, type-check, lint, or production build reports unrelated baseline diagnostics; preserve that exact validation limitation separately and continue browser execution when startup is healthy.
 - Before browser execution, synthesize the smallest focused Playwright scenario and measurable assertions from the reported behavior and expected outcome when an equivalent repository-owned scenario does not already exist.
@@ -1360,11 +1365,95 @@ function writeCacheSummary(context, job) {
   }
 }
 
+// Linked dependency folders (for example a node_modules junction) resolve outside
+// the repository, and non-interactive agents cannot answer the path prompt they raise.
+// Only targets inside a profile-declared trustedDependencyRoots entry are granted, so a
+// repository-controlled symlink alone never widens the agent's file access.
+export function linkedDependencyDirectories(repository) {
+  let root;
+  let profile;
+  try {
+    root = realpathSync(repository);
+    profile = loadRepositoryProfile(root);
+  } catch {
+    return [];
+  }
+
+  const trustedRoots = (
+    Array.isArray(profile?.trustedDependencyRoots)
+      ? profile.trustedDependencyRoots
+      : []
+  )
+    .filter((value) => typeof value === "string" && isAbsolute(value))
+    .flatMap((value) => {
+      try {
+        const resolved = realpathSync(value);
+        return resolved === parse(resolved).root ? [] : [resolved];
+      } catch {
+        return [];
+      }
+    });
+  if (trustedRoots.length === 0) {
+    return [];
+  }
+
+  const isInside = (parent, child) => {
+    const relation = relative(parent, child);
+    return (
+      relation === "" ||
+      (!relation.startsWith("..") && !isAbsolute(relation))
+    );
+  };
+  const workingDirectories = new Set([root]);
+  for (const configured of [
+    profile.browserAutomation?.workingDirectory,
+    ...Object.values(profile.applications ?? {}).map(
+      (application) => application?.workingDirectory
+    )
+  ]) {
+    if (typeof configured !== "string") {
+      continue;
+    }
+    try {
+      const directory = realpathSync(resolve(root, configured));
+      if (isInside(root, directory)) {
+        workingDirectories.add(directory);
+      }
+    } catch {
+      // A missing working directory has no dependency link to grant.
+    }
+  }
+
+  const found = new Set();
+  for (const directory of workingDirectories) {
+    const candidate = join(directory, "node_modules");
+    try {
+      if (!lstatSync(candidate).isSymbolicLink()) {
+        continue;
+      }
+      const target = realpathSync(candidate);
+      if (
+        !isInside(root, target) &&
+        trustedRoots.some((trusted) => isInside(trusted, target))
+      ) {
+        found.add(target);
+      }
+    } catch {
+      // Missing or unreadable dependency folders need no extra access.
+    }
+  }
+  return [...found];
+}
+
+const additionalDirectoryArguments = (additionalDirs) =>
+  additionalDirs.flatMap((directory) => ["--add-dir", directory]);
+
 export function buildAgencyInvocation({
   packageRoot,
   prompt,
   sessionId,
-  resume = false
+  resume = false,
+  additionalDirs = []
 }) {
   if (!sessionId) {
     throw new Error("Agency invocation requires a session ID");
@@ -1377,6 +1466,7 @@ export function buildAgencyInvocation({
       "--agent",
       "fixlab:fixlab",
       "--allow-all-tools",
+      ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--stream",
       "on",
@@ -1390,7 +1480,8 @@ export function buildCopilotInvocation({
   packageRoot,
   prompt,
   sessionId,
-  resume = false
+  resume = false,
+  additionalDirs = []
 }) {
   if (!sessionId) {
     throw new Error("Copilot invocation requires a session ID");
@@ -1402,6 +1493,7 @@ export function buildCopilotInvocation({
       "--agent",
       "fixlab:fixlab",
       "--allow-all-tools",
+      ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--autopilot",
       "--stream",
@@ -1428,7 +1520,14 @@ function findDirectExecutable(command) {
 }
 
 function createExecutor({ command, packageRoot, buildInvocation }) {
-  return ({ repository, prompt, sessionId, resume, onOutput }) => {
+  return ({
+    repository,
+    artifactDirectories = [],
+    prompt,
+    sessionId,
+    resume,
+    onOutput
+  }) => {
     const executable = findDirectExecutable(command);
     if (!executable) {
       throw new Error(
@@ -1439,7 +1538,11 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
       packageRoot,
       prompt,
       sessionId,
-      resume
+      resume,
+      additionalDirs: [
+        ...linkedDependencyDirectories(repository),
+        ...artifactDirectories
+      ]
     });
     const child = spawn(executable, invocation.args, {
       cwd: repository,
@@ -2129,6 +2232,77 @@ function playwrightAuthenticationConfig(repository) {
   };
 }
 
+function frontendStartConfig(repository) {
+  const profile = loadRepositoryProfile(repository);
+  const frontend = profile.applications?.frontend ?? {};
+  const command =
+    typeof frontend.command === "string" ? frontend.command.trim() : "";
+  if (!command) {
+    throw new Error("repository profile must configure applications.frontend.command");
+  }
+  return {
+    command,
+    healthUrl: validatedManualLocalhostUrl(frontend.healthUrl),
+    workingDirectory: resolveContainedPath(
+      repository,
+      frontend.workingDirectory ?? ".",
+      "applications.frontend.workingDirectory",
+      { mustExist: true }
+    )
+  };
+}
+
+async function frontendIsHealthy(healthUrl) {
+  try {
+    const response = await fetch(healthUrl, {
+      signal: AbortSignal.timeout(2000)
+    });
+    await response.body?.cancel();
+    return response.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+function stopProcessTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  if (process.platform === "win32" && child.pid) {
+    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    return;
+  }
+  child.kill();
+}
+
+async function frontendStatus(repository, connection) {
+  let healthUrl = "";
+  try {
+    ({ healthUrl } = frontendStartConfig(repository));
+  } catch (error) {
+    return {
+      configured: false,
+      running: Boolean(connection.handle),
+      healthy: false,
+      owned: Boolean(connection.handle),
+      error: error.message,
+      lastResult: connection.lastResult
+    };
+  }
+  return {
+    configured: true,
+    running: Boolean(connection.handle),
+    healthy: await frontendIsHealthy(healthUrl),
+    owned: Boolean(connection.handle),
+    healthUrl,
+    error: "",
+    lastResult: connection.lastResult
+  };
+}
+
 function playwrightAuthenticationStatus(repository, connection) {
   let configuration;
   try {
@@ -2307,6 +2481,7 @@ export function createDashboardServer({
   executor = createRuntimeExecutor({ packageRoot, runtime }),
   workItemLoader = createAzureDevOpsLoader(),
   browserOpener = openLocalUrl,
+  preflight = null,
   executionIdleTimeoutMs,
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
@@ -2318,6 +2493,7 @@ export function createDashboardServer({
   const completedJobs = [];
   const artifactDirectories = new Set();
   const playwrightConnection = { handle: null, lastResult: null };
+  const frontendConnection = { handle: null, lastResult: null };
   const playwrightArtifacts = new Map();
   const cacheContext = createCacheContext(resolvedRepository);
   const metricsPath = cacheContext
@@ -2564,6 +2740,7 @@ export function createDashboardServer({
     job.lastActivityAt = new Date().toISOString();
     handle = executor({
       repository: resolvedRepository,
+      artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
       prompt,
       sessionId: job.id,
       resume,
@@ -2909,9 +3086,9 @@ export function createDashboardServer({
         });
         return;
       }
-      if (currentJob.status !== "failed") {
+      if (!["failed", "blocked"].includes(currentJob.status)) {
         sendJson(response, 409, {
-          error: "only a failed FixLab job can be dismissed"
+          error: "only a failed or blocked FixLab job can be dismissed"
         });
         return;
       }
@@ -2921,8 +3098,7 @@ export function createDashboardServer({
         index: dismissedJob.nextLogIndex,
         timestamp: new Date().toISOString(),
         stream: "dashboard",
-        message:
-          "Failed job dismissed by the user; its failed outcome remains in dashboard history."
+        message: `${dismissedJob.status === "blocked" ? "Blocked" : "Failed"} job dismissed by the user; its ${dismissedJob.status} outcome remains in dashboard history.`
       });
       if (dismissedJob.artifactDirectory) {
         removeArtifactDirectory(dismissedJob.artifactDirectory);
@@ -3618,6 +3794,16 @@ export function createDashboardServer({
         return;
       }
       const repositoryProfile = loadRepositoryProfile(resolvedRepository);
+      const preflightIssues = preflight
+        ? preflight({ repository: resolvedRepository, profile: repositoryProfile })
+        : [];
+      if (preflightIssues.length > 0) {
+        sendJson(response, 400, {
+          error: formatPreflightFailure(preflightIssues),
+          preflight: preflightIssues
+        });
+        return;
+      }
       const allowedEnvironments =
         configuredValidationEnvironments(repositoryProfile);
       let targetEnvironment;
@@ -4042,6 +4228,87 @@ export function createDashboardServer({
       return;
     }
 
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/frontend/status"
+    ) {
+      sendJson(
+        response,
+        200,
+        await frontendStatus(resolvedRepository, frontendConnection)
+      );
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/frontend/start"
+    ) {
+      let configuration;
+      try {
+        configuration = frontendStartConfig(resolvedRepository);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (frontendConnection.handle) {
+        sendJson(response, 409, { error: "FixLab already started the frontend" });
+        return;
+      }
+      if (await frontendIsHealthy(configuration.healthUrl)) {
+        sendJson(response, 200, {
+          ...(await frontendStatus(resolvedRepository, frontendConnection)),
+          started: false
+        });
+        return;
+      }
+      frontendConnection.lastResult = null;
+      const child = spawn(configuration.command, {
+        cwd: configuration.workingDirectory,
+        shell: true,
+        stdio: "ignore",
+        windowsHide: true
+      });
+      frontendConnection.handle = child;
+      child.once("error", (error) => {
+        frontendConnection.lastResult = {
+          ok: false,
+          message: error.message,
+          finishedAt: new Date().toISOString()
+        };
+        frontendConnection.handle = null;
+      });
+      child.once("close", (code) => {
+        if (frontendConnection.handle === child) {
+          frontendConnection.handle = null;
+        }
+        frontendConnection.lastResult = {
+          ok: code === 0,
+          message: `Frontend process exited with code ${code ?? "unknown"}.`,
+          finishedAt: new Date().toISOString()
+        };
+      });
+      sendJson(response, 202, {
+        ...(await frontendStatus(resolvedRepository, frontendConnection)),
+        started: true
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/frontend/stop"
+    ) {
+      const child = frontendConnection.handle;
+      frontendConnection.handle = null;
+      stopProcessTree(child);
+      sendJson(response, 200, {
+        ...(await frontendStatus(resolvedRepository, frontendConnection)),
+        stopped: Boolean(child)
+      });
+      return;
+    }
+
     if (request.method === "GET" && staticFiles.has(requestUrl.pathname)) {
       const fileName = staticFiles.get(requestUrl.pathname);
       const filePath = join(publicDirectory, fileName);
@@ -4093,6 +4360,8 @@ export function createDashboardServer({
       ) {
         playwrightConnection.handle.kill();
       }
+      stopProcessTree(frontendConnection.handle);
+      frontendConnection.handle = null;
       for (const directory of artifactDirectories) {
         removeArtifactDirectory(directory);
       }

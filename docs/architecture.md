@@ -350,6 +350,30 @@ Defines:
 Preserves structured test results, API assertions, screenshots, decisions,
 skipped gates, remaining risks, and pull request links.
 
+`fixlab exec` is the command-output boundary between validation tools and the
+agent context. It captures stdout and stderr separately, redacts credential
+patterns before persistence, and returns only bounded unique diagnostics,
+framework-aware test counts, tail failures, timing, and context-reduction
+metadata. Node test/TAP, Playwright, Jest, and .NET test summaries retain
+passed, failed, skipped, cancelled, and total counts without returning every
+successful test line. Full redacted evidence and `result.json` are stored under
+the worktree's Git-private
+`fixlab/command-evidence` path, never in tracked source.
+
+Each compact summary reports raw and retained line counts, byte counts,
+estimated tokens, omitted lines, and the reduction percentage. The same
+measurements are persisted in `result.json.context` so reductions can be
+compared across commands and repositories without retaining raw output in the
+agent prompt. Token counts use the transparent `bytes / 4` estimate and are
+directional rather than model-billing measurements.
+
+Successful deterministic local validations may be reused only by explicit
+request. Their fingerprint includes platform, command and arguments, stage,
+working directory, Git `HEAD`, content hashes for every tracked and untracked
+file, worktree status, and repository-profile content. A changed input causes execution;
+failed results are never cached. Evidence and cache records are capped at 100
+entries and seven days, and each output stream is capped at 50 MiB.
+
 ## Workflow stages
 
 1. Intake

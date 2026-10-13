@@ -183,12 +183,26 @@ visible risk. FixLab never reports a skipped or timed-out gate as successful.
   child processes.
 - **Focused validation** through repository-defined lint, test, type-check,
   build, API, and browser commands.
+- **Readiness preflight** for repository profiles, runtimes, package managers,
+  authentication, application startup, and configurable doctor timeouts before
+  expensive work begins.
 - **Early draft pull requests** that become visible after focused regression
   checks while independent builds and browser validation continue.
 - **Playwright evidence** including measurable assertions, screenshots,
-  traces, failures, and explicit data-source behavior.
+  videos, traces, failures, explicit data-source behavior, connect-and-retry
+  authentication, and reuse of an already started React frontend.
 - **Resumable workflows** for authentication, genuine blockers, manual
-  validation, and focused follow-up instructions.
+  validation, focused follow-up instructions, one-click failed-job recovery,
+  and preserved completed stages after interruption.
+- **Dashboard job controls** for a bounded queue, cancellation, hold/resume,
+  restart with retained history, age-based history cleanup, status heartbeats,
+  and privacy-safe metrics.
+- **Chat-first operation** through browser or terminal, including natural
+  language status, logs, evidence, pull-request, repository-switching, and
+  new-job commands.
+- **Long-running reliability** through bounded keep-awake sessions,
+  command-aware redacted summaries, nested-worktree fingerprints, linked
+  dependency support, and explicit blocked/timed-out/skipped outcomes.
 - **Pull-request readiness** based on completed gates, effective-diff review,
   remaining risks, and preserved evidence.
 
@@ -225,7 +239,7 @@ Read the complete [security model](docs/security.md).
 
 ## Current availability
 
-The current GitHub release is **v0.6.1**. It includes:
+The current GitHub release is **v0.7.3**. It includes:
 
 - The dependency-free FixLab CLI.
 - An Agent Plugins 1.0 package for GitHub Copilot CLI.
@@ -233,8 +247,16 @@ The current GitHub release is **v0.6.1**. It includes:
 - A single-user local dashboard.
 - Repository onboarding templates and React/.NET examples.
 - Manual and Azure DevOps work-item intake.
-- Focused validation, browser evidence, queueing, lifecycle controls, metrics,
-  and recovery.
+- Focused validation, early draft pull requests, and browser evidence with
+  screenshots, traces, and optional video.
+- Queue cancellation, hold/resume, terminal-job restart, age-based history
+  cleanup, recovery, status heartbeats, and privacy-safe metrics.
+- Repository preflight, configurable doctor and idle timeouts, authenticated
+  Playwright connect/retry, and reuse of a pre-started React frontend.
+- Browser and terminal chat controls for status, logs, evidence, comments,
+  retries, owned-process stops, repository switching, and new jobs.
+- Bounded keep-awake support and command-aware summaries that retain redacted
+  evidence while reducing the output sent back into an agent session.
 
 The dashboard is local and bound to `127.0.0.1`. FixLab does not currently
 provide a hosted multi-user broker, shared dashboard, or managed runner
