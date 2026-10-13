@@ -12,6 +12,15 @@ Agency and `com.github.copilot/agents/fixlab.agent.md` for the Agent Plugins
 1.0 layout used by direct GitHub Copilot CLI. Repository policy validation
 requires those definitions to remain identical.
 
+Direct Copilot execution accepts `--model` or `FIXLAB_MODEL`; Agency rejects
+nonempty model overrides. Dashboard jobs retain their selected model through
+queueing, retries and saved-context recovery. An omitted model uses the
+dashboard's configured default; an explicit empty selection uses Copilot's
+own default. HydraFusion adds `--experimental --model hydrafusion` and remains
+an account-dependent research preview, not a guaranteed cost or speed saving.
+Stage markers are requested before tools and parsed even when adjacent in
+rendered output, but model-dependent buffering can still delay visible updates.
+
 ```text
 Defect or pull request
         |
@@ -70,6 +79,20 @@ live owners or resumes their saved job context; stop and shutdown require
 explicit owner confirmation. Shutdown leaves the HTTP dashboard available
 and stops only its tracked agent, frontend and authentication processes.
 Conflicting reachable owners are reported rather than automatically killed.
+
+Executor admission also acquires one atomic filesystem lease per canonical
+repository before invoking a runner. Git worktrees share the Git common
+directory; standalone non-Git repositories use their canonical directory.
+An acquisition records the owner, job, process generation and a unique nonce.
+All new jobs, queue starts, retries and automatic continuations use this same
+boundary. A logical timeout or stop request does not release the lease or
+enable resume before the executor's termination promise settles. Unverified
+termination, partial reservations and owner crashes remain fail-closed; neither
+an HTTP timeout nor PID reuse authorizes automatic reclamation.
+
+Windows whole-executor-tree assurance remains a merge gate: the current
+default executor's completion check observes launcher exit only. It does not
+yet prove that every owned Windows descendant has stopped.
 
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
 require evidence-backed diagnosis and reproduction. Small enhancements use a

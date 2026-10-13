@@ -97,6 +97,14 @@ behavior only rather than validation of the selected backend or its data.
 
 ## Safety boundaries
 
+Keep execution economical without weakening evidence: reuse verified session
+context instead of rediscovering unchanged repository facts, batch independent
+reads, and keep command output compact. Handle bounded work directly; delegate
+only independent tasks that justify separate context, not routine searches or
+one continuous investigation. On retry, rerun the failed gate and any affected
+prerequisites, not unrelated completed stages. Required checks still apply;
+never omit them to claim token savings.
+
 - Never select production automatically.
 - Never expose, copy, or commit credentials, tokens, customer data, or private
   test records.

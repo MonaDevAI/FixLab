@@ -123,6 +123,7 @@ test.beforeAll(async () => {
     repository,
     packageRoot,
     executor,
+    browserOpener() {},
     workItemLoader
   });
   baseUrl = (await dashboard.listen({ port: await availablePort() })).url;
@@ -131,6 +132,43 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await dashboard.close();
   rmSync(repository, { recursive: true, force: true });
+});
+
+test("Copilot model control honors configured defaults and explicit per-job selection", async ({ page }) => {
+  const modelRepository = mkdtempSync(join(tmpdir(), "fixlab-model-e2e-"));
+  const directory = join(modelRepository, ".github", "fixlab");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
+  let selectedModel;
+  const modelDashboard = createDashboardServer({
+    repository: modelRepository,
+    packageRoot,
+    runtime: "copilot",
+    model: "claude-sonnet-4.5",
+    executor(input) {
+      selectedModel = input.model;
+      return executor(input);
+    },
+    browserOpener() {}
+  });
+  try {
+    const address = await modelDashboard.listen({ port: await availablePort() });
+    await page.goto(address.url);
+    await expect(page.locator("#model-control")).toBeVisible();
+    await expect(page.locator("#model")).toHaveValue("claude-sonnet-4.5");
+    await page.locator("#model").selectOption("hydrafusion");
+    await page.locator("#request").fill("Verify the model is retained for this job.");
+    await page.locator('input[name="mode"][value="validate-only"]').check();
+    await page.locator("#start-button").click();
+    await expect.poll(() => selectedModel).toBe("hydrafusion");
+    await expect(page.locator("#model")).toHaveValue("hydrafusion");
+    await expect(page.locator("#job-status")).toContainText("passed");
+  } finally {
+    await page.close();
+    await modelDashboard.close();
+    rmSync(modelRepository, { recursive: true, force: true });
+  }
 });
 
 test("session controls reconnect, confirm another owner and resume its stopped job", async ({ page }) => {
@@ -177,33 +215,42 @@ test("session controls reconnect, confirm another owner and resume its stopped j
     });
     expect(started.status).toBe(202);
     const identity = await (await fetch(`${ownerUrl}/api/session`)).json();
-    await page.goto(observerUrl);
+    await test.step("Opening the session observer", () => page.goto(observerUrl));
     const row = page.locator("#sessions-list article").filter({ hasText: identity.id });
     await expect(row).toContainText("Other FixLab dashboard");
     await expect(row.getByRole("link", { name: "Reconnect to live dashboard" }))
       .toHaveAttribute("href", ownerUrl);
     page.once("dialog", (dialog) => dialog.dismiss());
-    await row.getByRole("button", { name: "Stop agent", exact: true }).click();
+    await test.step("Cancelling the stop confirmation", () =>
+      row.getByRole("button", { name: "Stop agent", exact: true }).click()
+    );
     expect(stops).toBe(0);
     page.once("dialog", (dialog) => {
       expect(dialog.message()).toContain(identity.id);
       return dialog.accept();
     });
-    await row.getByRole("button", { name: "Stop agent", exact: true }).click();
-    await expect(row).toContainText("(blocked)");
+    await test.step("Stopping the confirmed owner", async () => {
+      await row.getByRole("button", { name: "Stop agent", exact: true }).click();
+      await expect(row).toContainText("(blocked)");
+    });
     expect(stops).toBe(1);
-    await row.getByRole("button", { name: "Resume job", exact: true }).click();
-    await expect(row).toContainText("(running)");
+    await test.step("Resuming the stopped owner", async () => {
+      await row.getByRole("button", { name: "Resume job", exact: true }).click();
+      await expect(row).toContainText("(running)");
+    });
     expect(calls).toHaveLength(2);
     expect(calls[1].sessionId).toBe(calls[0].sessionId);
     expect(calls[1].resume).toBe(true);
     page.once("dialog", (dialog) => dialog.accept());
-    await row.getByRole("button", { name: "Shutdown sessions", exact: true }).click();
-    await expect(row).toContainText("(blocked)");
+    await test.step("Shutting down the confirmed sessions", async () => {
+      await row.getByRole("button", { name: "Shutdown sessions", exact: true }).click();
+      await expect(row).toContainText("(blocked)");
+    });
     expect(stops).toBe(2);
   } finally {
-    await owner.close();
-    await observer.close();
+    await test.step("Closing the polling observer page", () => page.close());
+    await test.step("Closing the owner dashboard", () => owner.close());
+    await test.step("Closing the observer dashboard", () => observer.close());
     rmSync(sessionRepository, { recursive: true, force: true });
   }
 });

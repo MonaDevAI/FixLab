@@ -36,6 +36,7 @@ import {
 } from "./intake.js";
 import { formatPreflightFailure } from "./preflight.js";
 import { createSessionRegistry } from "./sessions.js";
+import { createExecutorLease } from "./executor-lease.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -99,6 +100,31 @@ export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 export const DEFAULT_EXECUTION_HEARTBEAT_MS = 2 * 60 * 1000;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
+export const HYDRAFUSION_MODEL = "hydrafusion";
+
+export function validateCopilotModel(value, runtime = "copilot") {
+  if (value !== null && value !== undefined && typeof value !== "string") {
+    throw new Error("model must be a string");
+  }
+  const model = String(value ?? "").trim();
+  if (!model) {
+    return "";
+  }
+  if (runtime !== "copilot") {
+    throw new Error("model selection requires the copilot runtime");
+  }
+  if (model.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(model)) {
+    throw new Error("model must be 1-128 letters, numbers, dots, underscores, slashes, or hyphens");
+  }
+  return model.toLowerCase() === HYDRAFUSION_MODEL ? HYDRAFUSION_MODEL : model;
+}
+
+export function copilotModelArguments(model) {
+  const selectedModel = validateCopilotModel(model);
+  return selectedModel
+    ? [...(selectedModel === HYDRAFUSION_MODEL ? ["--experimental"] : []), "--model", selectedModel]
+    : [];
+}
 export const FIXLAB_STAGES = [
   "intake",
   "diagnosis",
@@ -362,6 +388,7 @@ function publicQueue(jobs) {
     position: index + 1,
     request: safeSummary(job.request),
     requestType: job.requestType,
+    model: job.model,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
@@ -402,6 +429,7 @@ function dashboardSnapshot(job) {
     id: job.id,
     request: safePersistedSummary(job.request),
     requestType: job.requestType,
+    model: job.model,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
@@ -467,6 +495,7 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    model: snapshot.model ?? "",
     manualLocalhostTest:
       snapshot.manualLocalhostTest ??
       snapshot.holdForManualLiveTest ??
@@ -820,7 +849,15 @@ export function buildJobPrompt({
     : `- Generate a concise fix contract from the reported behavior and expected outcome.
 - Diagnose and reproduce with repository evidence. Do not claim a cause or reproduction without evidence.
 - Use the smallest focused reproduction that demonstrates the reported defect.`;
-  return `Run a FixLab ${mode} job.
+  return `FixLab output protocol (follow before any tool call):
+- Your first assistant output must be this literal plain-text line:
+  FIXLAB_STAGE|intake|running|Accepted the request and starting intake.
+- Emit that line before reading files, searching, planning with tools, delegating, or running commands.
+- Before beginning each later stage, emit FIXLAB_STAGE|stage|running|concise next action as a literal assistant response line.
+- Emit a terminal passed, skipped, blocked, or failed marker for the current stage before starting the next stage.
+- Never defer or batch stage markers until the end of the job.
+
+Run a FixLab ${mode} job.
 Request type: ${requestType}
 Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
@@ -1464,7 +1501,8 @@ export function buildCopilotInvocation({
   prompt,
   sessionId,
   resume = false,
-  additionalDirs = []
+  additionalDirs = [],
+  model = ""
 }) {
   if (!sessionId) {
     throw new Error("Copilot invocation requires a session ID");
@@ -1475,6 +1513,7 @@ export function buildCopilotInvocation({
       packageRoot,
       "--agent",
       "fixlab:fixlab",
+      ...copilotModelArguments(model),
       "--allow-all-tools",
       ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
@@ -1502,33 +1541,44 @@ function findDirectExecutable(command) {
     : candidates?.[0];
 }
 
-function createExecutor({ command, packageRoot, buildInvocation }) {
+function createExecutor({ command, packageRoot, buildInvocation, defaultModel = "" }) {
   return ({
     repository,
     artifactDirectories = [],
     prompt,
     sessionId,
     resume,
+    model,
     onOutput
   }) => {
     const executable = findDirectExecutable(command);
     if (!executable) {
-      throw new Error(
+      const error = new Error(
         `${command} executable is unavailable or is not a directly executable binary`
       );
+      error.executorNotStarted = true;
+      throw error;
     }
-    const invocation = buildInvocation({
-      packageRoot,
-      prompt,
-      sessionId,
-      resume,
-      additionalDirs: [
-        ...linkedDependencyDirectories(repository),
-        ...artifactDirectories
-      ]
-    });
+    let invocation;
+    try {
+      invocation = buildInvocation({
+        packageRoot,
+        prompt,
+        sessionId,
+        resume,
+        model: model ?? defaultModel,
+        additionalDirs: [
+          ...linkedDependencyDirectories(repository),
+          ...artifactDirectories
+        ]
+      });
+    } catch (error) {
+      error.executorNotStarted = true;
+      throw error;
+    }
     const child = spawn(executable, invocation.args, {
       cwd: repository,
+      env: { ...process.env, BROWSER: "none" },
       shell: false,
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"]
@@ -1544,7 +1594,27 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
     const completion = createProcessCompletion(child, onOutput);
 
     return {
+      pid: child.pid,
       completion,
+      hasStopped() {
+        if (!child.pid) {
+          return true;
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          return false;
+        }
+        if (process.platform !== "win32") {
+          try {
+            process.kill(-child.pid, 0);
+            return false;
+          } catch (error) {
+            if (error.code !== "ESRCH") {
+              throw error;
+            }
+          }
+        }
+        return true;
+      },
       terminate() {
         if (child.exitCode === null && child.signalCode === null) {
           stopProcessTree(child);
@@ -1595,22 +1665,25 @@ export function createAgencyExecutor({ packageRoot }) {
   });
 }
 
-export function createCopilotExecutor({ packageRoot }) {
+export function createCopilotExecutor({ packageRoot, model = "" }) {
+  const selectedModel = validateCopilotModel(model);
   return createExecutor({
     command: "copilot",
     packageRoot,
-    buildInvocation: buildCopilotInvocation
+    buildInvocation: buildCopilotInvocation,
+    defaultModel: selectedModel
   });
 }
 
-export function createRuntimeExecutor({ packageRoot, runtime = "agency" }) {
+export function createRuntimeExecutor({ packageRoot, runtime = "agency", model = "" }) {
   if (!FIXLAB_RUNTIMES.includes(runtime)) {
     throw new Error(
       `FixLab runtime must be one of: ${FIXLAB_RUNTIMES.join(", ")}`
     );
   }
+  const selectedModel = validateCopilotModel(model, runtime);
   return runtime === "copilot"
-    ? createCopilotExecutor({ packageRoot })
+    ? createCopilotExecutor({ packageRoot, model: selectedModel })
     : createAgencyExecutor({ packageRoot });
 }
 
@@ -1631,6 +1704,7 @@ function publicJob(job) {
     id: job.id,
     request: job.request,
     requestType: job.requestType,
+    model: job.model,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
@@ -1657,6 +1731,7 @@ function publicJob(job) {
     error: job.error,
     canResume:
       !job.resumeDisabled &&
+      !job.executorStopping &&
       ["blocked", "failed", "passed"].includes(job.status),
     canComment: job.status === "running",
     inputCount: job.inputs.length,
@@ -1868,8 +1943,19 @@ function appendOutput(job, stream, text) {
   const lines = job.partial[stream].split("\n");
   job.partial[stream] = lines.pop();
   for (const line of lines) {
-    appendLine(job, stream, line);
+    for (const segment of splitRenderedMarkers(line)) {
+      appendLine(job, stream, segment);
+    }
   }
+}
+
+function splitRenderedMarkers(line) {
+  if (!/^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s)/u.test(line)) {
+    return [line];
+  }
+  return line
+    .split(/(?=FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s))/u)
+    .filter(Boolean);
 }
 
 function appendLine(job, stream, line) {
@@ -2004,7 +2090,9 @@ function pushActivity(job, entry) {
 function finishJob(job, result) {
   for (const stream of ["stdout", "stderr"]) {
     if (job.partial[stream]) {
-      appendLine(job, stream, job.partial[stream]);
+      for (const segment of splitRenderedMarkers(job.partial[stream])) {
+        appendLine(job, stream, segment);
+      }
       job.partial[stream] = "";
     }
   }
@@ -2433,8 +2521,9 @@ export function createDashboardServer({
   repository,
   packageRoot,
   runtime = "agency",
+  model = "",
   publicDirectory = join(packageRoot, "dashboard", "public"),
-  executor = createRuntimeExecutor({ packageRoot, runtime }),
+  executor = createRuntimeExecutor({ packageRoot, runtime, model }),
   workItemLoader = createAzureDevOpsLoader(),
   browserOpener = openLocalUrl,
   preflight = null,
@@ -2442,6 +2531,7 @@ export function createDashboardServer({
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
   const resolvedRepository = resolve(repository);
+  const defaultModel = validateCopilotModel(model, runtime);
   let currentJob = null;
   let activeHandle = null;
   const queuedJobs = [];
@@ -2455,6 +2545,7 @@ export function createDashboardServer({
   const sessions = createSessionRegistry(
     cacheContext?.repositoryIdentityHash ?? resolvedRepository
   );
+  const executorLease = createExecutorLease(resolvedRepository, sessions.id);
   let dashboardUrl = "";
   let closing = false;
 
@@ -2485,6 +2576,7 @@ export function createDashboardServer({
       frontendConnection.lastResult = null;
       const child = spawn(configuration.command, {
         cwd: configuration.workingDirectory,
+        env: { ...process.env, BROWSER: "none" },
         shell: true,
         detached: process.platform !== "win32",
         stdio: "ignore",
@@ -2641,7 +2733,9 @@ export function createDashboardServer({
     let idleTimer = null;
     let heartbeatTimer = null;
     let resolveIdleCompletion;
+    let leaseMetadataError = null;
     let handle;
+    const lease = executorLease.acquire(job.id);
     const idleCompletion = new Promise((resolveCompletion) => {
       resolveIdleCompletion = resolveCompletion;
     });
@@ -2651,7 +2745,7 @@ export function createDashboardServer({
         const error = new Error(
           `FixLab agent produced no output for ${Math.round(
             idleTimeoutMs / 60000
-          )} minute(s); the owned executor was stopped and the job can be resumed.`
+          )} minute(s); termination was requested and resume remains blocked until the owned executor exits.`
         );
         pushLog(job, {
           index: job.nextLogIndex,
@@ -2660,6 +2754,17 @@ export function createDashboardServer({
           message: error.message
         });
         resolveIdleCompletion({ code: null, error });
+        job.executorStopping = true;
+        try {
+          lease.update("stopping");
+        } catch (metadataError) {
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message: `Could not update the idle executor lease: ${metadataError.message}. Still requesting owned termination.`
+          });
+        }
         try {
           handle?.terminate?.();
         } catch (terminationError) {
@@ -2699,63 +2804,114 @@ export function createDashboardServer({
     };
 
     job.lastActivityAt = new Date().toISOString();
-    handle = executor({
-      repository: resolvedRepository,
-      artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
-      prompt: job.prestartFrontend && job.targetEnvironment === "local"
-        ? `${prompt}\nReact warm-up is requested in parallel in the dashboard repository. Before live testing, reuse that server only after its profile health check passes and you verify it serves the checkout containing the changes being validated. If using another isolated worktree, start the correct checkout instead; a healthy baseline server does not prove the fix. Never mark local-stack passed merely because warm-up was requested.`
-        : prompt,
-      sessionId: job.id,
-      resume,
-      onOutput(stream, text) {
-        job.lastActivityAt = new Date().toISOString();
-        armIdleWatchdog();
-        const localStackWasReady =
-          job.stages["local-stack"].status === "passed";
-        appendOutput(job, stream, text);
-        if (
-          job.manualLocalhostTest &&
-          !job.manualLocalhostOpenedAt &&
-          !job.manualLocalhostOpening &&
-          !localStackWasReady &&
-          job.stages["local-stack"].status === "passed"
-        ) {
-          job.manualLocalhostOpening = true;
-          Promise.resolve()
-            .then(() => browserOpener(job.manualLocalhostUrl))
-            .then(() => {
-              job.manualLocalhostOpenedAt = new Date().toISOString();
-              pushLog(job, {
-                index: job.nextLogIndex,
-                timestamp: job.manualLocalhostOpenedAt,
-                stream: "dashboard",
-                message: "Opened the React localhost URL for manual validation."
+    try {
+      handle = executor({
+        repository: resolvedRepository,
+        artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
+        prompt: job.prestartFrontend && job.targetEnvironment === "local"
+          ? `${prompt}\nReact warm-up is requested in parallel in the dashboard repository. Before live testing, reuse that server only after its profile health check passes and you verify it serves the checkout containing the changes being validated. If using another isolated worktree, start the correct checkout instead; a healthy baseline server does not prove the fix. Never mark local-stack passed merely because warm-up was requested.`
+          : prompt,
+        sessionId: job.id,
+        resume,
+        model: job.model,
+        onOutput(stream, text) {
+          job.lastActivityAt = new Date().toISOString();
+          armIdleWatchdog();
+          const localStackWasReady =
+            job.stages["local-stack"].status === "passed";
+          appendOutput(job, stream, text);
+          if (
+            job.manualLocalhostTest &&
+            !job.manualLocalhostOpenedAt &&
+            !job.manualLocalhostOpening &&
+            !localStackWasReady &&
+            job.stages["local-stack"].status === "passed"
+          ) {
+            job.manualLocalhostOpening = true;
+            Promise.resolve()
+              .then(() => browserOpener(job.manualLocalhostUrl))
+              .then(() => {
+                job.manualLocalhostOpenedAt = new Date().toISOString();
+                pushLog(job, {
+                  index: job.nextLogIndex,
+                  timestamp: job.manualLocalhostOpenedAt,
+                  stream: "dashboard",
+                  message: "Opened the React localhost URL for manual validation."
+                });
+              })
+              .catch((error) => {
+                pushLog(job, {
+                  index: job.nextLogIndex,
+                  timestamp: new Date().toISOString(),
+                  stream: "dashboard",
+                  message: `Could not open React localhost automatically: ${error.message}`
+                });
+              })
+              .finally(() => {
+                job.manualLocalhostOpening = false;
               });
-            })
-            .catch((error) => {
-              pushLog(job, {
-                index: job.nextLogIndex,
-                timestamp: new Date().toISOString(),
-                stream: "dashboard",
-                message: `Could not open React localhost automatically: ${error.message}`
-              });
-            })
-            .finally(() => {
-              job.manualLocalhostOpening = false;
-            });
+          }
         }
+      });
+    } catch (error) {
+      clearTimeout(idleTimer);
+      if (error.executorNotStarted === true) {
+        lease.release();
       }
-    });
+      throw error;
+    }
     activeHandle = handle;
+    job.executorStopping = false;
+    if (!handle?.completion || typeof handle.completion.then !== "function") {
+      throw new Error("Executor did not provide a termination promise; the repository lease remains reserved.");
+    }
+    const actualCompletion = Promise.resolve(handle.completion).then((result) => {
+      if (handle.hasStopped && !handle.hasStopped()) {
+        throw new Error("Executor exit was observed but owned descendants may still be running; the repository lease remains reserved.");
+      }
+      lease.release();
+      return leaseMetadataError ? { code: null, error: leaseMetadataError } : result;
+    });
+    try {
+      lease.update("running", handle.pid);
+    } catch (error) {
+      leaseMetadataError = error;
+      job.executorStopping = true;
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: `Executor lease metadata could not be updated: ${error.message}. The reservation is retained while the owned executor stops.`
+      });
+      resolveIdleCompletion({ code: null, error });
+      try {
+        handle.terminate?.();
+      } catch (terminationError) {
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: `Could not stop the executor after its lease metadata failed: ${terminationError.message}. The reservation remains until termination is verified.`
+        });
+      }
+    }
     if (job.prestartFrontend && job.targetEnvironment === "local") {
       void prewarmFrontend(job);
     }
     armIdleWatchdog();
     heartbeatTimer = setInterval(emitHeartbeat, executionHeartbeatMs);
     heartbeatTimer.unref?.();
-    Promise.race([Promise.resolve(handle.completion), idleCompletion])
+    Promise.race([actualCompletion, idleCompletion])
       .then((result) => {
-        finishJob(job, result);
+        if (closing && job.status === "running" && !job.stopRequested) {
+          const recovered = recoverInterruptedDashboardJob(dashboardSnapshot(job));
+          job.status = recovered.status;
+          job.stages = recovered.stages;
+          job.error = recovered.error;
+          job.finishedAt = recovered.finishedAt;
+        } else {
+          finishJob(job, result);
+        }
         if (job.stopRequested) {
           job.status = "blocked";
           job.error = "Session stopped by the user; resume when ready.";
@@ -2772,12 +2928,27 @@ export function createDashboardServer({
         }
         recordJobMetric(job);
       })
-      .finally(() => {
+      .finally(async () => {
         clearTimeout(idleTimer);
         clearInterval(heartbeatTimer);
+        try {
+          await actualCompletion;
+        } catch (error) {
+          job.executorStopping = true;
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message: `Executor termination or lease release is unverified; retaining the repository lease: ${error.message}`
+          });
+          recordJobMetric(job);
+          return;
+        }
+        job.executorStopping = false;
         if (activeHandle === handle) {
           activeHandle = null;
         }
+        recordJobMetric(job);
         if (closing) {
           return;
         }
@@ -2990,6 +3161,11 @@ export function createDashboardServer({
       persistDashboardState();
       sendJson(response, 200, {
         readiness: inspectRepository(resolvedRepository),
+        runtime: {
+          name: runtime,
+          defaultModel,
+          supportsModelSelection: runtime === "copilot"
+        },
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
         history: dashboardHistory(),
@@ -3278,6 +3454,18 @@ export function createDashboardServer({
         return;
       }
       const manualResult = ["manual-pass", "manual-fail"].includes(action);
+      if (
+        !running &&
+        !manualResult &&
+        action !== "skip" &&
+        currentJob.stages["live-test"].status === "blocked" &&
+        playwrightConnection.handle
+      ) {
+        sendJson(response, 409, {
+          error: "Authentication is still running and owns the repository browser profile. Finish sign-in and close its browser window before resuming the blocked live test."
+        });
+        return;
+      }
       if (manualResult && !currentJob.manualLocalhostPending) {
         sendJson(response, 409, {
           error: "manual localhost confirmation is not pending"
@@ -3371,7 +3559,6 @@ export function createDashboardServer({
     ) {
       if (
         !currentJob ||
-        currentJob.status !== "running" ||
         !activeHandle?.terminate
       ) {
         sendJson(response, 409, {
@@ -3397,6 +3584,7 @@ export function createDashboardServer({
           "Stop requested by the user; stopping only the owned executor process tree."
       });
       try {
+        currentJob.executorStopping = true;
         activeHandle.terminate();
         currentJob.pendingInputs = [];
         currentJob.stopRequested = true;
@@ -3533,6 +3721,13 @@ export function createDashboardServer({
         return;
       }
       const pullRequestStrategy = body.pullRequestStrategy ?? "common";
+      let selectedModel;
+      try {
+        selectedModel = validateCopilotModel(body.model ?? defaultModel, runtime);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       if (!["common", "per-bug"].includes(pullRequestStrategy)) {
         sendJson(response, 400, {
           error: "pullRequestStrategy must be common or per-bug"
@@ -3713,6 +3908,7 @@ export function createDashboardServer({
         createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
+        model: selectedModel,
         pullRequestStrategy,
         runAllUiScenarios,
         targetEnvironment,

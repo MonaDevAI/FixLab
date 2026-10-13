@@ -45,6 +45,19 @@ agency copilot
 For direct mode, install and authenticate GitHub Copilot CLI, then use
 `--runtime copilot` or set `FIXLAB_RUNTIME=copilot`.
 
+Select a direct Copilot model with `--model <model>` or `FIXLAB_MODEL`.
+For the account-dependent HydraFusion research preview:
+
+```powershell
+fixlab dashboard C:\path\to\application --runtime copilot --model hydrafusion --open
+```
+
+The Copilot dashboard also offers a per-job model selector. Leave it at
+Copilot default to avoid an override. Model selection is not supported by the
+Agency runtime; unavailable models produce runtime errors rather than silently
+switching models. Preview models may buffer stage updates, and FixLab does not
+guarantee lower token usage, charges, or elapsed time.
+
 ### 2. Install and initialize FixLab
 
 ```shell

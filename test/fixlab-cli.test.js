@@ -77,6 +77,55 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /docs\/troubleshooting\.md/);
 });
 
+test("CLI preserves model selection without interpreting request text as flags", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-model-"));
+  const executableDirectory = join(repository, "bin");
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(executableDirectory);
+    const executable = join(executableDirectory, process.platform === "win32" ? "copilot.cmd" : "copilot");
+    writeFileSync(executable, process.platform === "win32"
+      ? "@echo off\r\necho ARGS:%*\r\nmore\r\n"
+      : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\ncat\n");
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+    const environment = {
+      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`,
+      FIXLAB_RUNTIME: "copilot",
+      FIXLAB_MODEL: ""
+    };
+    for (const [options, model] of [
+      [["--model", "HydraFusion"], "hydrafusion"],
+      [["--model=claude-sonnet-4.5"], "claude-sonnet-4.5"],
+      [[], "hydrafusion"]
+    ]) {
+      const result = run(
+        ["run", repository, ...options, "--", "Explain", "--model", "in", "request", "text"],
+        repository,
+        { ...environment, ...(options.length ? {} : { FIXLAB_MODEL: "hydrafusion" }) }
+      );
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, new RegExp(`--model ${model.replaceAll(".", "\\.")}`));
+      assert.equal(result.stdout.includes("--experimental"), model === "hydrafusion");
+      assert.match(result.stdout, /Explain --model in request text/);
+    }
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("CLI rejects unavailable runtime model selection and unsafe model identifiers", () => {
+  for (const [runtime, model, message] of [
+    ["agency", "hydrafusion", /copilot runtime/],
+    ["copilot", "hydrafusion&whoami", /model must be/]
+  ]) {
+    const result = run(["run", "--runtime", runtime, "--model", model, "--", "Validate"], process.cwd());
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, message);
+  }
+});
+
 test("onboard creates a new profile and stops before placeholder setup", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 
@@ -799,7 +848,7 @@ test("dashboard browser opening is opt-in, including after onboarding", () => {
   assert.match(content, /if \(argument === "--open"\) \{\s+open = true;/);
   assert.match(
     content,
-    /return dashboard\(repository, DEFAULT_DASHBOARD_PORT, false, runtime\);/
+    /return dashboard\(repository, DEFAULT_DASHBOARD_PORT, false, runtime, 0, model\);/
   );
   const missing = join(tmpdir(), `fixlab-browser-opt-in-${process.pid}`);
   const result = run(["dashboard", missing, "--open"], process.cwd());

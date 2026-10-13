@@ -75,6 +75,13 @@
 
       <section class="panel">
         <form id="job-form">
+          <label id="model-control" for="model" hidden>
+            Copilot model
+            <select id="model" name="model" disabled>
+              <option value="">Copilot default</option>
+              <option value="hydrafusion">HydraFusion (research preview)</option>
+            </select>
+          </label>
           <label class="checkbox-row">
             <input name="prestartFrontend" type="checkbox" checked>
             Warm React in parallel when a local job starts

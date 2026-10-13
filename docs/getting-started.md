@@ -225,6 +225,10 @@ When a job is blocked at live-test, **Connect Playwright, then retry live test**
 runs the same configured command, waits for you to sign in, and retries the
 live test automatically only after the command exits successfully. Sign-in
 always stays with you; FixLab never handles credentials.
+While the authentication helper is running, browser retry controls are disabled
+and the API rejects attempts to resume a blocked live test. If the repository
+keeps its sign-in window open after login, close that window to release the
+persistent profile before retrying; do not start another sign-in helper.
 
 The **React frontend** panel starts the profile's `applications.frontend.command`
 in `applications.frontend.workingDirectory` ahead of time and watches
@@ -241,6 +245,9 @@ tabs automatically. Open the printed loopback URL yourself, use the explicit
 `fixlab dashboard --open` option, or request **open dashboard** in terminal
 chat. `--no-open` remains supported. Loopback binding stays at `127.0.0.1`;
 changing browser-opening behavior does not expose the service to the network.
+FixLab-owned agent and frontend processes inherit `BROWSER=none` to suppress
+React development-server auto-opening. Explicit manual localhost validation
+still opens the application once when its health gate passes.
 
 **Warm React in parallel when a local job starts** is enabled by default in the
 job form. Select the **local** validation environment to start the profile
@@ -269,6 +276,14 @@ resume. It does not stop unrelated processes or unverified/unreachable owners.
 Ownership records contain only loopback addresses and random owner IDs in a
 repository-keyed OS temporary directory; clean dashboard shutdown removes its
 record. An unavailable owner is shown explicitly and cannot be controlled.
+
+Executor starts are also fenced by an atomic per-repository lease, shared by
+linked Git worktrees. A timeout or stop request keeps that lease until actual
+executor termination is confirmed; resume remains disabled while stopping.
+An owner crash or unverifiable exit leaves an explicit reserved-lease blocker.
+Do not clear it merely because the dashboard is unreachable or a PID appears
+stale: recovery requires verifying that the owner and executor tree are
+quiescent. There is no automatic stale-owner takeover.
 
 FixLab-created pull-request titles use **FLAB:** followed by the coding change.
 Descriptions follow the repository's PR template with Markdown sections for

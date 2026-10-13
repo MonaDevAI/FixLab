@@ -13,6 +13,9 @@ const form = document.querySelector("#job-form");
 const startButton = document.querySelector("#start-button");
 const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
+const modelControl = document.querySelector("#model-control");
+const modelSelect = document.querySelector("#model");
+let modelConfigured = false;
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
 const testEvidenceElement = document.querySelector("#test-evidence");
@@ -169,6 +172,7 @@ let selectedScreenshots = [];
 let activeJob = null;
 let selectedJobId = null;
 let pendingRetryAfterConnectJobId = null;
+let playwrightAuthenticationRunning = false;
 const observedJobs = new Map();
 const expandedJobIds = new Set();
 let renderedEvidenceJobId = null;
@@ -227,6 +231,25 @@ function renderReadiness(readiness) {
     )
   ) {
     targetEnvironmentSelect.value = selectedEnvironment;
+  }
+}
+
+function renderRuntime(runtime) {
+  const supported = runtime?.supportsModelSelection === true;
+  modelControl.hidden = !supported;
+  modelSelect.disabled = !supported;
+  if (!supported) {
+    modelSelect.value = "";
+    modelConfigured = false;
+    return;
+  }
+  if (!modelConfigured) {
+    const defaultModel = runtime.defaultModel ?? "";
+    if (![...modelSelect.options].some((option) => option.value === defaultModel)) {
+      modelSelect.add(new Option(defaultModel, defaultModel));
+    }
+    modelSelect.value = defaultModel;
+    modelConfigured = true;
   }
 }
 
@@ -292,7 +315,7 @@ function renderJob(job, currentActiveJob = job) {
       ? Date.now() - Date.parse(job.lastActivityAt)
       : null;
   jobStatusElement.textContent = job
-    ? `${job.status} · ${job.requestType} · ${
+    ? `${job.status} · ${job.requestType}${job.model ? ` · ${job.model}` : ""} · ${
         job.targetEnvironment || "profile default"
       } · ${formatDuration(job.durationMs)}${
         lastActivityAge === null
@@ -480,10 +503,8 @@ function renderJob(job, currentActiveJob = job) {
   failManualLocalhostButton.hidden = !canConfirmManualLocalhost;
   failManualLocalhostButton.disabled = !canConfirmManualLocalhost;
   retryLiveTestButton.hidden = !canRetryLiveTest;
-  retryLiveTestButton.disabled = !canRetryLiveTest;
   connectRetryLiveTestButton.hidden = !canRetryLiveTest;
-  connectRetryLiveTestButton.disabled =
-    !canRetryLiveTest || Boolean(pendingRetryAfterConnectJobId);
+  updateLiveTestRetryAvailability();
   skipLiveTestButton.hidden = !canRetryLiveTest;
   skipLiveTestButton.disabled = !canRetryLiveTest;
   approvePullRequestButton.hidden = !canApprovePullRequest;
@@ -535,7 +556,23 @@ function renderJob(job, currentActiveJob = job) {
   }
 }
 
+function updateLiveTestRetryAvailability() {
+  retryLiveTestButton.disabled =
+    retryLiveTestButton.hidden || playwrightAuthenticationRunning;
+  connectRetryLiveTestButton.disabled =
+    connectRetryLiveTestButton.hidden ||
+    playwrightAuthenticationRunning ||
+    Boolean(pendingRetryAfterConnectJobId);
+  const reason = playwrightAuthenticationRunning
+    ? "Finish sign-in and close its browser window before retrying the live test."
+    : "";
+  retryLiveTestButton.title = reason;
+  connectRetryLiveTestButton.title = reason;
+}
+
 function renderPlaywrightStatus(status) {
+  playwrightAuthenticationRunning = Boolean(status.running);
+  updateLiveTestRetryAvailability();
   playwrightStatus.className = `badge ${
     status.running ? "running" : status.ready ? "passed" : "blocked"
   }`;
@@ -554,10 +591,12 @@ function renderPlaywrightStatus(status) {
     .map((entry) => `${entry.ready ? "ready" : "missing"}: ${entry.path}`)
     .join(" · ");
   playwrightGuidance.textContent =
-    status.error ||
-    status.lastResult?.message ||
-    pathSummary ||
-    "Add browserAutomation.authentication to the repository profile.";
+    status.running
+      ? "Authentication is still running. Finish sign-in and close its browser window if it stays open; live-test retries wait until the helper exits."
+      : status.error ||
+        status.lastResult?.message ||
+        pathSummary ||
+        "Add browserAutomation.authentication to the repository profile.";
 }
 
 async function resumeAfterConnect(status) {
@@ -1297,6 +1336,7 @@ async function refresh() {
     if (!selectedJobId || !observedJobs.has(selectedJobId)) {
       selectedJobId = activeJob?.id ?? null;
     }
+    renderRuntime(body.runtime);
     renderReadiness(body.readiness);
     renderJob(observedJobs.get(selectedJobId) ?? activeJob, activeJob);
     renderQueue(activeJob, body.queue, body.history);
@@ -1337,6 +1377,7 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         request: data.get("request"),
         requestType: data.get("requestType"),
+        model: data.get("model") ?? "",
         mode: data.get("mode"),
         pullRequestStrategy: data.get("separatePullRequests") === "on"
           ? "per-bug"
