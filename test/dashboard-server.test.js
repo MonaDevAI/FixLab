@@ -11,6 +11,7 @@ import {
   symlinkSync,
   writeFileSync
 } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
@@ -1640,6 +1641,122 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.match(receivedPrompt, /Save the recording as WebM or MP4/);
   } finally {
     await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard starts, reuses and stops the profile-defined frontend", async () => {
+  const repository = createRepository();
+  const port = await availablePort();
+  writeFileSync(
+    join(repository, ".github", "fixlab", "repository-profile.json"),
+    JSON.stringify(
+      validProfile({
+        applications: {
+          frontend: {
+            workingDirectory: ".",
+            command: "node frontend.js",
+            port,
+            healthUrl: `http://127.0.0.1:${port}`
+          }
+        }
+      })
+    )
+  );
+  writeFileSync(
+    join(repository, "frontend.js"),
+    `require("node:http").createServer((q, s) => s.end("ok")).listen(${port}, "127.0.0.1");`
+  );
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  }));
+
+  try {
+    const initial = await jsonRequest(url, "/api/frontend/status");
+    assert.equal(initial.body.configured, true);
+    assert.equal(initial.body.healthy, false);
+
+    const started = await jsonRequest(url, "/api/frontend/start", {
+      method: "POST"
+    });
+    assert.equal(started.response.status, 202);
+    assert.equal(started.body.started, true);
+
+    let status;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      status = await jsonRequest(url, "/api/frontend/status");
+      if (status.body.healthy) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(status.body.healthy, true);
+    assert.equal(status.body.owned, true);
+
+    const again = await jsonRequest(url, "/api/frontend/start", {
+      method: "POST"
+    });
+    assert.equal(again.response.status, 409);
+
+    const stopped = await jsonRequest(url, "/api/frontend/stop", {
+      method: "POST"
+    });
+    assert.equal(stopped.body.stopped, true);
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      status = await jsonRequest(url, "/api/frontend/status");
+      if (!status.body.healthy) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(status.body.healthy, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard does not restart a frontend that is already healthy", async () => {
+  const repository = createRepository();
+  const port = await availablePort();
+  writeFileSync(
+    join(repository, ".github", "fixlab", "repository-profile.json"),
+    JSON.stringify(
+      validProfile({
+        applications: {
+          frontend: {
+            workingDirectory: ".",
+            command: "node does-not-exist.js",
+            port,
+            healthUrl: `http://127.0.0.1:${port}`
+          }
+        }
+      })
+    )
+  );
+  const external = await new Promise((resolve) => {
+    const instance = createHttpServer((request, response) =>
+      response.end("ok")
+    );
+    instance.listen(port, "127.0.0.1", () => resolve(instance));
+  });
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  }));
+
+  try {
+    const result = await jsonRequest(url, "/api/frontend/start", {
+      method: "POST"
+    });
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.started, false);
+    assert.equal(result.body.healthy, true);
+    assert.equal(result.body.owned, false);
+  } finally {
+    await dashboard.close();
+    await new Promise((resolve) => external.close(resolve));
     rmSync(repository, { recursive: true, force: true });
   }
 });

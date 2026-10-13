@@ -2186,6 +2186,77 @@ function playwrightAuthenticationConfig(repository) {
   };
 }
 
+function frontendStartConfig(repository) {
+  const profile = loadRepositoryProfile(repository);
+  const frontend = profile.applications?.frontend ?? {};
+  const command =
+    typeof frontend.command === "string" ? frontend.command.trim() : "";
+  if (!command) {
+    throw new Error("repository profile must configure applications.frontend.command");
+  }
+  return {
+    command,
+    healthUrl: validatedManualLocalhostUrl(frontend.healthUrl),
+    workingDirectory: resolveContainedPath(
+      repository,
+      frontend.workingDirectory ?? ".",
+      "applications.frontend.workingDirectory",
+      { mustExist: true }
+    )
+  };
+}
+
+async function frontendIsHealthy(healthUrl) {
+  try {
+    const response = await fetch(healthUrl, {
+      signal: AbortSignal.timeout(2000)
+    });
+    await response.body?.cancel();
+    return response.status < 500;
+  } catch {
+    return false;
+  }
+}
+
+function stopProcessTree(child) {
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return;
+  }
+  if (process.platform === "win32" && child.pid) {
+    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+      stdio: "ignore",
+      windowsHide: true
+    });
+    return;
+  }
+  child.kill();
+}
+
+async function frontendStatus(repository, connection) {
+  let healthUrl = "";
+  try {
+    ({ healthUrl } = frontendStartConfig(repository));
+  } catch (error) {
+    return {
+      configured: false,
+      running: Boolean(connection.handle),
+      healthy: false,
+      owned: Boolean(connection.handle),
+      error: error.message,
+      lastResult: connection.lastResult
+    };
+  }
+  return {
+    configured: true,
+    running: Boolean(connection.handle),
+    healthy: await frontendIsHealthy(healthUrl),
+    owned: Boolean(connection.handle),
+    healthUrl,
+    error: "",
+    lastResult: connection.lastResult
+  };
+}
+
 function playwrightAuthenticationStatus(repository, connection) {
   let configuration;
   try {
@@ -2363,6 +2434,7 @@ export function createDashboardServer({
   const completedJobs = [];
   const artifactDirectories = new Set();
   const playwrightConnection = { handle: null, lastResult: null };
+  const frontendConnection = { handle: null, lastResult: null };
   const playwrightArtifacts = new Map();
   const cacheContext = createCacheContext(resolvedRepository);
   const metricsPath = cacheContext
@@ -3642,6 +3714,87 @@ export function createDashboardServer({
       return;
     }
 
+    if (
+      request.method === "GET" &&
+      requestUrl.pathname === "/api/frontend/status"
+    ) {
+      sendJson(
+        response,
+        200,
+        await frontendStatus(resolvedRepository, frontendConnection)
+      );
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/frontend/start"
+    ) {
+      let configuration;
+      try {
+        configuration = frontendStartConfig(resolvedRepository);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (frontendConnection.handle) {
+        sendJson(response, 409, { error: "FixLab already started the frontend" });
+        return;
+      }
+      if (await frontendIsHealthy(configuration.healthUrl)) {
+        sendJson(response, 200, {
+          ...(await frontendStatus(resolvedRepository, frontendConnection)),
+          started: false
+        });
+        return;
+      }
+      frontendConnection.lastResult = null;
+      const child = spawn(configuration.command, {
+        cwd: configuration.workingDirectory,
+        shell: true,
+        stdio: "ignore",
+        windowsHide: true
+      });
+      frontendConnection.handle = child;
+      child.once("error", (error) => {
+        frontendConnection.lastResult = {
+          ok: false,
+          message: error.message,
+          finishedAt: new Date().toISOString()
+        };
+        frontendConnection.handle = null;
+      });
+      child.once("close", (code) => {
+        if (frontendConnection.handle === child) {
+          frontendConnection.handle = null;
+        }
+        frontendConnection.lastResult = {
+          ok: code === 0,
+          message: `Frontend process exited with code ${code ?? "unknown"}.`,
+          finishedAt: new Date().toISOString()
+        };
+      });
+      sendJson(response, 202, {
+        ...(await frontendStatus(resolvedRepository, frontendConnection)),
+        started: true
+      });
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      requestUrl.pathname === "/api/frontend/stop"
+    ) {
+      const child = frontendConnection.handle;
+      frontendConnection.handle = null;
+      stopProcessTree(child);
+      sendJson(response, 200, {
+        ...(await frontendStatus(resolvedRepository, frontendConnection)),
+        stopped: Boolean(child)
+      });
+      return;
+    }
+
     if (request.method === "GET" && staticFiles.has(requestUrl.pathname)) {
       const fileName = staticFiles.get(requestUrl.pathname);
       const filePath = join(publicDirectory, fileName);
@@ -3693,6 +3846,8 @@ export function createDashboardServer({
       ) {
         playwrightConnection.handle.kill();
       }
+      stopProcessTree(frontendConnection.handle);
+      frontendConnection.handle = null;
       for (const directory of artifactDirectories) {
         removeArtifactDirectory(directory);
       }
