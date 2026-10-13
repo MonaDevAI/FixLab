@@ -2275,6 +2275,17 @@ function stopProcessTree(child) {
     });
     return;
   }
+  if (child.pid) {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+      return;
+    } catch (error) {
+      if (error.code !== "ESRCH") {
+        child.kill();
+      }
+      return;
+    }
+  }
   child.kill();
 }
 
@@ -4265,6 +4276,7 @@ export function createDashboardServer({
       frontendConnection.lastResult = null;
       const child = spawn(configuration.command, {
         cwd: configuration.workingDirectory,
+        detached: process.platform !== "win32",
         shell: true,
         stdio: "ignore",
         windowsHide: true
