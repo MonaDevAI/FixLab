@@ -25,7 +25,7 @@ async function observeTermination(pids) {
   `;
   const observer = spawn(join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
     ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { stdio: ["ignore", "pipe", "pipe"] });
+    { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
   let output = "";
   let errors = "";
   let ready;
@@ -104,6 +104,7 @@ function treeScript(record, exitRoot) {
     const { writeFileSync } = require("node:fs");
     const child = spawn(process.execPath, ["-e", ${JSON.stringify(childScript)}], {
       detached: true,
+      windowsHide: true,
       stdio: ["ignore", "ignore", "ignore", "ipc"]
     });
     child.once("message", (message) => {
@@ -118,6 +119,66 @@ test("Windows argument quoting preserves quotes and trailing backslashes", () =>
   assert.equal(quoteWindowsArgument(""), '""');
   assert.equal(quoteWindowsArgument('a"b'), '"a\\"b"');
   assert.equal(quoteWindowsArgument("C:\\path with space\\"), '"C:\\path with space\\\\"');
+});
+
+test("Windows executor gives tooling descendants one inherited hidden console", windowsOnly, async () => {
+  const probe = `
+    $ErrorActionPreference = 'Stop';
+    $ProgressPreference = 'SilentlyContinue';
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ConsoleProbe {
+  [DllImport("kernel32.dll")] public static extern IntPtr GetConsoleWindow();
+  [DllImport("kernel32.dll")] public static extern uint GetConsoleProcessList(uint[] processes, uint count);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr window);
+}
+'@
+    $window = [ConsoleProbe]::GetConsoleWindow();
+    $processes = New-Object 'System.UInt32[]' 16;
+    $count = [ConsoleProbe]::GetConsoleProcessList($processes, $processes.Length);
+    if ($count -eq 0 -or $count -gt $processes.Length) { throw 'Could not inspect the inherited console' };
+    [Console]::WriteLine((@{
+      window = $window.ToInt64();
+      visible = [ConsoleProbe]::IsWindowVisible($window);
+      processes = @($processes[0..($count - 1)]);
+      input = [Console]::In.ReadToEnd()
+    } | ConvertTo-Json -Compress));
+    [Console]::Error.WriteLine('TOOLING_STDERR');
+  `;
+  const source = `
+    const { spawnSync } = require("node:child_process");
+    const child = spawnSync(${JSON.stringify(join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"))},
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-InputFormat", "Text", "-OutputFormat", "Text", "-EncodedCommand",
+       ${JSON.stringify(Buffer.from(probe, "utf16le").toString("base64"))}], {
+        encoding: "utf8", input: "TOOLING_STDIN", timeout: 15000
+      });
+    if (child.error) throw child.error;
+    if (child.status !== 0 || !child.stdout) {
+      throw new Error("Console probe failed (" + child.status + "): " + child.stderr);
+    }
+    const record = JSON.parse(child.stdout);
+    record.rootPid = process.pid;
+    process.stdout.write(JSON.stringify(record));
+    process.stderr.write(child.stderr);
+    process.exitCode = child.status ?? 1;
+  `;
+  const handle = start(["-e", source]);
+  try {
+    const result = await handle.completion;
+    assert.equal(result.code, 0, result.stderr);
+    const record = JSON.parse(result.stdout);
+    assert.ok(record.window > 0, "Tooling must inherit a console rather than allocate its own");
+    assert.equal(record.visible, false, "The inherited console must stay hidden");
+    assert.ok(record.processes.includes(record.rootPid), "The executor and tooling must share their console");
+    assert.equal(record.input, "TOOLING_STDIN");
+    assert.match(result.stderr, /TOOLING_STDERR/);
+    assert.equal(handle.hasStopped(), true);
+  } finally {
+    handle.terminate();
+    await handle.completion;
+    rmSync(handle.directory, { recursive: true, force: true });
+  }
 });
 
 test("Windows suspended launch preserves argv, stdin, stdout and child exit code", windowsOnly, async () => {
@@ -235,7 +296,8 @@ test("Windows owner crash terminates its contained processes without reclaiming 
     setInterval(() => {}, 1000);
   `;
   const owner = spawn(process.execPath, ["--input-type=module", "-e", source], {
-    stdio: ["ignore", "ignore", "ignore", "ipc"]
+    stdio: ["ignore", "ignore", "ignore", "ipc"],
+    windowsHide: true
   });
   const ownerExit = new Promise((resolve) => owner.once("exit", resolve));
   let supervisor;
@@ -327,7 +389,7 @@ test("real Windows Copilot executor retains its lease until the contained tree e
   const script = `$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); Add-Type -TypeDefinition $source -OutputAssembly '${executable.replaceAll("'", "''")}' -OutputType ConsoleApplication`;
   const compiled = spawnSync(join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
     ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { encoding: "utf8", timeout: 15000 });
+    { encoding: "utf8", timeout: 15000, windowsHide: true });
   const originalPath = process.env.PATH;
   let handle;
   let lease;

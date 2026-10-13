@@ -94,7 +94,13 @@ termination, partial reservations and owner crashes remain fail-closed; neither
 an HTTP timeout nor PID reuse authorizes automatic reclamation.
 
 Windows executors launch suspended, enter a non-breakaway Windows Job Object,
-then resume. The supervisor terminates remaining descendants after launcher
+then resume. Each executor has one hidden console that ordinary tooling
+descendants inherit, preventing transient PowerShell and command-prompt windows
+without sharing shell state between jobs. Input, output and errors remain piped
+to the supervisor and dashboard logs. Noninteractive CLI probes and setup
+helpers also hide their Windows console windows; interactive agent sessions
+continue using the user's terminal.
+The supervisor terminates remaining descendants after launcher
 exit or an owned stop request, and records a nonce-bound proof only after the
 job's active process count reaches zero. Lease release requires both supervisor
 exit and that proof; a supervisor crash remains fail-closed. This uses built-in
@@ -276,8 +282,14 @@ artifacts, reviews the effective diff, pushes the checkpoint, and creates or
 updates a draft pull request. Independent builds, application startup, and
 browser journeys continue while the draft is visible. Later reviewed
 checkpoints update the same branch and PR. The PR remains explicitly
-validation-in-progress and cannot be marked ready until every required gate
-passes or repository policy records an accepted outcome.
+validation-in-progress until required local validation and approval gates
+pass or repository policy records an accepted outcome. FixLab then publishes
+the authorized PR by clearing its draft status and verifies the provider's
+`isDraft` state is false before reporting the PR stage passed. Publication
+does not wait for remote CI or build completion: some providers trigger PR
+builds only after publication. Those checks remain reported as pending, not
+passed, and normal review, build, and merge policies remain enforced. Failed
+publication or state verification blocks or fails the PR stage.
 
 Stage summaries remain structured independently of raw output. The dashboard
 retains a bounded local log window and reports how many older entries were

@@ -4,6 +4,12 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Give Windows tooling descendants one inherited hidden console while retaining
+  captured input/output, Job Object containment, and termination proofs.
+- Publish authorized pull requests after required local validation and approval,
+  verify draft status is cleared, and leave publication-triggered remote builds
+  pending rather than waiting for them before publication.
+
 ## 0.7.3 - 2026-10-05
 
 - Wait for the native keep-awake inhibitor to become ready before reporting

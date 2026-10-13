@@ -141,7 +141,7 @@ function findExecutable(command) {
   const result = spawnSync(
     process.platform === "win32" ? "where.exe" : "which",
     [command],
-    { encoding: "utf8", shell: false }
+    { encoding: "utf8", shell: false, windowsHide: true }
   );
   return result.status === 0;
 }
@@ -158,7 +158,8 @@ function checkDotnetSdk(repository) {
   const result = spawnSync("dotnet", ["--version"], {
     cwd: repository,
     encoding: "utf8",
-    shell: false
+    shell: false,
+    windowsHide: true
   });
   const version = result.stdout?.trim();
   if (result.status === 0 && version) {
@@ -335,7 +336,8 @@ function checkPlaywright(repository, profile) {
   const packageResult = spawnSync(process.execPath, ["-e", packageProbe], {
     cwd: workingDirectory,
     encoding: "utf8",
-    timeout: 15000
+    timeout: 15000,
+    windowsHide: true
   });
   const resolvedPackage = packageResult.stdout?.trim();
   const packageCheck = {
@@ -382,7 +384,8 @@ function checkPlaywright(repository, profile) {
   const browserResult = spawnSync(process.execPath, ["-e", browserProbe], {
     cwd: workingDirectory,
     encoding: "utf8",
-    timeout: 45000
+    timeout: 45000,
+    windowsHide: true
   });
   const launchedBrowser = browserResult.stdout?.trim();
   const expectedBrowser = browserChannel
@@ -818,7 +821,8 @@ function setupPlaywright(repository, approved) {
     const result = spawnSync(command, args, {
       cwd: workingDirectory,
       stdio: "inherit",
-      shell: process.platform === "win32"
+      shell: process.platform === "win32",
+      windowsHide: true
     });
     if (result.status !== 0) {
       console.error(`Playwright setup failed: ${formatCommand(command, args)}`);
@@ -922,7 +926,7 @@ function authenticate(repository, approved) {
   return 0;
 }
 
-function launch(repository, request, runtime, targetEnvironment = "", model = "") {
+function launch(repository, request, runtime, targetEnvironment = "", model = "", readOnly = false) {
   const { profile, error } = loadProfile(repository);
   if (error) {
     console.error(
@@ -951,6 +955,9 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
 
   const guidance = [
     "Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise coding-change description. Use the repository's PR template with clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.",
+    readOnly
+      ? "Do not publish a pull request or change its draft status in read-only mode."
+      : "After required local validation and approval gates pass or have an explicitly accepted outcome, publish the authorized PR by marking it ready for review. Do not wait for remote PR CI or build completion before publication; publication can trigger those checks. Verify the PR is no longer draft before reporting the PR stage passed. Report remote checks as pending, not passed, and leave merge policies intact. Use `gh pr ready PR_NUMBER` for GitHub or `az repos pr update --id PR_ID --draft false` for Azure DevOps, then read back `isDraft` from the provider to confirm it is false. If publication or state verification fails, report the PR stage blocked or failed, not passed.",
     "Treat runtime-synthesized Playwright scenarios as transient validation artifacts by default. Remove their source files and validation-only configuration edits before review, commit, push, or pull-request creation. Do not add newly generated authenticated tests such as *.auth.spec.ts unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.",
     ...(selectedEnvironment
       ? [
@@ -1298,7 +1305,8 @@ function openBrowser(url) {
   const child = spawn(command, args, {
     detached: true,
     stdio: "ignore",
-    shell: false
+    shell: false,
+    windowsHide: true
   });
   child.on("error", (error) => {
     console.error(`Could not open the system browser: ${error.message}`);
@@ -1640,7 +1648,8 @@ async function main(args) {
       `Validate pull request ${parsed.pullRequest} without modifying source code or the pull request.`,
       runtimeArguments.runtime,
       "",
-      runtimeArguments.model
+      runtimeArguments.model,
+      true
     );
   }
 

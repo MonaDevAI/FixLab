@@ -92,8 +92,18 @@ pass, remove transient validation artifacts, review the effective diff, commit
 and push that checkpoint, and create or update a draft pull request. Run
 remaining independent builds and browser journeys while the draft is open,
 push later reviewed checkpoints to the same branch, and never mark the PR ready
-until every required gate passes or the developer explicitly accepts the
+until every required local gate passes or the developer explicitly accepts the
 recorded outcome.
+
+After required local validation and approval gates pass or have an explicitly
+accepted outcome, publish the authorized PR by marking it ready for review.
+Do not wait for remote PR CI or build completion before publication; publication
+can trigger those checks. Verify the PR is no longer draft before reporting the
+PR stage passed. Report remote checks as pending, not passed, and leave merge
+policies intact. Use `gh pr ready <number>` for GitHub or
+`az repos pr update --id <id> --draft false` for Azure DevOps, then read back
+`isDraft` from the provider to confirm it is false. If publication or state
+verification fails, report the PR stage blocked or failed, not passed.
 
 Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise
 description of the coding change. Use the repository's PR template and clear

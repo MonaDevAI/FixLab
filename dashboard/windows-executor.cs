@@ -10,7 +10,8 @@ namespace FixLab
     public static class WindowsExecutor
     {
         const uint CreateSuspended = 0x00000004;
-        const uint CreateNoWindow = 0x08000000;
+        const uint CreateNewConsole = 0x00000010;
+        const uint UseShowWindow = 0x00000001;
         const uint UseStandardHandles = 0x00000100;
         const uint KillOnJobClose = 0x00002000;
         const uint WaitTimeout = 258;
@@ -152,7 +153,9 @@ namespace FixLab
                 {
                     Startup startup = new Startup();
                     startup.Size = (uint)Marshal.SizeOf(typeof(Startup));
-                    startup.Flags = UseStandardHandles;
+                    // Descendant tools inherit this hidden console instead of opening their own.
+                    startup.Flags = UseStandardHandles | UseShowWindow;
+                    startup.ShowWindow = 0;
                     startup.Input = GetStdHandle(-10);
                     startup.Output = GetStdHandle(-11);
                     startup.Error = GetStdHandle(-12);
@@ -160,7 +163,7 @@ namespace FixLab
                     Check(SetHandleInformation(startup.Output, 1, 1));
                     Check(SetHandleInformation(startup.Error, 1, 1));
                     Check(CreateProcess(executable, new StringBuilder(command), IntPtr.Zero,
-                        IntPtr.Zero, true, CreateSuspended | CreateNoWindow, IntPtr.Zero,
+                        IntPtr.Zero, true, CreateSuspended | CreateNewConsole, IntPtr.Zero,
                         directory, ref startup, out process));
                     Check(AssignProcessToJobObject(job, process.Process));
                     assigned = true;

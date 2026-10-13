@@ -1338,8 +1338,13 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     );
     assert.match(
       receivedPrompt,
-      /Never mark it ready for review or report the pr stage passed until all required gates pass/i
+      /Never mark it ready for review or report the pr stage passed until all required local gates pass/i
     );
+    assert.match(receivedPrompt, /publish the authorized PR by marking it ready for review/);
+    assert.match(receivedPrompt, /Do not wait for remote PR CI or build completion before publication/);
+    assert.match(receivedPrompt, /Verify the PR is no longer draft before reporting the PR stage passed/);
+    assert.match(receivedPrompt, /Report remote checks as pending, not passed, and leave merge policies intact/);
+    assert.match(receivedPrompt, /az repos pr update --id <id> --draft false/);
     assert.match(receivedPrompt, /authentication, unsafe-data approval/i);
     assert.match(receivedPrompt, /git status and effective diff/i);
     assert.match(receivedPrompt, /task-relevant symbols and files/i);
@@ -4072,6 +4077,25 @@ test("dashboard cache hits and invalidates on profile or HEAD changes", async ()
   }
 });
 
+test("dashboard PR strategies publish after local gates without waiting for remote CI", () => {
+  for (const pullRequestStrategy of ["per-bug", "common"]) {
+    const prompt = buildJobPrompt({
+      request: "Fix the reported behavior.",
+      mode: "fix-and-validate",
+      requestType: "bug-fix",
+      pullRequestStrategy
+    });
+    assert.match(prompt, /required local validation and approval gates/);
+    assert.match(prompt, /publish the authorized PR by marking it ready for review/);
+    assert.match(prompt, /Do not wait for remote PR CI or build completion before publication/);
+    assert.match(prompt, /Verify the PR is no longer draft before reporting the PR stage passed/);
+    assert.match(prompt, /Report remote checks as pending, not passed, and leave merge policies intact/);
+    assert.match(prompt, /If publication or state verification fails, report the PR stage blocked or failed/);
+    assert.match(prompt, /gh pr ready <number>/);
+    assert.match(prompt, /az repos pr update --id <id> --draft false/);
+  }
+});
+
 test("validate-only prompt prohibits repository changes", () => {
   const prompt = buildJobPrompt({
     request: "Check the current behavior.",
@@ -4086,6 +4110,9 @@ test("validate-only prompt prohibits repository changes", () => {
   assert.match(prompt, /fix and pr stages must be explicitly skipped/);
   assert.match(prompt, /FIXLAB_ACTIVITY\|stage\|summary/);
   assert.match(prompt, /not hidden chain-of-thought/);
+  assert.match(prompt, /Do not publish a pull request or change its draft status in read-only mode/);
+  assert.doesNotMatch(prompt, /publish the authorized PR by marking it ready for review/);
+  assert.doesNotMatch(prompt, /gh pr ready|az repos pr update/);
 });
 
 test("selected non-production data falls back to synthetic only when required", () => {

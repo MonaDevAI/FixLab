@@ -152,6 +152,36 @@ test("cross-runtime validation guidance stays aligned", () => {
   assert.match(browserRule, /event registration/);
 });
 
+test("every PR entry point publishes before waiting for remote CI", () => {
+  const root = join(testDirectory, "..");
+  const entryPoints = [
+    "dashboard/server.js",
+    "bin/fixlab.js",
+    "agents/fixlab.md",
+    "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md",
+    ".github/agents/fixlab-autofix.agent.md",
+    "prompts/fixlab.pr.prompt.md"
+  ];
+  for (const entryPoint of entryPoints) {
+    const content = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    assert.match(content, /required local validation and approval gates/,
+      `${entryPoint} must preserve local validation and publication approval`);
+    assert.match(content, /publish the authorized PR by marking it ready for review/,
+      `${entryPoint} must explicitly publish instead of leaving the PR draft`);
+    assert.match(content, /Do not wait for remote PR CI or build completion before publication/,
+      `${entryPoint} must not wait for a build triggered by publication`);
+    assert.match(content, /Verify the PR is no longer draft before reporting the PR stage passed/,
+      `${entryPoint} must verify publication before reporting success`);
+    assert.match(content, /Report remote checks as pending, not passed, and leave merge policies intact/,
+      `${entryPoint} must not equate publication with successful CI or merge approval`);
+    assert.match(content, /gh pr ready/,
+      `${entryPoint} must identify the GitHub draft transition`);
+    assert.match(content, /az repos pr update --id (?:<id>|PR_ID) --draft false/,
+      `${entryPoint} must identify the Azure DevOps draft transition`);
+  }
+});
+
 test("repository policy matches enforced CI and rollback controls", () => {
   const root = join(testDirectory, "..");
 

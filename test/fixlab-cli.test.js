@@ -1019,8 +1019,19 @@ test("run launches the Agency-resolved FixLab agent", () => {
     assert.match(result.stdout, /FIXLAB_ACTIVITY/);
     assert.match(result.stdout, /FIXLAB_TEST/);
     assert.match(result.stdout, /transient validation artifacts/);
+    assert.match(result.stdout, /publish the authorized PR by marking it ready for review/);
+    assert.match(result.stdout, /Do not wait for remote PR CI or build completion before publication/);
+    assert.match(result.stdout, /Verify the PR is no longer draft before reporting the PR stage passed/);
     assert.match(result.stdout, /\*\.auth\.spec\.ts/);
     assert.match(result.stdout, /Request: repair the defect/);
+    const validation = run(
+      ["validate", repository, "--pr", "123", "--runtime", "agency"],
+      repository,
+      { PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` }
+    );
+    assert.equal(validation.status, 0);
+    assert.match(validation.stdout, /Do not publish a pull request or change its draft status in read-only mode/);
+    assert.doesNotMatch(validation.stdout, /gh pr ready|az repos pr update/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -1144,9 +1155,20 @@ test("run launches the FixLab plugin directly through Copilot", () => {
     );
     assert.match(result.stdout, /--autopilot/);
     assert.match(result.stdout, /transient validation artifacts/);
+    assert.match(result.stdout, /publish the authorized PR by marking it ready for review/);
+    assert.match(result.stdout, /Do not wait for remote PR CI or build completion before publication/);
+    assert.match(result.stdout, /Verify the PR is no longer draft before reporting the PR stage passed/);
     assert.match(result.stdout, /\*\.auth\.spec\.ts/);
     assert.match(result.stdout, /Request: repair the defect/);
     assert.doesNotMatch(result.stdout, /--interactive repair the defect/);
+    const validation = run(
+      ["validate", repository, "--pr", "123", "--runtime", "copilot"],
+      repository,
+      { PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}` }
+    );
+    assert.equal(validation.status, 0);
+    assert.match(validation.stdout, /Do not publish a pull request or change its draft status in read-only mode/);
+    assert.doesNotMatch(validation.stdout, /gh pr ready|az repos pr update/);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
