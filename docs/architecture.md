@@ -94,6 +94,16 @@ enable resume before the executor's termination promise settles. Unverified
 termination, partial reservations and owner crashes remain fail-closed; neither
 an HTTP timeout nor PID reuse authorizes automatic reclamation.
 
+An opt-in `worktreeSetup.mode: "shared"` profile lets sequential dashboard jobs
+reuse the selected checkout. Admission holds that same executor lease while
+checking cleanliness, refreshing the configured remote base and acquiring a
+job-specific branch. Its branch and base commit are persisted with the job.
+Held/resumed jobs reacquire their saved branch without syncing it to the base;
+restarted jobs acquire a new branch. PRs can remain pending while another job
+uses the folder, but dirty files, in-progress Git operations and owned
+frontend/authentication processes prevent branch changes. The executor must
+leave its assigned branch selected. See [shared checkout setup](repository-onboarding.md#reusing-one-checkout-for-sequential-jobs).
+
 Windows executors launch suspended, enter a non-breakaway Windows Job Object,
 then resume. Each executor has one hidden console that ordinary tooling
 descendants inherit, preventing transient PowerShell and command-prompt windows

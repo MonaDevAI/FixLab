@@ -488,7 +488,120 @@ function git(repository, args) {
     shell: false
   });
   assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
 }
+
+test("shared dashboard jobs refresh develop, reuse one checkout and reacquire held branches after restart", async () => {
+  const source = createGitRepository();
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-shared-dashboard-"));
+  const executions = [];
+  const profile = validProfile({ worktreeSetup: { mode: "shared", baseBranch: "develop" } });
+  writeFileSync(join(source, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  git(source, ["branch", "-m", "develop"]);
+  git(source, ["add", "."]);
+  git(source, ["commit", "--quiet", "-m", "configure shared runner"]);
+  git(source, ["clone", "--quiet", source, repository]);
+  git(repository, ["config", "user.name", "Fixture"]);
+  git(repository, ["config", "user.email", "fixture@example.test"]);
+  const executor = (input) => {
+    let finish;
+    const completion = new Promise((resolve) => { finish = resolve; });
+    executions.push({ input, finish, branch: git(repository, ["branch", "--show-current"]) });
+    return { completion, terminate() { finish({ code: null, signal: "SIGTERM" }); } };
+  };
+  let current = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  const waitUntil = async (condition) => {
+    for (let attempt = 0; attempt < 100 && !condition(); attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.ok(condition());
+  };
+  const block = (execution) => {
+    execution.input.onOutput("stdout", "FIXLAB_STAGE|intake|blocked|Retain this job.\n");
+    execution.finish({ code: 0 });
+  };
+  try {
+    const first = await post("/api/jobs", { request: "First shared fix.", mode: "fix-and-validate" });
+    assert.equal(first.response.status, 202);
+    const firstId = first.body.job.id;
+    const firstBranch = first.body.job.sharedWorkspace.branch;
+    assert.equal(executions[0].branch, firstBranch);
+    assert.match(executions[0].input.prompt, /Shared worktree contract/);
+    writeFileSync(join(repository, "first-fix.txt"), "first fix");
+    git(repository, ["add", "first-fix.txt"]);
+    git(repository, ["commit", "--quiet", "-m", "first fix"]);
+    const firstCommit = git(repository, ["rev-parse", "HEAD"]);
+    block(executions[0]);
+    await waitUntil(() => !existsSync(join(repository, ".git", "fixlab", "executor-lease")));
+    await post("/api/jobs/hold", { jobId: firstId });
+    writeFileSync(join(source, "upstream.txt"), "fresh develop");
+    git(source, ["add", "upstream.txt"]);
+    git(source, ["commit", "--quiet", "-m", "advance develop"]);
+    const second = await post("/api/jobs", { request: "Second independent fix.", mode: "fix-and-validate" });
+    assert.equal(second.response.status, 202);
+    assert.notEqual(second.body.job.sharedWorkspace.branch, firstBranch);
+    assert.equal(second.body.job.sharedWorkspace.baseCommit, git(source, ["rev-parse", "HEAD"]));
+    assert.equal(executions[1].input.repository, repository);
+    assert.equal(existsSync(join(repository, "first-fix.txt")), false);
+    assert.equal(readFileSync(join(repository, "upstream.txt"), "utf8"), "fresh develop");
+    block(executions[1]);
+    await waitUntil(() => !existsSync(join(repository, ".git", "fixlab", "executor-lease")));
+    await post("/api/jobs/hold", { jobId: second.body.job.id });
+    await current.dashboard.close();
+    current = await startDashboard(repository, executor);
+    const restored = await jsonRequest(current.url, "/api/status");
+    assert.equal(restored.body.held.find((job) => job.id === firstId).sharedWorkspace.branch, firstBranch);
+    const resumed = await post("/api/jobs/resume", { jobId: firstId });
+    assert.equal(resumed.response.status, 202);
+    assert.equal(executions[2].input.sessionId, firstId);
+    assert.equal(executions[2].input.resume, true);
+    assert.equal(git(repository, ["rev-parse", "HEAD"]), firstCommit);
+    assert.equal(existsSync(join(repository, "upstream.txt")), false);
+    assert.equal(readFileSync(join(repository, "first-fix.txt"), "utf8"), "first fix");
+    block(executions[2]);
+    await waitUntil(() => !existsSync(join(repository, ".git", "fixlab", "executor-lease")));
+    const restarted = await post("/api/jobs/restart", { jobId: firstId });
+    assert.equal(restarted.response.status, 202);
+    assert.notEqual(restarted.body.job.id, firstId);
+    assert.notEqual(restarted.body.job.sharedWorkspace.branch, firstBranch);
+    assert.equal(restarted.body.job.sharedWorkspace.baseCommit, git(source, ["rev-parse", "HEAD"]));
+    assert.equal(executions[3].input.resume, false);
+    assert.equal(existsSync(join(repository, "first-fix.txt")), false);
+  } finally {
+    await current.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(source, { recursive: true, force: true });
+  }
+});
+
+test("shared dashboard rejects dirty checkout acquisition without launching or retaining an executor lease", async () => {
+  const repository = createGitRepository();
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({
+    worktreeSetup: { mode: "shared", baseBranch: "develop" }
+  })));
+  git(repository, ["add", "."]);
+  git(repository, ["commit", "--quiet", "-m", "shared policy"]);
+  writeFileSync(join(repository, "uncommitted.txt"), "preserve");
+  const { dashboard, url } = await startDashboard(repository, () => { throw new Error("Must not launch."); });
+  try {
+    const result = await jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Preserve dirty state.", mode: "fix-and-validate" })
+    });
+    assert.equal(result.response.status, 202);
+    assert.equal(result.body.job.status, "failed");
+    assert.match(result.body.job.error, /uncommitted or untracked/);
+    assert.equal(readFileSync(join(repository, "uncommitted.txt"), "utf8"), "preserve");
+    const reservation = createExecutorLease(repository, "test").acquire("test");
+    reservation.release();
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 function createGitRepository() {
   const repository = createRepository();

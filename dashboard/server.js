@@ -39,6 +39,7 @@ import { createSessionRegistry } from "./sessions.js";
 import { createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
+import { prepareSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "./shared-worktree.js";
 const windowsOwnedTrees = new WeakMap();
 
 export const DASHBOARD_HOST = "127.0.0.1";
@@ -399,6 +400,7 @@ function publicQueue(jobs) {
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
+    sharedWorkspace: job.sharedWorkspace ?? null,
     prestartFrontend: job.prestartFrontend ?? false,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
@@ -465,6 +467,7 @@ function dashboardSnapshot(job) {
       scenario: safePersistedSummary(job.testEvidence.scenario)
     },
     branchNaming: job.branchNaming ?? null,
+    sharedWorkspace: job.sharedWorkspace ?? null,
     intakeSource: job.intakeSource,
     workItem: persistedWorkItem(job.workItem),
     workItems: job.workItems.map(persistedWorkItem),
@@ -733,6 +736,7 @@ export function inspectRepository(repository) {
       throw new Error("profile root must be a JSON object");
     }
     const liveTestProfile = validateLiveTestProfile(profile, resolvedRepository);
+    sharedWorktreeConfig(profile, resolvedRepository);
     if (!liveTestProfile.ok) {
       return {
         repository: resolvedRepository,
@@ -1769,6 +1773,7 @@ function publicJob(job) {
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
+    sharedWorkspace: job.sharedWorkspace ?? null,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: job.manualLocalhostUrl,
@@ -2948,6 +2953,7 @@ export function createDashboardServer({
       createdAt,
       startedAt: status === "running" ? createdAt : null,
       heldAt: null,
+      sharedWorkspace: null,
       finishedAt: null,
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
@@ -3017,6 +3023,35 @@ export function createDashboardServer({
     let leaseMetadataError = null;
     let handle;
     const lease = executorLease.acquire(job.id);
+    try {
+      if (job.mode === "fix-and-validate") {
+        job.sharedWorkspace = prepareSharedWorktree({
+          repository: resolvedRepository,
+          profile: loadRepositoryProfile(resolvedRepository),
+          jobId: job.id,
+          saved: job.sharedWorkspace,
+          resume,
+          resourcesRunning: Boolean(frontendConnection.handle) ||
+            frontendConnection.starting || Boolean(playwrightConnection.handle)
+        });
+        if (job.sharedWorkspace) {
+          persistDashboardState();
+          const readiness = inspectRepository(resolvedRepository);
+          if (!readiness.profileReady) {
+            throw new Error(`Shared checkout configuration is not ready after branch acquisition: ${readiness.error}`);
+          }
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message: `Acquired shared checkout on ${job.sharedWorkspace.branch}; base ${job.sharedWorkspace.remote}/${job.sharedWorkspace.baseBranch} at ${job.sharedWorkspace.baseCommit}.`
+          });
+        }
+      }
+    } catch (error) {
+      lease.release();
+      throw error;
+    }
     const idleCompletion = new Promise((resolveCompletion) => {
       resolveIdleCompletion = resolveCompletion;
     });
@@ -3089,9 +3124,9 @@ export function createDashboardServer({
       handle = executor({
         repository: resolvedRepository,
         artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
-        prompt: job.prestartFrontend && job.targetEnvironment.toLowerCase() === "local"
+        prompt: (job.prestartFrontend && job.targetEnvironment.toLowerCase() === "local"
           ? `${prompt}\nReact warm-up is requested in parallel in the dashboard repository. Before live testing, reuse that server only after its profile health check passes and you verify it serves the checkout containing the changes being validated. If using another isolated worktree, start the correct checkout instead; a healthy baseline server does not prove the fix. Never mark local-stack passed merely because warm-up was requested.`
-          : prompt,
+          : prompt) + sharedWorktreeGuidance(job.sharedWorkspace),
         sessionId: job.id,
         resume,
         model: job.model,
@@ -3150,8 +3185,16 @@ export function createDashboardServer({
       if (handle.hasStopped && !handle.hasStopped()) {
         throw new Error("Executor exit was observed but owned descendants may still be running; the repository lease remains reserved.");
       }
+      let branchError = null;
+      try {
+        verifySharedWorktreeBranch(resolvedRepository, job.sharedWorkspace);
+      } catch (error) {
+        branchError = error;
+      }
       lease.release();
-      return leaseMetadataError ? { code: null, error: leaseMetadataError } : result;
+      return leaseMetadataError || branchError
+        ? { code: null, error: leaseMetadataError ?? branchError }
+        : result;
     });
     activeTermination = actualCompletion;
     try {
@@ -3300,7 +3343,11 @@ export function createDashboardServer({
     try {
       const owners = await sessions.list();
       const conflict = owners.find((owner) =>
-        owner.id !== sessions.id && owner.available && owner.job?.running
+        owner.id !== sessions.id && owner.available && (
+          owner.job?.running ||
+          (loadRepositoryProfile(resolvedRepository).worktreeSetup?.mode === "shared" &&
+            (owner.frontend?.running || owner.authentication?.running))
+        )
       );
       if (conflict) {
         throw new Error(`Queued job cannot start while FixLab dashboard ${conflict.id} owns the repository's agent session. Reconnect or confirm stopping that owner.`);
@@ -3460,13 +3507,17 @@ export function createDashboardServer({
 
     if (
       request.method === "POST" &&
-      ["/api/jobs", "/api/job/input", "/api/frontend/start"].includes(requestUrl.pathname)
+      ["/api/jobs", "/api/job/input", "/api/jobs/resume", "/api/jobs/restart", "/api/frontend/start"].includes(requestUrl.pathname)
     ) {
       try {
         const resource = requestUrl.pathname === "/api/frontend/start" ? "frontend" : "job";
         const owners = await sessions.list();
+        const shared = loadRepositoryProfile(resolvedRepository).worktreeSetup?.mode === "shared";
         const conflict = owners.find((owner) =>
-          owner.id !== sessions.id && owner.available && owner[resource]?.running
+          owner.id !== sessions.id && owner.available && (
+            owner[resource]?.running ||
+            (shared && resource === "job" && (owner.frontend?.running || owner.authentication?.running))
+          )
         );
         if (conflict) {
           sendJson(response, 409, {

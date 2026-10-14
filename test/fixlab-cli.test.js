@@ -81,6 +81,22 @@ test("help lists supported commands", () => {
   assert.match(result.stdout, /docs\/troubleshooting\.md/);
 });
 
+test("direct shared-mode bug fixing requires dashboard-owned branch acquisition", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-shared-"));
+  try {
+    mkdirSync(join(repository, ".github", "fixlab"), { recursive: true });
+    writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify({
+      worktreeSetup: { mode: "shared" }
+    }));
+    const result = run(["run", repository, "--", "Fix a bug."], repository);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Shared worktree jobs require dashboard-owned branch acquisition/);
+    assert.match(result.stderr, /fixlab dashboard or fixlab chat/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("CLI preserves model selection without interpreting request text as flags", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-model-"));
   const executableDirectory = join(repository, "bin");
