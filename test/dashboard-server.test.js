@@ -79,6 +79,11 @@ test("linked node_modules directories are granted only inside trusted dependency
 
     writeProfile(undefined);
     assert.deepEqual(linkedDependencyDirectories(repository), []);
+    assert.deepEqual(linkedDependencyDirectories(repository, { discover: true }), [
+      realpathSync(external),
+      realpathSync(untrusted)
+    ]);
+    assert.deepEqual(linkedDependencyDirectories(repository), []);
 
     writeProfile([parse(base).root]);
     assert.deepEqual(linkedDependencyDirectories(repository), []);
@@ -340,6 +345,21 @@ function validProfile(overrides = {}) {
     ...overrides
   };
 }
+
+test("dashboard readiness blocks a missing explicit Playwright configuration", () => {
+  const repository = createRepository();
+  try {
+    const profile = validProfile();
+    profile.browserAutomation.testCommand = "playwright test --config=playwright.local.ts";
+    writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+    assert.equal(inspectRepository(repository).profileReady, false);
+    assert.match(inspectRepository(repository).error, /configuration is missing.*worktreeSetup.files/);
+    writeFileSync(join(repository, "playwright.local.ts"), "export default {};");
+    assert.equal(inspectRepository(repository).profileReady, true);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 test("dashboard readiness blocks an incomplete live-test profile", () => {
   const repository = createRepository();

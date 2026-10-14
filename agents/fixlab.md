@@ -38,6 +38,15 @@ instructions provide authoritative commands.
 
 ## Workflow
 
+Before validation in a new isolated worktree, plan `fixlab onboard WORKTREE
+--from SOURCE --runtime RUNTIME`. After scoped setup approval, add `--yes`.
+The source profile declares non-sensitive configuration in `worktreeSetup.files`.
+Never copy credentials or browser state. Missing configuration, authentication
+or denied runtime access is a blocker; do not retry unchanged approvals or
+grant blanket path access. Sign-in and MFA remain human-controlled.
+In read-only modes, do not provision or alter configuration; report missing
+prerequisites as blocked.
+
 1. Read repository instructions and inspect the effective source state.
 2. Identify the smallest affected component and relevant existing tests.
 3. For code changes, use an isolated worktree when the current workspace is not

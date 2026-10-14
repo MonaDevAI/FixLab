@@ -7,7 +7,8 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
-  statSync
+  statSync,
+  writeFileSync
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
@@ -38,6 +39,11 @@ import {
   stopKeepAwake
 } from "./keep-awake.js";
 import { runStructuredCommand } from "./structured-command.js";
+import {
+  applyWorktreeSetup,
+  browserConfigurationErrors,
+  planWorktreeSetup
+} from "../dashboard/repository-setup.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -81,7 +87,7 @@ function printUsage() {
 
 Usage:
   fixlab <repository> [--runtime <agency|copilot>] [--model <model>]
-  fixlab onboard [repository] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>] [--model <model>]
+  fixlab onboard [repository] [--from <source-checkout>] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>] [--model <model>]
   fixlab init [repository]
   fixlab prepare [repository] [--yes]
   fixlab doctor [repository] [--runtime <agency|copilot>]
@@ -562,6 +568,16 @@ function doctor(repository, runtime) {
     ok: Boolean(profile),
     detail: error ?? profilePath
   });
+  const grantedDirectories = new Set(linkedDependencyDirectories(repository));
+  const unapprovedDirectories = linkedDependencyDirectories(repository, { discover: true })
+    .filter((directory) => !grantedDirectories.has(directory));
+  checks.push({
+    name: "Runtime dependency access",
+    ok: unapprovedDirectories.length === 0,
+    detail: unapprovedDirectories.length
+      ? `unapproved linked dependencies: ${unapprovedDirectories.join(", ")}; review fixlab onboard "${repository}" --runtime ${runtime}, then approve with --yes`
+      : "no unapproved external dependency directories"
+  });
   const frontendWorkingDirectory = resolve(
     repository,
     profile?.applications?.frontend?.workingDirectory ?? "."
@@ -926,7 +942,7 @@ function authenticate(repository, approved) {
   return 0;
 }
 
-function launch(repository, request, runtime, targetEnvironment = "", model = "", readOnly = false) {
+function launch(repository, request, runtime, targetEnvironment = "", model = "", readOnly = false, interactiveRequest = "") {
   const { profile, error } = loadProfile(repository);
   if (error) {
     console.error(
@@ -954,6 +970,7 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
   }
 
   const guidance = [
+    "Before validation in a new isolated worktree, plan `fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME`. After scoped setup approval, add `--yes`. The source profile declares non-sensitive configuration in `worktreeSetup.files`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.",
     "Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise coding-change description. Use the repository's PR template with clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.",
     readOnly
       ? "Do not publish a pull request or change its draft status in read-only mode."
@@ -976,8 +993,8 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
       : [])
   ].join(" ");
   const prompt =
-    request || selectedEnvironment
-      ? `${guidance}${request ? ` Request: ${request}` : ""}`
+    request || selectedEnvironment || interactiveRequest
+      ? `${guidance}${request || interactiveRequest ? ` Request: ${request || interactiveRequest}` : ""}`
       : "";
   const invocation = request
     ? runtime === "copilot"
@@ -1001,6 +1018,7 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
           packageRoot,
           "--agent",
           "fixlab:fixlab",
+          ...linkedDependencyDirectories(repository).flatMap((directory) => ["--add-dir", directory]),
           ...(runtime === "copilot" ? copilotModelArguments(model) : []),
           ...(prompt ? ["--interactive", prompt] : [])
         ]
@@ -1166,9 +1184,19 @@ function parseOnboardArguments(args) {
 
   let repositoryArgument;
   let approved = false;
+  let source;
   let authenticateBrowser = false;
   let startDashboard = false;
-  for (const argument of runtimeArguments.args) {
+  for (let index = 0; index < runtimeArguments.args.length; index += 1) {
+    const argument = runtimeArguments.args[index];
+    if (argument === "--from") {
+      const value = runtimeArguments.args[++index];
+      if (!value || value.startsWith("-")) {
+        return { error: "onboard requires a source checkout after --from" };
+      }
+      source = resolveRepository(value);
+      continue;
+    }
     if (argument === "--yes") {
       approved = true;
       continue;
@@ -1194,6 +1222,7 @@ function parseOnboardArguments(args) {
     repository: resolveRepository(repositoryArgument),
     runtime: runtimeArguments.runtime,
     model: runtimeArguments.model,
+    source,
     approved,
     authenticateBrowser,
     startDashboard
@@ -1204,18 +1233,37 @@ async function onboard({
   repository,
   runtime,
   model,
+  source,
   approved,
   authenticateBrowser,
   startDashboard
 }) {
   const profilePath = join(repository, profileRelativePath);
-  const profileExisted = existsSync(profilePath);
+  let profileExisted = existsSync(profilePath);
 
   console.log("FixLab onboarding");
   console.log(`  repository: ${repository}`);
   console.log(`  runtime: ${runtime}`);
   if (model) {
     console.log(`  model: ${model}`);
+  }
+
+  if (source) {
+    const plan = planWorktreeSetup({
+      source,
+      repository,
+      templatePath: join(packageRoot, "templates", "repository-profile.json")
+    });
+    console.log(`  source profile: ${join(plan.source, profileRelativePath)}`);
+    for (const file of plan.files) {
+      console.log(`  ${file.replaceTemplate ? "Replace unchanged example" : file.previous ? "Preserve matching file" : "Provision"}: ${file.name}`);
+    }
+    if (!approved) {
+      console.log("No files or commands changed. Review the source profile, declared worktreeSetup.files and restore commands, then rerun with --yes.");
+      return 0;
+    }
+    applyWorktreeSetup(plan);
+    profileExisted = true;
   }
 
   const initResult = init(repository);
@@ -1235,6 +1283,27 @@ async function onboard({
     );
     console.log("Then rerun fixlab onboard for this repository.");
     return 0;
+  }
+
+  const { profile, error } = loadProfile(repository);
+  if (error) {
+    console.error(`Cannot onboard repository because ${error}.`);
+    return 1;
+  }
+  const configurationErrors = browserConfigurationErrors(profile, repository);
+  if (configurationErrors.length) {
+    console.error(configurationErrors.join("\n"));
+    return 1;
+  }
+  if (profile.trustedDependencyRoots !== undefined && !Array.isArray(profile.trustedDependencyRoots)) {
+    console.error("trustedDependencyRoots must be an array of approved absolute dependency-directory paths.");
+    return 1;
+  }
+  const grantedDirectories = new Set(linkedDependencyDirectories(repository));
+  const dependencyDirectories = linkedDependencyDirectories(repository, { discover: true })
+    .filter((directory) => !grantedDirectories.has(directory));
+  for (const directory of dependencyDirectories) {
+    console.log(`Runtime path approval required for linked dependencies: ${directory}`);
   }
 
   const preparationPlan = prepare(repository, false);
@@ -1257,6 +1326,15 @@ async function onboard({
       "Add --start-dashboard to start the dashboard after Doctor passes."
     );
     return 0;
+  }
+
+  if (dependencyDirectories.length) {
+    profile.trustedDependencyRoots = [
+      ...(profile.trustedDependencyRoots ?? []),
+      ...dependencyDirectories
+    ];
+    writeFileSync(profilePath, `${JSON.stringify(profile, null, 2)}\n`);
+    console.log("Approved only the listed linked dependency directories; runtime deny rules remain in force.");
   }
 
   const preparationResult = prepare(repository, true);
@@ -1505,7 +1583,7 @@ async function startDashboardForChat({
   }
 
   let readiness = inspectRepository(repository);
-  if (!readiness.repositoryReady) {
+  if (!readiness.profileReady || doctor(repository, runtime) !== 0) {
     if (!existsSync(join(repository, profileRelativePath))) {
       const initResult = init(repository);
       if (initResult !== 0) {
@@ -1515,14 +1593,17 @@ async function startDashboardForChat({
     console.log(
       "The repository is not dashboard-ready. Opening the interactive FixLab onboarding session first."
     );
-    const onboardingResult = launch(repository, "", runtime, "", model);
+    const onboardingResult = launch(
+      repository, "", runtime, "", model, false,
+      `Set up this repository for FixLab. Read its instructions and manifests, configure the repository-owned profile, and review the setup plan with the user. After scoped approval, run fixlab onboard "${repository}" --runtime ${runtime} --yes. Add --authenticate only when the profile requires browser sign-in; let the user complete sign-in and MFA. Do not start a dashboard from this agent. Return only after Doctor passes, or report the exact unresolved prerequisite.`
+    );
     if (onboardingResult !== 0) {
       throw new Error(
         `FixLab onboarding exited with code ${onboardingResult}`
       );
     }
     readiness = inspectRepository(repository);
-    if (!readiness.repositoryReady) {
+    if (!readiness.profileReady || doctor(repository, runtime) !== 0) {
       throw new Error(
         `onboarding finished but the repository is not dashboard-ready: ${readiness.error}`
       );

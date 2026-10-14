@@ -38,6 +38,7 @@ import { formatPreflightFailure } from "./preflight.js";
 import { createSessionRegistry } from "./sessions.js";
 import { createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
+import { browserConfigurationErrors } from "./repository-setup.js";
 const windowsOwnedTrees = new WeakMap();
 
 export const DASHBOARD_HOST = "127.0.0.1";
@@ -194,6 +195,9 @@ export function validatePort(value) {
 
 export function validateLiveTestProfile(profile, repository) {
   const missing = [];
+  if (repository) {
+    missing.push(...browserConfigurationErrors(profile, repository));
+  }
   const frontend = profile?.applications?.frontend;
   const browserAutomation = profile?.browserAutomation;
   const authentication = browserAutomation?.authentication;
@@ -890,6 +894,7 @@ Use this concise metadata only to avoid repeated discovery. Verify task-specific
 
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all repository-owned instructions before acting.
+- Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
 - For repeat work, inspect the current git status and effective diff first, then search task-relevant symbols and files instead of rescanning the whole repository.
 - Do not perform a whole-repository rescan when the current diff, cached metadata, and focused symbol/path searches are sufficient.
 - Reuse this job/session context. Do not reread unchanged files, repeat completed diagnosis, reinstall available dependencies, or rerun broad checks without new evidence.
@@ -1394,9 +1399,9 @@ function writeCacheSummary(context, job) {
 
 // Linked dependency folders (for example a node_modules junction) resolve outside
 // the repository, and non-interactive agents cannot answer the path prompt they raise.
-// Only targets inside a profile-declared trustedDependencyRoots entry are granted, so a
-// repository-controlled symlink alone never widens the agent's file access.
-export function linkedDependencyDirectories(repository) {
+// Discovery is only for a reviewed setup plan; runtime callers use the default,
+// which grants only targets inside profile-declared trustedDependencyRoots.
+export function linkedDependencyDirectories(repository, { discover = false } = {}) {
   let root;
   let profile;
   try {
@@ -1420,7 +1425,7 @@ export function linkedDependencyDirectories(repository) {
         return [];
       }
     });
-  if (trustedRoots.length === 0) {
+  if (trustedRoots.length === 0 && !discover) {
     return [];
   }
 
@@ -1461,7 +1466,8 @@ export function linkedDependencyDirectories(repository) {
       const target = realpathSync(candidate);
       if (
         !isInside(root, target) &&
-        trustedRoots.some((trusted) => isInside(trusted, target))
+        target !== parse(target).root &&
+        (discover || trustedRoots.some((trusted) => isInside(trusted, target)))
       ) {
         found.add(target);
       }

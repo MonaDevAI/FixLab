@@ -37,6 +37,15 @@ only for information that cannot be established safely from the repository.
 
 ## Bugfix loop
 
+Before validation in a new isolated worktree, plan `fixlab onboard WORKTREE
+--from SOURCE --runtime RUNTIME`. After scoped setup approval, add `--yes`.
+The source profile declares non-sensitive configuration in `worktreeSetup.files`.
+Never copy credentials or browser state. Missing configuration, authentication
+or denied runtime access is a blocker; do not retry unchanged approvals or
+grant blanket path access. Sign-in and MFA remain human-controlled.
+In read-only modes, do not provision or alter configuration; report missing
+prerequisites as blocked.
+
 1. **Classify scope.** Identify the smallest component in the profile that owns
    the behavior. Treat its source paths as the initial edit allowlist.
 2. **Reproduce or measure.** Locate the affected code and establish a failing

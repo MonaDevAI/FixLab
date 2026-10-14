@@ -155,6 +155,18 @@ guidance.
 
 ## Playwright package or browser is unavailable
 
+For a new worktree, first provision its profile and declared non-sensitive
+browser configuration with `fixlab onboard WORKTREE --from SOURCE`.
+Review the plan and add `--yes` to execute it. Missing `--config` files are
+reported explicitly; list private non-sensitive configuration in the source
+profile's `worktreeSetup.files`, or provide it manually in the target checkout.
+
+If Doctor reports **Runtime dependency access**, a `node_modules` symlink or
+junction points outside the checkout. Run `fixlab onboard WORKTREE` to inspect
+the exact dependency paths, then add `--yes` to approve only those directories.
+Do not use blanket path grants. Organizational runtime deny rules still apply;
+a denied tool or URL needs its own scoped approval, not repeated job resumes.
+
 Restore repository dependencies first:
 
 ```powershell

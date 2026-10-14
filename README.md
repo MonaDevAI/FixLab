@@ -94,6 +94,15 @@ For explicit plan-first onboarding without entering the interactive shell:
 fixlab onboard C:\path\to\application
 ```
 
+For a new worktree of an already configured repository, use
+`fixlab onboard C:\path\to\worktree --from C:\path\to\application`.
+Review the source profile and its `worktreeSetup.files` allowlist, then rerun
+with `--yes` to provision only those non-sensitive files and run setup.
+Onboarding also discovers external linked `node_modules` directories and
+requires explicit approval before recording their exact runtime path grants.
+Authentication and MFA remain interactive; credentials and browser state are
+never copied. See [Repository onboarding](docs/repository-onboarding.md).
+
 The first onboarding run creates the repository-owned profile and stops for
 review. After configuring that profile, rerun to inspect the setup plan, then
 approve dependency restoration, Playwright setup, browser authentication, and

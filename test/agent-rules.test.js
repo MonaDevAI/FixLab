@@ -152,6 +152,27 @@ test("cross-runtime validation guidance stays aligned", () => {
   assert.match(browserRule, /event registration/);
 });
 
+test("every runtime prepares worktrees with scoped approval and human authentication", () => {
+  const root = join(testDirectory, "..");
+  for (const entryPoint of [
+    "dashboard/server.js",
+    "bin/fixlab.js",
+    "agents/fixlab.md",
+    "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md",
+    ".github/agents/fixlab-autofix.agent.md"
+  ]) {
+    const content = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    assert.match(content, /--from SOURCE --runtime RUNTIME/, entryPoint);
+    assert.match(content, /scoped setup approval/, entryPoint);
+    assert.match(content, /worktreeSetup.files/, entryPoint);
+    assert.match(content, /Never copy credentials or browser state/, entryPoint);
+    assert.match(content, /do not retry unchanged approvals or grant blanket path access/, entryPoint);
+    assert.match(content, /Sign-in and MFA remain human-controlled/, entryPoint);
+    assert.match(content, /In read-only modes, do not provision or alter configuration/, entryPoint);
+  }
+});
+
 test("every PR entry point publishes before waiting for remote CI", () => {
   const root = join(testDirectory, "..");
   const entryPoints = [

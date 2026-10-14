@@ -7,11 +7,14 @@ import {
   mkdtempSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createServer } from "node:net";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -22,12 +25,13 @@ import {
 
 const cli = fileURLToPath(new URL("../bin/fixlab.js", import.meta.url));
 
-function run(args, cwd, environment = {}, input = undefined) {
+function run(args, cwd, environment = {}, input = undefined, timeout = undefined) {
   return spawnSync(process.execPath, [cli, ...args], {
     cwd,
     encoding: "utf8",
     env: { ...process.env, ...environment },
-    input
+    input,
+    timeout
   });
 }
 
@@ -206,6 +210,100 @@ test("onboard plans existing repository setup without making changes", () => {
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
+});
+
+test("onboard provisions a worktree only with approval, grants exact dependency paths and stops on restore failure", () => {
+  const root = mkdtempSync(join(tmpdir(), "fixlab-cli-worktree-"));
+  const source = join(root, "source");
+  const repository = join(root, "worktree");
+  try {
+    mkdirSync(join(source, "frontend"), { recursive: true });
+    const git = (...args) => {
+      const result = spawnSync("git", ["-C", source, ...args], { encoding: "utf8", windowsHide: true });
+      assert.equal(result.status, 0, result.stderr);
+    };
+    git("init", "--quiet");
+    writeFileSync(join(source, "frontend", "prepare.js"),
+      'require("node:fs").writeFileSync("prepared.txt", "attempted"); process.exit(3);');
+    git("add", "frontend/prepare.js");
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.test", "commit", "--quiet", "-m", "fixture");
+    git("worktree", "add", "--quiet", "--detach", repository);
+    assert.equal(run(["init", source], source).status, 0);
+    const sourceProfile = join(source, ".github", "fixlab", "repository-profile.json");
+    const profile = JSON.parse(readFileSync(sourceProfile, "utf8"));
+    profile.validation.commands.frontendRestore = "node prepare.js";
+    profile.validation.commands.backendRestore = "";
+    profile.browserAutomation.testCommand = "playwright test --config=playwright.local.ts";
+    profile.worktreeSetup = { files: ["frontend/playwright.local.ts"] };
+    writeFileSync(sourceProfile, JSON.stringify(profile));
+    writeFileSync(join(source, "frontend", "playwright.local.ts"), "export default {};");
+    const dependencies = join(root, "dependencies", "node_modules");
+    const playwright = join(dependencies, "@playwright", "test");
+    mkdirSync(playwright, { recursive: true });
+    writeFileSync(join(playwright, "index.js"),
+      "exports.chromium = { launch: async () => ({ close: async () => {} }) };");
+    symlinkSync(dependencies, join(repository, "frontend", "node_modules"), "junction");
+    const environment = createPackageManagerShims(source);
+    const args = ["onboard", repository, "--from", source, "--runtime", "copilot"];
+    const plan = run(args, source, environment);
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.match(plan.stdout, /No files or commands changed/);
+    const targetProfile = join(repository, ".github", "fixlab", "repository-profile.json");
+    assert.equal(existsSync(targetProfile), false);
+    assert.equal(existsSync(join(repository, "frontend", "prepared.txt")), false);
+    const approved = run([...args, "--yes"], source, environment);
+    assert.notEqual(approved.status, 0);
+    assert.match(approved.stdout, /Approved only the listed linked dependency directories/);
+    assert.match(approved.stderr, /frontend restore failed/);
+    assert.doesNotMatch(approved.stdout, /FixLab onboarding is ready/);
+    assert.deepEqual(JSON.parse(readFileSync(targetProfile)).trustedDependencyRoots, [realpathSync(dependencies)]);
+    assert.equal(readFileSync(join(repository, "frontend", "playwright.local.ts"), "utf8"), "export default {};");
+    assert.equal(readFileSync(join(repository, "frontend", "prepared.txt"), "utf8"), "attempted");
+    assert.equal(readFileSync(sourceProfile, "utf8"), JSON.stringify(profile));
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("chat opens explicit interactive setup for an incomplete profile and does not start after setup failure", async () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-chat-setup-"));
+  const probe = createServer();
+  await new Promise((resolvePort, reject) => {
+    probe.once("error", reject);
+    probe.listen(0, "127.0.0.1", resolvePort);
+  });
+  const port = probe.address().port;
+  await new Promise((resolvePort, reject) => probe.close((error) => error ? reject(error) : resolvePort()));
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+    const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    delete profile.browserAutomation;
+    writeFileSync(profilePath, JSON.stringify(profile));
+    const environment = createPackageManagerShims(repository);
+    const executable = join(repository, "bin", process.platform === "win32" ? "copilot.cmd" : "copilot");
+    writeFileSync(executable, process.platform === "win32"
+      ? "@echo off\r\necho ARGS:%*\r\nexit /b 7\r\n"
+      : "#!/bin/sh\nprintf 'ARGS:%s\\n' \"$*\"\nexit 7\n");
+    if (process.platform !== "win32") {
+      chmodSync(executable, 0o755);
+    }
+    const result = run(["chat", repository, "--runtime", "copilot", "--port", String(port)], repository, environment, undefined, 30000);
+    assert.equal(result.status, 1, result.stdout);
+    assert.match(result.stdout, /Opening the interactive FixLab onboarding session/);
+    assert.match(result.stdout, /--interactive/);
+    assert.match(result.stdout, /Set up this repository for FixLab/);
+    assert.match(result.stderr, /onboarding exited with code 7/);
+    assert.doesNotMatch(result.stdout, /FixLab dashboard started/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("onboard validates source arguments before initialization", () => {
+  const result = run(["onboard", "--from", "--yes"], process.cwd());
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /source checkout after --from/);
 });
 
 test("Windows bootstrap keeps NVM and Node changes explicit", () => {
