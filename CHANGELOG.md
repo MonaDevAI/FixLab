@@ -4,6 +4,9 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Keep managed frontend input open so React-style development servers do not
+  stop on EOF; preserve one-shot helper behavior and owned process cleanup.
+
 - Add approved, configuration-only worktree onboarding with `--from`, preserved
   custom files, missing-browser-config preflight, and reviewed exact-directory
   grants for linked dependencies; keep credentials and MFA human-controlled.

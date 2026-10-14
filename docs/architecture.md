@@ -100,6 +100,10 @@ without sharing shell state between jobs. Input, output and errors remain piped
 to the supervisor and dashboard logs. Noninteractive CLI probes and setup
 helpers also hide their Windows console windows; interactive agent sessions
 continue using the user's terminal.
+Managed long-running frontends keep their input pipe open until owned shutdown;
+React-style servers can interpret EOF as a request to exit. One-shot setup and
+authentication helpers still receive EOF, and process-tree containment and
+termination proofs remain unchanged.
 The supervisor terminates remaining descendants after launcher
 exit or an owned stop request, and records a nonce-bound proof only after the
 job's active process count reaches zero. Lease release requires both supervisor

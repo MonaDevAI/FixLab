@@ -2044,6 +2044,51 @@ test("dashboard shutdown stops the frontend process tree", async () => {
   await checkFrontendCleanup("close");
 });
 
+test("managed frontend input stays open when EOF requests application shutdown", async () => {
+  const repository = createRepository();
+  const port = await availablePort();
+  const profile = validProfile();
+  profile.applications.frontend = {
+    workingDirectory: ".",
+    command: "node frontend-eof.js",
+    port,
+    healthUrl: `http://127.0.0.1:${port}`
+  };
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  writeFileSync(join(repository, "frontend-eof.js"), [
+    `const server = require("node:http").createServer((q, s) => s.end("ready")).listen(${port}, "127.0.0.1");`,
+    'process.stdin.on("end", () => server.close(() => process.exit(0)));',
+    "process.stdin.resume();"
+  ].join("\n"));
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}),
+    terminate() {}
+  }));
+  try {
+    const started = await jsonRequest(url, "/api/frontend/start", { method: "POST" });
+    assert.equal(started.response.status, 202);
+    let status;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      status = await jsonRequest(url, "/api/frontend/status");
+      if (status.body.healthy || !status.body.running) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    assert.equal(status.body.healthy, true, JSON.stringify(status.body));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal((await jsonRequest(url, "/api/frontend/status")).body.healthy, true);
+    const stopped = await jsonRequest(url, "/api/frontend/stop", { method: "POST" });
+    assert.equal(stopped.response.status, 200);
+    assert.equal(stopped.body.stopped, true);
+    assert.equal(stopped.body.running, false);
+    assert.equal(stopped.body.healthy, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard does not restart a frontend that is already healthy", async () => {
   const repository = createRepository();
   const port = await availablePort();

@@ -2388,7 +2388,10 @@ function spawnOwnedShell(configuration, retainDescendants = false) {
       retainDescendants
     });
     windowsOwnedTrees.set(containment.child, containment);
-    containment.child.stdin.end();
+    // Dev servers can interpret EOF as shutdown; keep their input alive.
+    if (!retainDescendants) {
+      containment.child.stdin.end();
+    }
     containment.child.stdin.on("error", (error) => {
       containment.child.emit("fixlab-input-error", error);
     });
@@ -2396,13 +2399,17 @@ function spawnOwnedShell(configuration, retainDescendants = false) {
     containment.child.stderr.resume();
     return containment.child;
   }
-  return spawn(configuration.command, {
+  const child = spawn(configuration.command, {
     cwd: configuration.workingDirectory,
     env: { ...process.env, ...configuration.environment, BROWSER: "none" },
     shell: true,
     detached: true,
-    stdio: "ignore"
+    stdio: retainDescendants ? ["pipe", "ignore", "ignore"] : "ignore"
   });
+  child.stdin?.on("error", (error) => {
+    child.emit("fixlab-input-error", error);
+  });
+  return child;
 }
 
 function stopProcessTree(child) {
