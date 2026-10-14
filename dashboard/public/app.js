@@ -326,7 +326,7 @@ function renderJob(job, currentActiveJob = job) {
   jobStatusElement.textContent = job
     ? `${job.status} · ${job.requestType}${job.model ? ` · ${job.model}` : ""} · ${
         job.targetEnvironment || "profile default"
-      } · ${formatDuration(job.durationMs)}${
+      }${job.sharedWorkspace ? ` · shared: ${job.sharedWorkspace.branch}` : ""} · ${formatDuration(job.durationMs)}${
         lastActivityAge === null
           ? ""
           : ` · last output ${formatDuration(lastActivityAge)} ago`

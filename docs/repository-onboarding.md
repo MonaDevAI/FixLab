@@ -105,6 +105,66 @@ create branches beneath the resolved prefix. It never substitutes `copilot`,
 
 ## Worktree setup
 
+### Reusing one checkout for sequential jobs
+
+Opt in to shared mode in a dedicated runner checkout's repository profile:
+
+```json
+{
+  "worktreeSetup": {
+    "mode": "shared",
+    "remote": "origin",
+    "baseBranch": "develop",
+    "files": ["frontend/playwright.local.config.ts"]
+  },
+  "pullRequests": {
+    "defaultTargetBranch": "develop",
+    "branchNaming": {
+      "userId": "developer-alias",
+      "prefixTemplate": "users/{userId}"
+    }
+  }
+}
+```
+
+Start `fixlab dashboard` against this checkout, or connect with `fixlab chat`.
+Shared fix-and-validate jobs use that same folder, dependencies and local
+browser profile; they do not create a folder per bug. Each new job refreshes
+the configured remote base and creates a separate `users/<alias>/fixlab-<job-id>`
+branch from its fetched commit, not from the previous fix branch. Omit
+`baseBranch` to use `pullRequests.defaultTargetBranch`; the default remote is
+`origin`. No network fetch is performed merely by installing or inspecting
+the profile.
+
+The existing repository executor lease fences preparation and execution.
+Another job can reuse the folder after execution has verifiably stopped,
+even while its earlier PR is pending. Use **Hold** to release a blocked job
+to the queue, and **Resume** to reacquire its saved branch and session.
+Resumption never fetches, rebases or resets that branch. Restarting a job
+creates a new session and branch from the refreshed base. Saved shared
+ownership survives dashboard restarts; legacy jobs without a saved branch
+must be resumed using their original workspace policy.
+
+Branch changes require a clean index and working tree, including untracked
+files, and no merge/rebase/cherry-pick in progress. Stop owned frontend and
+authentication processes before selecting a different branch. FixLab never
+stashes, resets, deletes files, overwrites ignored files, or force-switches
+another worktree's branch. A failed fetch blocks the new job instead of using
+a stale base. The Git refresh is noninteractive and has a 30-second timeout;
+authenticate to the remote separately if necessary.
+
+Keep this checkout's reusable profile/configuration available on the base
+branch or locally ignored; uncommitted setup files must be committed or
+explicitly ignored before starting. Branch-dependent dependencies must still
+be checked after acquisition. Existing browser state can be reused only after
+authenticated access is verified for the selected environment. Ignore browser
+state and dependencies in Git; never copy credentials between checkouts.
+
+Shared mode is opt-in; omitted mode or `"isolated"` preserves existing
+behavior. Direct interactive bug-fix and `fixlab run` execution are blocked in
+shared mode because they do not have the dashboard's branch-resume contract.
+Validation-only jobs do not switch branches or refresh the base.
+
 ### Preparing another worktree
 
 A Git worktree does not inherit ignored profiles, untracked browser

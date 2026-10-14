@@ -950,6 +950,12 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
     );
     return 1;
   }
+  if (profile.worktreeSetup?.mode === "shared" && !readOnly) {
+    console.error(
+      "Shared worktree jobs require dashboard-owned branch acquisition and resumption. Use fixlab dashboard or fixlab chat for this repository."
+    );
+    return 1;
+  }
 
   let selectedEnvironment;
   try {
