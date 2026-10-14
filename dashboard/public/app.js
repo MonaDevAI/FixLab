@@ -13,6 +13,9 @@ const form = document.querySelector("#job-form");
 const startButton = document.querySelector("#start-button");
 const formError = document.querySelector("#form-error");
 const readinessElement = document.querySelector("#readiness");
+const modelControl = document.querySelector("#model-control");
+const modelSelect = document.querySelector("#model");
+let modelConfigured = false;
 const stagesElement = document.querySelector("#stages");
 const jobStatusElement = document.querySelector("#job-status");
 const testEvidenceElement = document.querySelector("#test-evidence");
@@ -134,6 +137,9 @@ const frontendStatusBadge = document.querySelector("#frontend-status");
 const frontendGuidance = document.querySelector("#frontend-guidance");
 const frontendStart = document.querySelector("#frontend-start");
 const frontendStop = document.querySelector("#frontend-stop");
+const sessionsList = document.querySelector("#sessions-list");
+const sessionsMessage = document.querySelector("#sessions-message");
+const sessionsRefresh = document.querySelector("#sessions-refresh");
 const onboardingStatus = document.querySelector("#onboarding-status");
 const onboardingOrganization = document.querySelector(
   "#onboarding-organization"
@@ -175,6 +181,7 @@ let selectedScreenshots = [];
 let activeJob = null;
 let selectedJobId = null;
 let pendingRetryAfterConnectJobId = null;
+let playwrightAuthenticationRunning = false;
 const observedJobs = new Map();
 const expandedJobIds = new Set();
 let renderedEvidenceJobId = null;
@@ -233,6 +240,25 @@ function renderReadiness(readiness) {
     )
   ) {
     targetEnvironmentSelect.value = selectedEnvironment;
+  }
+}
+
+function renderRuntime(runtime) {
+  const supported = runtime?.supportsModelSelection === true;
+  modelControl.hidden = !supported;
+  modelSelect.disabled = !supported;
+  if (!supported) {
+    modelSelect.value = "";
+    modelConfigured = false;
+    return;
+  }
+  if (!modelConfigured) {
+    const defaultModel = runtime.defaultModel ?? "";
+    if (![...modelSelect.options].some((option) => option.value === defaultModel)) {
+      modelSelect.add(new Option(defaultModel, defaultModel));
+    }
+    modelSelect.value = defaultModel;
+    modelConfigured = true;
   }
 }
 
@@ -298,7 +324,7 @@ function renderJob(job, currentActiveJob = job) {
       ? Date.now() - Date.parse(job.lastActivityAt)
       : null;
   jobStatusElement.textContent = job
-    ? `${job.status} · ${job.requestType} · ${
+    ? `${job.status} · ${job.requestType}${job.model ? ` · ${job.model}` : ""} · ${
         job.targetEnvironment || "profile default"
       } · ${formatDuration(job.durationMs)}${
         lastActivityAge === null
@@ -501,10 +527,8 @@ function renderJob(job, currentActiveJob = job) {
   failManualLocalhostButton.hidden = !canConfirmManualLocalhost;
   failManualLocalhostButton.disabled = !canConfirmManualLocalhost;
   retryLiveTestButton.hidden = !canRetryLiveTest;
-  retryLiveTestButton.disabled = !canRetryLiveTest;
   connectRetryLiveTestButton.hidden = !canRetryLiveTest;
-  connectRetryLiveTestButton.disabled =
-    !canRetryLiveTest || Boolean(pendingRetryAfterConnectJobId);
+  updateLiveTestRetryAvailability();
   skipLiveTestButton.hidden = !canRetryLiveTest;
   skipLiveTestButton.disabled = !canRetryLiveTest;
   approvePullRequestButton.hidden = !canApprovePullRequest;
@@ -556,7 +580,23 @@ function renderJob(job, currentActiveJob = job) {
   }
 }
 
+function updateLiveTestRetryAvailability() {
+  retryLiveTestButton.disabled =
+    retryLiveTestButton.hidden || playwrightAuthenticationRunning;
+  connectRetryLiveTestButton.disabled =
+    connectRetryLiveTestButton.hidden ||
+    playwrightAuthenticationRunning ||
+    Boolean(pendingRetryAfterConnectJobId);
+  const reason = playwrightAuthenticationRunning
+    ? "Finish sign-in and close its browser window before retrying the live test."
+    : "";
+  retryLiveTestButton.title = reason;
+  connectRetryLiveTestButton.title = reason;
+}
+
 function renderPlaywrightStatus(status) {
+  playwrightAuthenticationRunning = Boolean(status.running);
+  updateLiveTestRetryAvailability();
   playwrightStatus.className = `badge ${
     status.running ? "running" : status.ready ? "passed" : "blocked"
   }`;
@@ -575,10 +615,12 @@ function renderPlaywrightStatus(status) {
     .map((entry) => `${entry.ready ? "ready" : "missing"}: ${entry.path}`)
     .join(" · ");
   playwrightGuidance.textContent =
-    status.error ||
-    status.lastResult?.message ||
-    pathSummary ||
-    "Add browserAutomation.authentication to the repository profile.";
+    status.running
+      ? "Authentication is still running. Finish sign-in and close its browser window if it stays open; live-test retries wait until the helper exits."
+      : status.error ||
+        status.lastResult?.message ||
+        pathSummary ||
+        "Add browserAutomation.authentication to the repository profile.";
 }
 
 async function resumeAfterConnect(status) {
@@ -635,7 +677,8 @@ async function startFrontend() {
     renderFrontendStatus(
       await fetchJson("/api/frontend/start", { method: "POST" })
     );
-  } catch {
+  } catch (error) {
+    formError.textContent = error.message;
     await refreshFrontendStatus();
   }
 }
@@ -646,9 +689,88 @@ frontendStart.addEventListener("click", () => {
   void startFrontend();
 });
 
+async function refreshSessions() {
+  try {
+    const body = await fetchJson("/api/sessions");
+    sessionsList.replaceChildren();
+    for (const session of body.sessions) {
+      const row = document.createElement("article");
+      const description = document.createElement("p");
+      description.className = "guidance";
+      description.textContent = session.available
+        ? `${session.id === body.ownerId ? "This dashboard" : "Other FixLab dashboard"} · ${session.id} · Job ${session.job?.id ?? "none"} (${session.job?.status ?? "not started"}) · React ${session.frontend.running ? `running (PID ${session.frontend.pid})` : "stopped"}`
+        : `Owner ${session.id} is unavailable: ${session.error}. No process will be stopped.`;
+      row.append(description);
+      if (session.available) {
+        const controls = document.createElement("div");
+        controls.className = "button-row";
+        const reconnect = document.createElement("a");
+        reconnect.href = session.url;
+        reconnect.textContent = "Reconnect to live dashboard";
+        controls.append(reconnect);
+        const actions = [
+          { label: "Resume job", action: "resume", resource: "job", enabled: session.job?.canResume || session.job?.running },
+          { label: "Stop agent", action: "stop", resource: "job", enabled: session.job?.running },
+          { label: "Start / resume React", action: "resume", resource: "frontend", enabled: !session.frontend.running },
+          { label: "Stop React", action: "stop", resource: "frontend", enabled: session.frontend.running },
+          { label: "Shutdown sessions", action: "shutdown", resource: "all", enabled: session.job?.running || session.frontend.running || session.authentication.running }
+        ];
+        for (const control of actions) {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = "secondary";
+          button.textContent = control.label;
+          button.disabled = !control.enabled;
+          button.addEventListener("click", async () => {
+            const destructive = control.action !== "resume";
+            if (destructive && !window.confirm(
+              `${control.label} for FixLab owner ${session.id} at ${session.url}, job ${session.job?.id ?? "none"}? Only this owner's processes will be stopped; saved job context remains resumable.`
+            )) {
+              return;
+            }
+            button.disabled = true;
+            try {
+              await fetchJson("/api/sessions/control", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  ownerId: session.id,
+                  jobId: session.job?.id ?? null,
+                  action: control.action,
+                  resource: control.resource,
+                  confirmed: destructive
+                })
+              });
+              sessionsMessage.textContent = `${control.label} accepted for owner ${session.id}.`;
+              await refreshSessions();
+              await refresh();
+              await refreshFrontendStatus();
+            } catch (error) {
+              sessionsMessage.textContent = error.message;
+              button.disabled = false;
+            }
+          });
+          controls.append(button);
+        }
+        row.append(controls);
+      }
+      sessionsList.append(row);
+    }
+  } catch (error) {
+    sessionsMessage.textContent = error.message;
+  }
+}
+
+sessionsRefresh.addEventListener("click", refreshSessions);
+
 frontendStop.addEventListener("click", async () => {
   frontendStop.disabled = true;
   try {
+    const owner = await fetchJson("/api/session");
+    if (!window.confirm(`Stop React owned by FixLab dashboard ${owner.id}? Only its frontend process tree will be stopped.`)) {
+      await refreshFrontendStatus();
+      return;
+    }
     renderFrontendStatus(
       await fetchJson("/api/frontend/stop", { method: "POST" })
     );
@@ -1210,6 +1332,7 @@ async function refresh() {
     if (!selectedJobId || !observedJobs.has(selectedJobId)) {
       selectedJobId = activeJob?.id ?? null;
     }
+    renderRuntime(body.runtime);
     renderReadiness(body.readiness);
     renderJob(observedJobs.get(selectedJobId) ?? activeJob, activeJob);
     renderQueue(activeJob, body.queue, body.held, body.history);
@@ -1250,12 +1373,14 @@ form.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         request: data.get("request"),
         requestType: data.get("requestType"),
+        model: data.get("model") ?? "",
         mode: data.get("mode"),
         pullRequestStrategy: data.get("separatePullRequests") === "on"
           ? "per-bug"
           : "common",
         runAllUiScenarios: data.get("runAllUiScenarios") === "on",
         targetEnvironment: data.get("targetEnvironment"),
+        prestartFrontend: data.get("prestartFrontend") === "on",
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",
         manualLocalhostTest:
@@ -1729,4 +1854,6 @@ setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);
 setInterval(refreshFrontendStatus, 5000);
+void refreshSessions();
+setInterval(refreshSessions, 5000);
 setInterval(refreshPlaywrightEvidence, 10000);

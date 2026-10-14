@@ -12,6 +12,18 @@ Agency and `com.github.copilot/agents/fixlab.agent.md` for the Agent Plugins
 1.0 layout used by direct GitHub Copilot CLI. Repository policy validation
 requires those definitions to remain identical.
 
+Direct Copilot execution accepts `--model` or `FIXLAB_MODEL`; Agency rejects
+nonempty model overrides. Dashboard jobs retain their selected model through
+queueing, retries and saved-context recovery. An omitted model uses the
+dashboard's configured default; an explicit empty selection uses Copilot's
+own default. HydraFusion adds `--experimental --model hydrafusion` and remains
+an account-dependent research preview, not a guaranteed cost or speed saving.
+Stage markers are requested before tools and parsed even when adjacent in
+rendered output, but model-dependent buffering can still delay visible updates.
+Snapshots also retain their originating runtime. A dashboard restores only
+compatible jobs; other-runtime or ambiguous legacy contexts remain in history
+rather than being silently resumed through a different executor.
+
 ```text
 Defect or pull request
         |
@@ -63,6 +75,50 @@ latest 20 private job summaries to the shared Git directory so bug outcomes,
 held workflow state, and pull-request readiness remain visible after a
 dashboard update or restart. It is not the durable, authenticated team broker
 described below.
+
+Same-repository dashboard instances publish private, temporary loopback
+ownership records and verify the random instance ID at the live endpoint
+before forwarding a session-control request. The session panel reconnects to
+live owners or resumes their saved job context; stop and shutdown require
+explicit owner confirmation. Shutdown leaves the HTTP dashboard available
+and stops only its tracked agent, frontend and authentication processes.
+Conflicting reachable owners are reported rather than automatically killed.
+
+Executor admission also acquires one atomic filesystem lease per canonical
+repository before invoking a runner. Git worktrees share the Git common
+directory; standalone non-Git repositories use their canonical directory.
+An acquisition records the owner, job, process generation and a unique nonce.
+All new jobs, queue starts, retries and automatic continuations use this same
+boundary. A logical timeout or stop request does not release the lease or
+enable resume before the executor's termination promise settles. Unverified
+termination, partial reservations and owner crashes remain fail-closed; neither
+an HTTP timeout nor PID reuse authorizes automatic reclamation.
+
+Windows executors launch suspended, enter a non-breakaway Windows Job Object,
+then resume. Each executor has one hidden console that ordinary tooling
+descendants inherit, preventing transient PowerShell and command-prompt windows
+without sharing shell state between jobs. Input, output and errors remain piped
+to the supervisor and dashboard logs. Noninteractive CLI probes and setup
+helpers also hide their Windows console windows; interactive agent sessions
+continue using the user's terminal.
+Managed long-running frontends keep their input pipe open until owned shutdown;
+React-style servers can interpret EOF as a request to exit. One-shot setup and
+authentication helpers still receive EOF, and process-tree containment and
+termination proofs remain unchanged.
+The supervisor terminates remaining descendants after launcher
+exit or an owned stop request, and records a nonce-bound proof only after the
+job's active process count reaches zero. Lease release requires both supervisor
+exit and that proof; a supervisor crash remains fail-closed. This uses built-in
+Windows PowerShell and its C# compiler, with no native package dependency.
+Unavailable containment or missing proof is an explicit failure, never a
+fallback to launcher-only checks. Dedicated Windows CI exercises real detached
+descendants, explicit stop, wrapper crash and lease succession.
+
+Manual localhost validation must use a frontend managed outside the Windows
+executor, such as the dashboard's React session, and verify it serves the
+validated checkout. Dashboard-managed applications remain under session
+controls rather than being terminated by an agent. Missing checkout or health
+evidence remains a blocker.
 
 Dashboard requests are typed as `bug-fix` or `small-enhancement`. Bug fixes
 require evidence-backed diagnosis and reproduction. Small enhancements use a
@@ -248,8 +304,14 @@ artifacts, reviews the effective diff, pushes the checkpoint, and creates or
 updates a draft pull request. Independent builds, application startup, and
 browser journeys continue while the draft is visible. Later reviewed
 checkpoints update the same branch and PR. The PR remains explicitly
-validation-in-progress and cannot be marked ready until every required gate
-passes or repository policy records an accepted outcome.
+validation-in-progress until required local validation and approval gates
+pass or repository policy records an accepted outcome. FixLab then publishes
+the authorized PR by clearing its draft status and verifies the provider's
+`isDraft` state is false before reporting the PR stage passed. Publication
+does not wait for remote CI or build completion: some providers trigger PR
+builds only after publication. Those checks remain reported as pending, not
+passed, and normal review, build, and merge policies remain enforced. Failed
+publication or state verification blocks or fails the PR stage.
 
 Stage summaries remain structured independently of raw output. The dashboard
 retains a bounded local log window and reports how many older entries were

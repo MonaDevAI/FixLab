@@ -41,6 +41,16 @@
         </div>
       </section>
 
+      <section class="panel" aria-labelledby="session-heading">
+        <div class="section-heading">
+          <h2 id="session-heading">Session controls</h2>
+          <button id="sessions-refresh" type="button" class="secondary">Refresh sessions</button>
+        </div>
+        <p class="guidance">Start a job below or use Start React. Reconnect to a live dashboard, resume saved job context, or stop a confirmed FixLab owner. Shutdown sessions stops that dashboard's agent, React and authentication sessions; the dashboard remains available to resume.</p>
+        <p id="sessions-message" class="guidance" role="status"></p>
+        <div id="sessions-list"></div>
+      </section>
+
       <section class="panel">
         <div class="section-heading">
           <h2>Repository onboarding</h2>
@@ -65,6 +75,17 @@
 
       <section class="panel">
         <form id="job-form">
+          <label id="model-control" for="model" hidden>
+            Copilot model
+            <select id="model" name="model" disabled>
+              <option value="">Copilot default</option>
+              <option value="hydrafusion">HydraFusion (research preview)</option>
+            </select>
+          </label>
+          <label class="checkbox-row">
+            <input name="prestartFrontend" type="checkbox" checked>
+            Warm React in parallel when a local job starts
+          </label>
           <fieldset>
             <legend>Intake</legend>
             <label><input type="radio" name="intakeSource" value="manual" checked> Enter manually</label>

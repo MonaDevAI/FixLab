@@ -103,6 +103,60 @@ FixLab replaces `{userId}` with the configured value and instructs the agent to
 create branches beneath the resolved prefix. It never substitutes `copilot`,
 `fixlab`, or another runtime name for the repository user's ID.
 
+## Worktree setup
+
+### Preparing another worktree
+
+A Git worktree does not inherit ignored profiles, untracked browser
+configuration, restored dependencies, or authenticated browser state. Declare
+only the non-sensitive configuration files needed by another checkout:
+
+```json
+{
+  "worktreeSetup": {
+    "files": ["frontend/playwright.local.config.ts"]
+  }
+}
+```
+
+Start with the configured source checkout and review the plan:
+
+```powershell
+fixlab onboard C:\source\application-worktree --from C:\source\application --runtime copilot
+fixlab onboard C:\source\application-worktree --from C:\source\application --runtime copilot --yes
+```
+
+`--from` requires another checkout of the same Git repository. Without `--yes`,
+it changes no files and runs no commands. Approval copies the profile and only
+the declared files, initializes missing FixLab prompts, runs the profile's
+restore and Playwright setup, and checks readiness. Matching files are
+preserved; differing configuration requires a manual merge. Only a profile
+that exactly matches the packaged unchanged example can be replaced
+automatically. All file paths must stay within their checkout, without
+symlink/junction escapes. Dependency folders, credential files and browser
+state are excluded.
+
+An explicit `--config` file in the profile's browser test command must exist
+in the target checkout or be included in the copy plan. Missing configuration
+blocks setup and dashboard readiness instead of silently skipping live testing.
+After provisioning, rerun onboarding without `--from` if the target profile
+has been customized.
+
+When `node_modules` links outside the checkout, onboarding lists the exact
+resolved dependency directories. `--yes` approves adding only those paths
+to `trustedDependencyRoots`; runtime adapters pass them through `--add-dir`.
+Doctor reports unapproved links before a non-interactive job starts. This
+does not grant all filesystem paths, approve URLs, or override runtime deny
+rules. Explicit runtime denial remains a blocker, not a reason to repeat
+unchanged approvals.
+
+For required browser sign-in, add `--authenticate` after reviewing the
+repository-owned authentication command. Sign-in/MFA must be completed by the
+user in this checkout's own browser profile. A profile directory existing is
+not proof of a valid application session. Add `--start-dashboard` only when
+all Doctor checks can pass; serve this worktree's actual code, not a healthy
+server from another checkout.
+
 ## Profile review checklist
 
 - Commands run non-interactively.

@@ -37,6 +37,15 @@ only for information that cannot be established safely from the repository.
 
 ## Bugfix loop
 
+Before validation in a new isolated worktree, plan `fixlab onboard WORKTREE
+--from SOURCE --runtime RUNTIME`. After scoped setup approval, add `--yes`.
+The source profile declares non-sensitive configuration in `worktreeSetup.files`.
+Never copy credentials or browser state. Missing configuration, authentication
+or denied runtime access is a blocker; do not retry unchanged approvals or
+grant blanket path access. Sign-in and MFA remain human-controlled.
+In read-only modes, do not provision or alter configuration; report missing
+prerequisites as blocked.
+
 1. **Classify scope.** Identify the smallest component in the profile that owns
    the behavior. Treat its source paths as the initial edit allowlist.
 2. **Reproduce or measure.** Locate the affected code and establish a failing
@@ -92,8 +101,23 @@ pass, remove transient validation artifacts, review the effective diff, commit
 and push that checkpoint, and create or update a draft pull request. Run
 remaining independent builds and browser journeys while the draft is open,
 push later reviewed checkpoints to the same branch, and never mark the PR ready
-until every required gate passes or the developer explicitly accepts the
+until every required local gate passes or the developer explicitly accepts the
 recorded outcome.
+
+After required local validation and approval gates pass or have an explicitly
+accepted outcome, publish the authorized PR by marking it ready for review.
+Do not wait for remote PR CI or build completion before publication; publication
+can trigger those checks. Verify the PR is no longer draft before reporting the
+PR stage passed. Report remote checks as pending, not passed, and leave merge
+policies intact. Use `gh pr ready <number>` for GitHub or
+`az repos pr update --id <id> --draft false` for Azure DevOps, then read back
+`isDraft` from the provider to confirm it is false. If publication or state
+verification fails, report the PR stage blocked or failed, not passed.
+
+Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise
+description of the coding change. Use the repository's PR template and clear
+Markdown sections for the problem, changes, validation and risks. Keep
+validation checkboxes accurate; do not describe a pending gate as passed.
 
 ## Guardrails
 

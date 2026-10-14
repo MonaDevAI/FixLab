@@ -104,6 +104,12 @@ test("cross-runtime validation guidance stays aligned", () => {
     );
   }
 
+  for (const entryPoint of [...agentEntryPoints, "bin/fixlab.js"]) {
+    const content = readFileSync(join(root, entryPoint), "utf8");
+    assert.match(content, /`FLAB:`/, `${entryPoint} must identify FixLab-created PRs`);
+    assert.match(content, /repository's PR template/, `${entryPoint} must format PR bodies`);
+  }
+
   for (const entryPoint of agentEntryPoints) {
     const content = readFileSync(join(root, entryPoint), "utf8");
     assert.match(
@@ -144,6 +150,57 @@ test("cross-runtime validation guidance stays aligned", () => {
   );
   assert.match(browserRule, /applyTo: "dashboard\/public\/\*\*\/\*\.js"/);
   assert.match(browserRule, /event registration/);
+});
+
+test("every runtime prepares worktrees with scoped approval and human authentication", () => {
+  const root = join(testDirectory, "..");
+  for (const entryPoint of [
+    "dashboard/server.js",
+    "bin/fixlab.js",
+    "agents/fixlab.md",
+    "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md",
+    ".github/agents/fixlab-autofix.agent.md"
+  ]) {
+    const content = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    assert.match(content, /--from SOURCE --runtime RUNTIME/, entryPoint);
+    assert.match(content, /scoped setup approval/, entryPoint);
+    assert.match(content, /worktreeSetup.files/, entryPoint);
+    assert.match(content, /Never copy credentials or browser state/, entryPoint);
+    assert.match(content, /do not retry unchanged approvals or grant blanket path access/, entryPoint);
+    assert.match(content, /Sign-in and MFA remain human-controlled/, entryPoint);
+    assert.match(content, /In read-only modes, do not provision or alter configuration/, entryPoint);
+  }
+});
+
+test("every PR entry point publishes before waiting for remote CI", () => {
+  const root = join(testDirectory, "..");
+  const entryPoints = [
+    "dashboard/server.js",
+    "bin/fixlab.js",
+    "agents/fixlab.md",
+    "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md",
+    ".github/agents/fixlab-autofix.agent.md",
+    "prompts/fixlab.pr.prompt.md"
+  ];
+  for (const entryPoint of entryPoints) {
+    const content = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    assert.match(content, /required local validation and approval gates/,
+      `${entryPoint} must preserve local validation and publication approval`);
+    assert.match(content, /publish the authorized PR by marking it ready for review/,
+      `${entryPoint} must explicitly publish instead of leaving the PR draft`);
+    assert.match(content, /Do not wait for remote PR CI or build completion before publication/,
+      `${entryPoint} must not wait for a build triggered by publication`);
+    assert.match(content, /Verify the PR is no longer draft before reporting the PR stage passed/,
+      `${entryPoint} must verify publication before reporting success`);
+    assert.match(content, /Report remote checks as pending, not passed, and leave merge policies intact/,
+      `${entryPoint} must not equate publication with successful CI or merge approval`);
+    assert.match(content, /gh pr ready/,
+      `${entryPoint} must identify the GitHub draft transition`);
+    assert.match(content, /az repos pr update --id (?:<id>|PR_ID) --draft false/,
+      `${entryPoint} must identify the Azure DevOps draft transition`);
+  }
 });
 
 test("repository policy matches enforced CI and rollback controls", () => {

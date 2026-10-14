@@ -13,5 +13,8 @@ review, local validation, live validation when configured, evidence, and pull
 request outcome. Never report a skipped or timed-out gate as passed. Never stop
 unrelated processes or expose credentials and private test data.
 
+Prefix FixLab-created PR titles with `FLAB:` and format their descriptions with
+the repository's PR template, clear validation evidence and remaining risks.
+
 Run `npm run validate` for changes to FixLab itself and summarize exact evidence
 and remaining risks.

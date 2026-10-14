@@ -225,14 +225,70 @@ When a job is blocked at live-test, **Connect Playwright, then retry live test**
 runs the same configured command, waits for you to sign in, and retries the
 live test automatically only after the command exits successfully. Sign-in
 always stays with you; FixLab never handles credentials.
+While the authentication helper is running, browser retry controls are disabled
+and the API rejects attempts to resume a blocked live test. If the repository
+keeps its sign-in window open after login, close that window to release the
+persistent profile before retrying; do not start another sign-in helper.
 
 The **React frontend** panel starts the profile's `applications.frontend.command`
 in `applications.frontend.workingDirectory` ahead of time and watches
 `healthUrl`. Connect Playwright starts it automatically, so authentication and
 live tests reuse a warm server instead of waiting for a cold compile. FixLab
-stops only the process it started, when you click **Stop React** or the
-dashboard exits, and never touches a server that was already running. A
+stops the process tree it started, when you click **Stop React** or the
+dashboard exits, including frontend children launched through a shell or
+package manager. On Linux and macOS, that tree runs in a dedicated process
+group. FixLab never touches a server that was already running. A
 Playwright config that sets `reuseExistingServer` picks up the running server.
+
+Dashboard startup, onboarding startup and React warm-up do not open browser
+tabs automatically. Open the printed loopback URL yourself, use the explicit
+`fixlab dashboard --open` option, or request **open dashboard** in terminal
+chat. `--no-open` remains supported. Loopback binding stays at `127.0.0.1`;
+changing browser-opening behavior does not expose the service to the network.
+FixLab-owned agent and frontend processes inherit `BROWSER=none` to suppress
+React development-server auto-opening. Explicit manual localhost validation
+still opens the application once when its health gate passes.
+
+**Warm React in parallel when a local job starts** is enabled by default in the
+job form. Select the **local** validation environment to start the profile
+command alongside diagnosis, including when a queued job becomes active.
+Disable the checkbox to keep startup manual. API callers opt in with
+`prestartFrontend: true`; DEV, SIT and profile-defined environment selections
+are not automatically warmed. Warm-up does not delay the agent, count as a
+passed health check, or replace the live-test gate. A server can be reused only
+when it is healthy and serves the checkout containing the change under test;
+an isolated worktree must not validate against a warmed baseline checkout.
+Warm-up errors are reported in job activity/logs and the React panel.
+
+The **Session controls** panel discovers FixLab dashboards for the same
+repository (including linked worktrees), shows their owner and job IDs, and
+links to the live dashboard without restarting its agent. **Resume job** uses
+the same session ID and saved context after a stop or dashboard restart.
+**Start / resume React** starts the profile command again; it does not restore
+application memory. Starting a job or frontend is blocked when another
+reachable FixLab dashboard owns that resource. Reconnect to that owner or
+explicitly confirm stopping its session before retrying.
+
+**Stop agent**, **Stop React**, and **Shutdown sessions** identify the owner
+and require confirmation. Shutdown stops that owner's agent, frontend and
+Playwright authentication processes, while leaving its dashboard available to
+resume. It does not stop unrelated processes or unverified/unreachable owners.
+Ownership records contain only loopback addresses and random owner IDs in a
+repository-keyed OS temporary directory; clean dashboard shutdown removes its
+record. An unavailable owner is shown explicitly and cannot be controlled.
+
+Executor starts are also fenced by an atomic per-repository lease, shared by
+linked Git worktrees. A timeout or stop request keeps that lease until actual
+executor termination is confirmed; resume remains disabled while stopping.
+An owner crash or unverifiable exit leaves an explicit reserved-lease blocker.
+Do not clear it merely because the dashboard is unreachable or a PID appears
+stale: recovery requires verifying that the owner and executor tree are
+quiescent. There is no automatic stale-owner takeover.
+
+FixLab-created pull-request titles use **FLAB:** followed by the coding change.
+Descriptions follow the repository's PR template with Markdown sections for
+the problem, changes, validation and risks, including explicit pending or
+blocked gates rather than success-shaped checkboxes.
 
 The dashboard remains **Not ready** until the profile also includes a frontend
 

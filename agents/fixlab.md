@@ -38,6 +38,15 @@ instructions provide authoritative commands.
 
 ## Workflow
 
+Before validation in a new isolated worktree, plan `fixlab onboard WORKTREE
+--from SOURCE --runtime RUNTIME`. After scoped setup approval, add `--yes`.
+The source profile declares non-sensitive configuration in `worktreeSetup.files`.
+Never copy credentials or browser state. Missing configuration, authentication
+or denied runtime access is a blocker; do not retry unchanged approvals or
+grant blanket path access. Sign-in and MFA remain human-controlled.
+In read-only modes, do not provision or alter configuration; report missing
+prerequisites as blocked.
+
 1. Read repository instructions and inspect the effective source state.
 2. Identify the smallest affected component and relevant existing tests.
 3. For code changes, use an isolated worktree when the current workspace is not
@@ -70,8 +79,23 @@ commit and push that checkpoint, and create or update a draft pull request.
 Run remaining independent builds, application checks, and browser journeys
 while the draft is open. Push later reviewed checkpoints to the same branch,
 keep validation status and risks current in the PR, and never mark it ready for
-review until every required gate passes or repository policy records an
+review until every required local gate passes or repository policy records an
 explicitly accepted outcome.
+
+After required local validation and approval gates pass or have an explicitly
+accepted outcome, publish the authorized PR by marking it ready for review.
+Do not wait for remote PR CI or build completion before publication; publication
+can trigger those checks. Verify the PR is no longer draft before reporting the
+PR stage passed. Report remote checks as pending, not passed, and leave merge
+policies intact. Use `gh pr ready <number>` for GitHub or
+`az repos pr update --id <id> --draft false` for Azure DevOps, then read back
+`isDraft` from the provider to confirm it is false. If publication or state
+verification fails, report the PR stage blocked or failed, not passed.
+
+Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise
+description of the coding change. Use the repository's PR template and clear
+Markdown sections for the problem, changes, validation and risks. Keep
+validation checkboxes accurate; do not describe a pending gate as passed.
 
 Runtime-synthesized Playwright scenarios are transient validation artifacts by
 default. Remove their source files and validation-only configuration edits
@@ -91,6 +115,14 @@ empty state with synthetic data, and state that a synthetic pass proves UI
 behavior only rather than validation of the selected backend or its data.
 
 ## Safety boundaries
+
+Keep execution economical without weakening evidence: reuse verified session
+context instead of rediscovering unchanged repository facts, batch independent
+reads, and keep command output compact. Handle bounded work directly; delegate
+only independent tasks that justify separate context, not routine searches or
+one continuous investigation. On retry, rerun the failed gate and any affected
+prerequisites, not unrelated completed stages. Required checks still apply;
+never omit them to claim token savings.
 
 - Never select production automatically.
 - Never expose, copy, or commit credentials, tokens, customer data, or private

@@ -7,6 +7,26 @@ FixLab.
 For known CLI, package-manager, private-feed, Playwright, authentication, and
 runtime failures, see [Troubleshooting](troubleshooting.md).
 
+## Recommended path: install, then run
+
+Once your supported runtime is installed and signed in, use just:
+
+```powershell
+npm install --global github:MonaDevAI/FixLab
+fixlab chat C:\source\application --runtime copilot
+```
+
+Replace the path with your clone. For Agency, replace `copilot` with `agency`.
+If setup is incomplete, chat opens a guided interactive setup with an explicit
+onboarding request. Review the real profile paths and commands, approve the
+scoped restore/browser setup, and complete any required feed sign-in and
+application MFA yourself. FixLab checks readiness before starting the dashboard.
+If setup fails, it reports the prerequisite rather than starting a broken job.
+
+The commands below are manual setup and troubleshooting alternatives, not a
+checklist that every user must run. A PR-only feature needs its approved commit
+installed until the change reaches the default branch.
+
 ## Prerequisites
 
 The machine running FixLab needs:
@@ -44,6 +64,13 @@ the repository path, opens interactive onboarding when needed, and starts the
 local dashboard in the background after the profile is ready.
 
 ## Install directly from GitHub
+
+The package installation is machine-wide; repository/worktree preparation is
+separate. For another checkout of a configured repository, use plan-first
+`fixlab onboard C:\path\to\worktree --from C:\path\to\application --runtime copilot`,
+then add `--yes` after reviewing the source profile and declared files.
+See [worktree preparation](repository-onboarding.md#preparing-another-worktree)
+for scoped dependency grants and interactive authentication.
 
 FixLab is not currently published to the public npm registry. Install the
 public GitHub repository with npm:
@@ -492,15 +519,19 @@ repository path. It can also be supplied directly:
 fixlab chat C:\source\application
 ```
 
-Use `fixlab dashboard` when the browser UI should be started explicitly:
+Use `fixlab dashboard` to start the local UI server without opening a browser:
 
 ```powershell
 fixlab dashboard
 fixlab dashboard --runtime copilot
 ```
 
-It binds only to `127.0.0.1`, uses port `4317` by default, and opens the system
-browser. Select another repository or port, or suppress browser opening:
+Open the printed URL manually, request `open dashboard` in terminal chat, or
+opt in explicitly with `fixlab dashboard --open`. Onboarding and dashboard
+reconnections do not automatically open another tab.
+
+It binds only to `127.0.0.1` and uses port `4317` by default. Browser opening
+requires explicit opt-in. Select another repository or port:
 
 ```powershell
 fixlab dashboard C:\source\application --port 4318 --no-open

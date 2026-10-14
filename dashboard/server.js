@@ -35,6 +35,11 @@ import {
   storeScreenshots
 } from "./intake.js";
 import { formatPreflightFailure } from "./preflight.js";
+import { createSessionRegistry } from "./sessions.js";
+import { createExecutorLease } from "./executor-lease.js";
+import { spawnWindowsExecutor } from "./windows-executor.js";
+import { browserConfigurationErrors } from "./repository-setup.js";
+const windowsOwnedTrees = new WeakMap();
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -98,6 +103,31 @@ export const MAX_PLAYWRIGHT_VIDEO_BYTES = 50 * 1024 * 1024;
 export const DEFAULT_EXECUTION_IDLE_TIMEOUT_MS = 20 * 60 * 1000;
 export const DEFAULT_EXECUTION_HEARTBEAT_MS = 2 * 60 * 1000;
 export const FIXLAB_RUNTIMES = ["agency", "copilot"];
+export const HYDRAFUSION_MODEL = "hydrafusion";
+
+export function validateCopilotModel(value, runtime = "copilot") {
+  if (value !== null && value !== undefined && typeof value !== "string") {
+    throw new Error("model must be a string");
+  }
+  const model = String(value ?? "").trim();
+  if (!model) {
+    return "";
+  }
+  if (runtime !== "copilot") {
+    throw new Error("model selection requires the copilot runtime");
+  }
+  if (model.length > 128 || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/u.test(model)) {
+    throw new Error("model must be 1-128 letters, numbers, dots, underscores, slashes, or hyphens");
+  }
+  return model.toLowerCase() === HYDRAFUSION_MODEL ? HYDRAFUSION_MODEL : model;
+}
+
+export function copilotModelArguments(model) {
+  const selectedModel = validateCopilotModel(model);
+  return selectedModel
+    ? [...(selectedModel === HYDRAFUSION_MODEL ? ["--experimental"] : []), "--model", selectedModel]
+    : [];
+}
 export const FIXLAB_STAGES = [
   "intake",
   "diagnosis",
@@ -165,6 +195,9 @@ export function validatePort(value) {
 
 export function validateLiveTestProfile(profile, repository) {
   const missing = [];
+  if (repository) {
+    missing.push(...browserConfigurationErrors(profile, repository));
+  }
   const frontend = profile?.applications?.frontend;
   const browserAutomation = profile?.browserAutomation;
   const authentication = browserAutomation?.authentication;
@@ -361,9 +394,12 @@ function publicQueue(jobs) {
     position: index + 1,
     request: safeSummary(job.request),
     requestType: job.requestType,
+    model: job.model,
+    runtime: job.runtime,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
+    prestartFrontend: job.prestartFrontend ?? false,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: job.manualLocalhostUrl,
@@ -408,9 +444,12 @@ function dashboardSnapshot(job) {
     id: job.id,
     request: safePersistedSummary(job.request),
     requestType: job.requestType,
+    model: job.model,
+    runtime: job.runtime,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
+    prestartFrontend: job.prestartFrontend ?? false,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: "",
@@ -473,6 +512,8 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    model: snapshot.model ?? "",
+    runtime: snapshot.runtime ?? (snapshot.model ? "copilot" : ""),
     manualLocalhostTest:
       snapshot.manualLocalhostTest ??
       snapshot.holdForManualLiveTest ??
@@ -787,7 +828,7 @@ export function buildJobPrompt({
     ? "- Pull-request strategy is informational in read-only mode; do not create or update pull requests."
     : pullRequestStrategy === "per-bug"
       ? `- Process each selected bug as an isolated delivery unit. Keep its code changes, focused validation, browser evidence, commit, and pull-request outcome separate from every other bug.
-- After one bug's scoped fix and smallest focused regression pass, remove transient validation artifacts, self-review its diff, and create or update its authorized draft PR before running remaining independent validation. Keep that PR draft until every required gate for that bug is terminal. Never combine unrelated bug changes in one PR.`
+- After one bug's scoped fix and smallest focused regression pass, remove transient validation artifacts, self-review its diff, and create or update its authorized draft PR before running remaining independent validation. Keep that PR draft until every required local gate for that bug reaches an accepted outcome, then publish it without waiting for remote CI. Never combine unrelated bug changes in one PR.`
       : `- Treat all selected bugs as one common-PR batch. Diagnose and implement every required fix, then run the smallest focused regression checks that protect the combined change.
 - After those focused checks pass, remove transient validation artifacts, self-review the combined diff, and create or update one authorized draft PR. Continue shared tests, builds, application startup, and browser scenarios while that draft is open.`;
   const uiScenarioGuidance = runAllUiScenarios
@@ -815,11 +856,12 @@ export function buildJobPrompt({
     : "- Playwright video recording was not requested. Preserve the required screenshot evidence and any repository-default traces.";
   const manualLocalhostGuidance = manualLocalhostTest
     ? `- Manual React localhost validation is enabled independently of Playwright. After required automated validation finishes, start or reuse only the profile-defined frontend and wait for its health check at ${manualLocalhostUrl || "the profile-defined local health URL"}.
+${process.platform === "win32" ? "- Windows executor children are job-contained and terminated when the agent exits. For a manual gate, use a dashboard-managed frontend outside the executor; the user can start it with Start React. Verify that it serves the validated checkout. If no independently managed server serves that checkout, block with that exact prerequisite instead of retaining an executor child or validating a baseline checkout.\n" : ""}- Dashboard-managed frontends remain under dashboard session controls; do not terminate them from the agent.
 - Emit local-stack passed only after the React frontend is healthy. The dashboard will then open the localhost URL in the user's default browser.
 - After every required automated browser gate is terminal, emit FIXLAB_MANUAL|localhost|pending immediately before live-test blocked. Keep the FixLab-owned frontend running and request that the user confirm Passed or Failed. Do not emit this marker for a Playwright, authentication, test-data, or other automated blocker.
 - Do not run or rerun Playwright solely because this manual option is enabled.
 - If an authorized draft PR already exists, keep it draft with the manual gate pending; otherwise emit pr skipped because manual confirmation is pending.
-- When the dashboard resumes this session with the user's manual result, mark live-test passed or failed accordingly, stop only the retained FixLab-owned frontend process, and continue to the gated PR outcome.`
+- When the dashboard resumes this session with the user's manual result, mark live-test passed or failed accordingly, stop only frontend processes owned by the current job (not a dashboard-managed server), and continue to the gated PR outcome.`
     : "- Stop FixLab-owned applications after automated browser validation unless another explicit workflow requirement needs them.";
   const branchNamingGuidance = branchNaming
     ? `- Repository branch naming is configured as ${branchNaming.prefix}. Create or reuse only branches beneath this prefix. Do not substitute a runtime, bot, or agent name for the configured user ID.`
@@ -838,7 +880,15 @@ export function buildJobPrompt({
     : `- Generate a concise fix contract from the reported behavior and expected outcome.
 - Diagnose and reproduce with repository evidence. Do not claim a cause or reproduction without evidence.
 - Use the smallest focused reproduction that demonstrates the reported defect.`;
-  return `Run a FixLab ${mode} job.
+  return `FixLab output protocol (follow before any tool call):
+- Your first assistant output must be this literal plain-text line:
+  FIXLAB_STAGE|intake|running|Accepted the request and starting intake.
+- Emit that line before reading files, searching, planning with tools, delegating, or running commands.
+- Before beginning each later stage, emit FIXLAB_STAGE|stage|running|concise next action as a literal assistant response line.
+- Emit a terminal passed, skipped, blocked, or failed marker for the current stage before starting the next stage.
+- Never defer or batch stage markers until the end of the job.
+
+Run a FixLab ${mode} job.
 Request type: ${requestType}
 Pull request strategy: ${pullRequestStrategy}
 Run all UI scenarios at end: ${runAllUiScenarios ? "yes" : "no"}
@@ -865,6 +915,7 @@ Use this concise metadata only to avoid repeated discovery. Verify task-specific
 
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all repository-owned instructions before acting.
+- Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
 - For repeat work, inspect the current git status and effective diff first, then search task-relevant symbols and files instead of rescanning the whole repository.
 - Do not perform a whole-repository rescan when the current diff, cached metadata, and focused symbol/path searches are sufficient.
 - Reuse this job/session context. Do not reread unchanged files, repeat completed diagnosis, reinstall available dependencies, or rerun broad checks without new evidence.
@@ -892,7 +943,9 @@ ${testDataGuidance}
 - Once the scoped production change and its smallest focused regression checks pass, remove transient validation artifacts and self-review the effective diff. When pull-request publication is already authorized, commit and push that reviewed checkpoint and create or update a draft pull request before remaining independent validation completes.
 - Start long-running independent validation commands in parallel when the runtime supports it. While those commands run, prepare or refresh the authorized draft PR description with the confirmed symptom, scoped change, checks already passed, checks still running, and known risks.
 - Push later reviewed checkpoints to the same branch only after their affected focused checks pass. Reuse the same draft PR and update its evidence instead of waiting to publish one large final update or creating duplicates.
-- Keep the pull request draft and clearly marked validation-in-progress while any required gate is pending, running, blocked, skipped with unaccepted risk, or failed. Never mark it ready for review or report the pr stage passed until all required gates pass or repository policy records an explicitly accepted outcome.
+- Keep the pull request draft and clearly marked validation-in-progress while any required local validation or approval gate is pending, running, blocked, skipped with unaccepted risk, or failed. Never mark it ready for review or report the pr stage passed until all required local gates pass or repository policy records an explicitly accepted outcome.
+- ${readOnly ? "Do not publish a pull request or change its draft status in read-only mode." : "After required local validation and approval gates pass or have an explicitly accepted outcome, publish the authorized PR by marking it ready for review. Do not wait for remote PR CI or build completion before publication; publication can trigger those checks. Verify the PR is no longer draft before reporting the PR stage passed. Report remote checks as pending, not passed, and leave merge policies intact. Use `gh pr ready <number>` for GitHub or `az repos pr update --id <id> --draft false` for Azure DevOps, then read back `isDraft` from the provider to confirm it is false. If publication or state verification fails, report the PR stage blocked or failed, not passed."}
+- Prefix FixLab-created pull-request titles with FLAB: followed by a concise description of the coding change. Format the body with the repository's PR template, clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.
 - Emit one browser evidence line after the scenario is selected and again if the actual source or mutation behavior changes:
   FIXLAB_TEST|source|mutation-mode|scenario
 - source must be one of: ${[...testDataSources].join(", ")}.
@@ -900,7 +953,7 @@ ${testDataGuidance}
 - Start only the applications defined by the repository profile, then execute the repository-defined live test against the allowed required system or environment from that profile. Do not invent or hardcode environment choices.
 - For every Playwright live test, save at least one non-sensitive screenshot under the test's repository-owned test-results directory so the dashboard can display the browser evidence.
 - ${playwrightOnly ? "Collect evidence for required setup, authentication readiness, application startup, the focused Playwright result, skipped gates, blockers, and remaining risks." : "Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks."}
-- ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update an authorized draft pull request after the reviewed focused checkpoint; finalize its evidence and readiness only after all required gates pass."}
+- ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : "Create or update an authorized draft pull request after the reviewed focused checkpoint; finalize its evidence and publish it after required local validation and approval gates pass, without waiting for remote CI."}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
 - When one of those human actions is required, emit FIXLAB_STAGE|stage|blocked|exact action needed, emit blocked outcomes for affected bugs when applicable, mark later stages skipped because of the blocker, and exit. The dashboard will collect user input and resume this same session.
 - Emit concise, user-visible analysis updates when evidence changes the diagnosis, validation status, blocker, or next action:
@@ -1367,9 +1420,9 @@ function writeCacheSummary(context, job) {
 
 // Linked dependency folders (for example a node_modules junction) resolve outside
 // the repository, and non-interactive agents cannot answer the path prompt they raise.
-// Only targets inside a profile-declared trustedDependencyRoots entry are granted, so a
-// repository-controlled symlink alone never widens the agent's file access.
-export function linkedDependencyDirectories(repository) {
+// Discovery is only for a reviewed setup plan; runtime callers use the default,
+// which grants only targets inside profile-declared trustedDependencyRoots.
+export function linkedDependencyDirectories(repository, { discover = false } = {}) {
   let root;
   let profile;
   try {
@@ -1393,7 +1446,7 @@ export function linkedDependencyDirectories(repository) {
         return [];
       }
     });
-  if (trustedRoots.length === 0) {
+  if (trustedRoots.length === 0 && !discover) {
     return [];
   }
 
@@ -1434,7 +1487,8 @@ export function linkedDependencyDirectories(repository) {
       const target = realpathSync(candidate);
       if (
         !isInside(root, target) &&
-        trustedRoots.some((trusted) => isInside(trusted, target))
+        target !== parse(target).root &&
+        (discover || trustedRoots.some((trusted) => isInside(trusted, target)))
       ) {
         found.add(target);
       }
@@ -1481,7 +1535,8 @@ export function buildCopilotInvocation({
   prompt,
   sessionId,
   resume = false,
-  additionalDirs = []
+  additionalDirs = [],
+  model = ""
 }) {
   if (!sessionId) {
     throw new Error("Copilot invocation requires a session ID");
@@ -1492,6 +1547,7 @@ export function buildCopilotInvocation({
       packageRoot,
       "--agent",
       "fixlab:fixlab",
+      ...copilotModelArguments(model),
       "--allow-all-tools",
       ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
@@ -1508,7 +1564,7 @@ function findDirectExecutable(command) {
   const lookup = spawnSync(
     process.platform === "win32" ? "where.exe" : "which",
     [command],
-    { encoding: "utf8", shell: false }
+    { encoding: "utf8", shell: false, windowsHide: true }
   );
   const candidates = lookup.stdout
     ?.split(/\r?\n/)
@@ -1519,34 +1575,49 @@ function findDirectExecutable(command) {
     : candidates?.[0];
 }
 
-function createExecutor({ command, packageRoot, buildInvocation }) {
+function createExecutor({ command, packageRoot, buildInvocation, defaultModel = "" }) {
   return ({
     repository,
     artifactDirectories = [],
     prompt,
     sessionId,
     resume,
+    model,
     onOutput
   }) => {
     const executable = findDirectExecutable(command);
     if (!executable) {
-      throw new Error(
+      const error = new Error(
         `${command} executable is unavailable or is not a directly executable binary`
       );
+      error.executorNotStarted = true;
+      throw error;
     }
-    const invocation = buildInvocation({
-      packageRoot,
-      prompt,
-      sessionId,
-      resume,
-      additionalDirs: [
-        ...linkedDependencyDirectories(repository),
-        ...artifactDirectories
-      ]
-    });
-    const child = spawn(executable, invocation.args, {
+    let invocation;
+    try {
+      invocation = buildInvocation({
+        packageRoot,
+        prompt,
+        sessionId,
+        resume,
+        model: model ?? defaultModel,
+        additionalDirs: [
+          ...linkedDependencyDirectories(repository),
+          ...artifactDirectories
+        ]
+      });
+    } catch (error) {
+      error.executorNotStarted = true;
+      throw error;
+    }
+    const containment = process.platform === "win32"
+      ? spawnWindowsExecutor({ executable, args: invocation.args, repository })
+      : null;
+    const child = containment?.child ?? spawn(executable, invocation.args, {
       cwd: repository,
+      env: { ...process.env, BROWSER: "none" },
       shell: false,
+      detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"]
     });
 
@@ -1557,14 +1628,57 @@ function createExecutor({ command, packageRoot, buildInvocation }) {
     );
     child.stdin.end(invocation.input);
 
-    const completion = createProcessCompletion(child, onOutput);
+    const completion = createProcessCompletion(child, onOutput).then(async (result) => {
+      if (!containment && child.pid) {
+        stopProcessTree(child);
+        const started = Date.now();
+        while (ownedTreeRunning(child)) {
+          if (Date.now() - started >= 5000) {
+            try {
+              process.kill(-child.pid, "SIGKILL");
+            } catch (error) {
+              if (error.code !== "ESRCH") {
+                throw error;
+              }
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 25));
+        }
+      }
+      return result;
+    });
 
     return {
+      pid: child.pid,
       completion,
-      terminate() {
-        if (child.exitCode === null && child.signalCode === null) {
-          child.kill();
+      hasStopped() {
+        if (containment) {
+          return containment.hasStopped();
         }
+        if (!child.pid) {
+          return true;
+        }
+        if (child.exitCode === null && child.signalCode === null) {
+          return false;
+        }
+        if (process.platform !== "win32") {
+          try {
+            process.kill(-child.pid, 0);
+            return false;
+          } catch (error) {
+            if (error.code !== "ESRCH") {
+              throw error;
+            }
+          }
+        }
+        return true;
+      },
+      terminate() {
+        if (containment) {
+          containment.terminate();
+          return;
+        }
+        stopProcessTree(child);
       }
     };
   };
@@ -1611,22 +1725,25 @@ export function createAgencyExecutor({ packageRoot }) {
   });
 }
 
-export function createCopilotExecutor({ packageRoot }) {
+export function createCopilotExecutor({ packageRoot, model = "" }) {
+  const selectedModel = validateCopilotModel(model);
   return createExecutor({
     command: "copilot",
     packageRoot,
-    buildInvocation: buildCopilotInvocation
+    buildInvocation: buildCopilotInvocation,
+    defaultModel: selectedModel
   });
 }
 
-export function createRuntimeExecutor({ packageRoot, runtime = "agency" }) {
+export function createRuntimeExecutor({ packageRoot, runtime = "agency", model = "" }) {
   if (!FIXLAB_RUNTIMES.includes(runtime)) {
     throw new Error(
       `FixLab runtime must be one of: ${FIXLAB_RUNTIMES.join(", ")}`
     );
   }
+  const selectedModel = validateCopilotModel(model, runtime);
   return runtime === "copilot"
-    ? createCopilotExecutor({ packageRoot })
+    ? createCopilotExecutor({ packageRoot, model: selectedModel })
     : createAgencyExecutor({ packageRoot });
 }
 
@@ -1647,6 +1764,8 @@ function publicJob(job) {
     id: job.id,
     request: job.request,
     requestType: job.requestType,
+    model: job.model,
+    runtime: job.runtime,
     pullRequestStrategy: job.pullRequestStrategy,
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
@@ -1673,6 +1792,7 @@ function publicJob(job) {
     error: job.error,
     canResume:
       !job.resumeDisabled &&
+      !job.executorStopping &&
       ["blocked", "failed", "passed", "held"].includes(job.status),
     canComment: job.status === "running",
     inputCount: job.inputs.length,
@@ -1886,8 +2006,19 @@ function appendOutput(job, stream, text) {
   const lines = job.partial[stream].split("\n");
   job.partial[stream] = lines.pop();
   for (const line of lines) {
-    appendLine(job, stream, line);
+    for (const segment of splitRenderedMarkers(line)) {
+      appendLine(job, stream, segment);
+    }
   }
+}
+
+function splitRenderedMarkers(line) {
+  if (!/^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s)/u.test(line)) {
+    return [line];
+  }
+  return line
+    .split(/(?=FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s))/u)
+    .filter(Boolean);
 }
 
 function appendLine(job, stream, line) {
@@ -2096,7 +2227,9 @@ function finishJob(job, result) {
 function flushPartialOutput(job) {
   for (const stream of ["stdout", "stderr"]) {
     if (job.partial[stream]) {
-      appendLine(job, stream, job.partial[stream]);
+      for (const segment of splitRenderedMarkers(job.partial[stream])) {
+        appendLine(job, stream, segment);
+      }
       job.partial[stream] = "";
     }
   }
@@ -2264,29 +2397,96 @@ async function frontendIsHealthy(healthUrl) {
   }
 }
 
+function ownedTreeRunning(child) {
+  if (!child?.pid) {
+    return false;
+  }
+  const containment = windowsOwnedTrees.get(child);
+  if (containment) {
+    return !containment.hasStopped();
+  }
+  if (child.exitCode === null && child.signalCode === null) {
+    return true;
+  }
+  if (process.platform === "win32") {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    if (error.code !== "ESRCH") {
+      throw error;
+    }
+    return false;
+  }
+}
+
+function spawnOwnedShell(configuration, retainDescendants = false) {
+  if (process.platform === "win32") {
+    const executable = process.env.ComSpec ?? "C:\\Windows\\System32\\cmd.exe";
+    const containment = spawnWindowsExecutor({
+      executable,
+      args: [],
+      commandLine: `"${executable}" /d /s /c "${configuration.command}"`,
+      repository: configuration.workingDirectory,
+      environment: configuration.environment,
+      retainDescendants
+    });
+    windowsOwnedTrees.set(containment.child, containment);
+    // Dev servers can interpret EOF as shutdown; keep their input alive.
+    if (!retainDescendants) {
+      containment.child.stdin.end();
+    }
+    containment.child.stdin.on("error", (error) => {
+      containment.child.emit("fixlab-input-error", error);
+    });
+    containment.child.stdout.resume();
+    containment.child.stderr.resume();
+    return containment.child;
+  }
+  const child = spawn(configuration.command, {
+    cwd: configuration.workingDirectory,
+    env: { ...process.env, ...configuration.environment, BROWSER: "none" },
+    shell: true,
+    detached: true,
+    stdio: retainDescendants ? ["pipe", "ignore", "ignore"] : "ignore"
+  });
+  child.stdin?.on("error", (error) => {
+    child.emit("fixlab-input-error", error);
+  });
+  return child;
+}
+
 function stopProcessTree(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
+  if (!child?.pid) {
     return;
   }
+  const containment = windowsOwnedTrees.get(child);
+  if (containment) {
+    containment.terminate();
+    return containment.waitForStopped();
+  }
   if (process.platform === "win32" && child.pid) {
-    spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+    if (child.exitCode !== null || child.signalCode !== null) {
+      return;
+    }
+    const result = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
       stdio: "ignore",
       windowsHide: true
     });
+    if (result.error || result.status !== 0) {
+      throw result.error ?? new Error(`could not stop the owned process tree (exit ${result.status})`);
+    }
     return;
   }
-  if (child.pid) {
-    try {
-      process.kill(-child.pid, "SIGTERM");
-      return;
-    } catch (error) {
-      if (error.code !== "ESRCH") {
-        child.kill();
-      }
-      return;
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch (error) {
+    if (error.code !== "ESRCH") {
+      throw error;
     }
   }
-  child.kill();
 }
 
 async function frontendStatus(repository, connection) {
@@ -2296,18 +2496,18 @@ async function frontendStatus(repository, connection) {
   } catch (error) {
     return {
       configured: false,
-      running: Boolean(connection.handle),
+      running: Boolean(connection.handle) || connection.starting === true,
       healthy: false,
-      owned: Boolean(connection.handle),
+      owned: Boolean(connection.handle) || connection.starting === true,
       error: error.message,
       lastResult: connection.lastResult
     };
   }
   return {
     configured: true,
-    running: Boolean(connection.handle),
+    running: Boolean(connection.handle) || connection.starting === true,
     healthy: await frontendIsHealthy(healthUrl),
-    owned: Boolean(connection.handle),
+    owned: Boolean(connection.handle) || connection.starting === true,
     healthUrl,
     error: "",
     lastResult: connection.lastResult
@@ -2488,8 +2688,9 @@ export function createDashboardServer({
   repository,
   packageRoot,
   runtime = "agency",
+  model = "",
   publicDirectory = join(packageRoot, "dashboard", "public"),
-  executor = createRuntimeExecutor({ packageRoot, runtime }),
+  executor = createRuntimeExecutor({ packageRoot, runtime, model }),
   workItemLoader = createAzureDevOpsLoader(),
   browserOpener = openLocalUrl,
   preflight = null,
@@ -2497,16 +2698,127 @@ export function createDashboardServer({
   executionHeartbeatMs = DEFAULT_EXECUTION_HEARTBEAT_MS
 }) {
   const resolvedRepository = resolve(repository);
+  const defaultModel = validateCopilotModel(model, runtime);
   let currentJob = null;
   let activeHandle = null;
+  let activeTermination = null;
   const queuedJobs = [];
   const heldJobs = [];
   const completedJobs = [];
   const artifactDirectories = new Set();
   const playwrightConnection = { handle: null, lastResult: null };
-  const frontendConnection = { handle: null, lastResult: null };
+  const frontendConnection = { handle: null, lastResult: null, starting: false };
+  let frontendStartGeneration = 0;
   const playwrightArtifacts = new Map();
   const cacheContext = createCacheContext(resolvedRepository);
+  const sessions = createSessionRegistry(
+    cacheContext?.repositoryIdentityHash ?? resolvedRepository
+  );
+  const executorLease = createExecutorLease(resolvedRepository, sessions.id);
+  let dashboardUrl = "";
+  let closing = false;
+
+  async function launchFrontend() {
+    const generation = frontendStartGeneration;
+    const configuration = frontendStartConfig(resolvedRepository);
+    if (frontendConnection.handle || frontendConnection.starting) {
+      throw new Error("FixLab already started the frontend");
+    }
+    frontendConnection.starting = true;
+    try {
+      const owners = await sessions.list();
+      const conflict = owners.find((owner) =>
+        owner.id !== sessions.id && owner.available && owner.frontend?.running
+      );
+      if (conflict) {
+        throw new Error(`Frontend is owned by FixLab dashboard ${conflict.id}; reconnect or confirm stopping that owner.`);
+      }
+      if (closing || generation !== frontendStartGeneration) {
+        throw new Error("frontend startup was cancelled");
+      }
+      if (await frontendIsHealthy(configuration.healthUrl)) {
+        return { started: false };
+      }
+      if (closing || generation !== frontendStartGeneration) {
+        throw new Error("frontend startup was cancelled");
+      }
+      frontendConnection.lastResult = null;
+      const child = spawnOwnedShell(configuration, true);
+      frontendConnection.handle = child;
+      child.once("fixlab-input-error", (error) => {
+        frontendConnection.lastResult = {
+          ok: false,
+          message: `Frontend input failed: ${error.message}`,
+          finishedAt: new Date().toISOString()
+        };
+      });
+      child.once("error", (error) => {
+        frontendConnection.lastResult = {
+          ok: false,
+          message: error.message,
+          finishedAt: new Date().toISOString()
+        };
+        if (frontendConnection.handle === child) {
+          frontendConnection.handle = null;
+        }
+      });
+      child.once("close", (code) => {
+        if (frontendConnection.handle === child) {
+          try {
+            if (ownedTreeRunning(child)) {
+              if (process.platform === "win32") {
+                frontendConnection.lastResult = {
+                  ok: false,
+                  message: "Frontend termination is unverified; ownership is retained.",
+                  finishedAt: new Date().toISOString()
+                };
+              }
+              return;
+            }
+          } catch (error) {
+            frontendConnection.lastResult = {
+              ok: false,
+              message: `Frontend termination is unverified: ${error.message}`,
+              finishedAt: new Date().toISOString()
+            };
+            return;
+          }
+          frontendConnection.handle = null;
+          frontendConnection.lastResult = {
+            ok: code === 0,
+            message: `Frontend process exited with code ${code ?? "unknown"}.`,
+            finishedAt: new Date().toISOString()
+          };
+        }
+      });
+      return { started: true };
+    } finally {
+      frontendConnection.starting = false;
+    }
+  }
+
+  async function prewarmFrontend(job) {
+    try {
+      const result = frontendConnection.handle || frontendConnection.starting
+        ? { started: false }
+        : await launchFrontend();
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: result.started
+          ? "React warm-up started in parallel with the agent. Live testing must wait for health and verify the server serves the validated checkout."
+          : "React warm-up reuses the existing frontend; live testing must verify its health and checkout."
+      });
+    } catch (error) {
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: `React warm-up did not start: ${error.message}. The agent must report any live-test prerequisite that remains blocked.`
+      });
+    }
+  }
   const metricsPath = cacheContext
     ? join(dirname(cacheContext.cachePath), "dashboard-metrics.json")
     : null;
@@ -2526,13 +2838,17 @@ export function createDashboardServer({
   }
   persistedJobs = persistedJobs.filter((job) => job.status !== "held");
   const resumableSnapshot = persistedJobs.find((job) =>
-    ["blocked", "failed", "passed"].includes(job.status)
+    ["blocked", "failed", "passed"].includes(job.status) &&
+    (job.runtime ?? (job.model ? "copilot" : "")) === runtime
   );
   if (resumableSnapshot) {
     currentJob = restoreDashboardJob(
       resumableSnapshot,
       resolvedRepository
     );
+    if (currentJob.runtime !== runtime) {
+      currentJob.resumeDisabled = true;
+    }
     persistedJobs = persistedJobs.filter(
       (job) => job.id !== resumableSnapshot.id
     );
@@ -2678,6 +2994,13 @@ export function createDashboardServer({
   }
 
   function startJob(job, prompt, resume = false) {
+    if (job.runtime !== runtime) {
+      throw new Error("Saved job runtime does not match this dashboard; reconnect using its originating runtime.");
+    }
+    validateCopilotModel(job.model, runtime);
+    if (closing) {
+      throw new Error("the dashboard is shutting down");
+    }
     const profileIdleTimeoutMinutes = Number(
       loadRepositoryProfile(resolvedRepository).validation
         ?.agentIdleTimeoutMinutes
@@ -2691,7 +3014,9 @@ export function createDashboardServer({
     let idleTimer = null;
     let heartbeatTimer = null;
     let resolveIdleCompletion;
+    let leaseMetadataError = null;
     let handle;
+    const lease = executorLease.acquire(job.id);
     const idleCompletion = new Promise((resolveCompletion) => {
       resolveIdleCompletion = resolveCompletion;
     });
@@ -2701,7 +3026,7 @@ export function createDashboardServer({
         const error = new Error(
           `FixLab agent produced no output for ${Math.round(
             idleTimeoutMs / 60000
-          )} minute(s); the owned executor was stopped and the job can be resumed.`
+          )} minute(s); termination was requested and resume remains blocked until the owned executor exits.`
         );
         pushLog(job, {
           index: job.nextLogIndex,
@@ -2710,6 +3035,17 @@ export function createDashboardServer({
           message: error.message
         });
         resolveIdleCompletion({ code: null, error });
+        job.executorStopping = true;
+        try {
+          lease.update("stopping");
+        } catch (metadataError) {
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message: `Could not update the idle executor lease: ${metadataError.message}. Still requesting owned termination.`
+          });
+        }
         try {
           handle?.terminate?.();
         } catch (terminationError) {
@@ -2749,61 +3085,121 @@ export function createDashboardServer({
     };
 
     job.lastActivityAt = new Date().toISOString();
-    handle = executor({
-      repository: resolvedRepository,
-      artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
-      prompt,
-      sessionId: job.id,
-      resume,
-      onOutput(stream, text) {
-        job.lastActivityAt = new Date().toISOString();
-        armIdleWatchdog();
-        const localStackWasReady =
-          job.stages["local-stack"].status === "passed";
-        appendOutput(job, stream, text);
-        if (
-          job.manualLocalhostTest &&
-          !job.manualLocalhostOpenedAt &&
-          !job.manualLocalhostOpening &&
-          !localStackWasReady &&
-          job.stages["local-stack"].status === "passed"
-        ) {
-          job.manualLocalhostOpening = true;
-          Promise.resolve()
-            .then(() => browserOpener(job.manualLocalhostUrl))
-            .then(() => {
-              job.manualLocalhostOpenedAt = new Date().toISOString();
-              pushLog(job, {
-                index: job.nextLogIndex,
-                timestamp: job.manualLocalhostOpenedAt,
-                stream: "dashboard",
-                message: "Opened the React localhost URL for manual validation."
+    try {
+      handle = executor({
+        repository: resolvedRepository,
+        artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
+        prompt: job.prestartFrontend && job.targetEnvironment.toLowerCase() === "local"
+          ? `${prompt}\nReact warm-up is requested in parallel in the dashboard repository. Before live testing, reuse that server only after its profile health check passes and you verify it serves the checkout containing the changes being validated. If using another isolated worktree, start the correct checkout instead; a healthy baseline server does not prove the fix. Never mark local-stack passed merely because warm-up was requested.`
+          : prompt,
+        sessionId: job.id,
+        resume,
+        model: job.model,
+        onOutput(stream, text) {
+          job.lastActivityAt = new Date().toISOString();
+          armIdleWatchdog();
+          const localStackWasReady =
+            job.stages["local-stack"].status === "passed";
+          appendOutput(job, stream, text);
+          if (
+            job.manualLocalhostTest &&
+            !job.manualLocalhostOpenedAt &&
+            !job.manualLocalhostOpening &&
+            !localStackWasReady &&
+            job.stages["local-stack"].status === "passed"
+          ) {
+            job.manualLocalhostOpening = true;
+            Promise.resolve()
+              .then(() => browserOpener(job.manualLocalhostUrl))
+              .then(() => {
+                job.manualLocalhostOpenedAt = new Date().toISOString();
+                pushLog(job, {
+                  index: job.nextLogIndex,
+                  timestamp: job.manualLocalhostOpenedAt,
+                  stream: "dashboard",
+                  message: "Opened the React localhost URL for manual validation."
+                });
+              })
+              .catch((error) => {
+                pushLog(job, {
+                  index: job.nextLogIndex,
+                  timestamp: new Date().toISOString(),
+                  stream: "dashboard",
+                  message: `Could not open React localhost automatically: ${error.message}`
+                });
+              })
+              .finally(() => {
+                job.manualLocalhostOpening = false;
               });
-            })
-            .catch((error) => {
-              pushLog(job, {
-                index: job.nextLogIndex,
-                timestamp: new Date().toISOString(),
-                stream: "dashboard",
-                message: `Could not open React localhost automatically: ${error.message}`
-              });
-            })
-            .finally(() => {
-              job.manualLocalhostOpening = false;
-            });
+          }
         }
+      });
+    } catch (error) {
+      clearTimeout(idleTimer);
+      if (error.executorNotStarted === true) {
+        lease.release();
       }
-    });
+      throw error;
+    }
     activeHandle = handle;
+    job.executorStopping = false;
+    if (!handle?.completion || typeof handle.completion.then !== "function") {
+      throw new Error("Executor did not provide a termination promise; the repository lease remains reserved.");
+    }
+    const actualCompletion = Promise.resolve(handle.completion).then((result) => {
+      if (handle.hasStopped && !handle.hasStopped()) {
+        throw new Error("Executor exit was observed but owned descendants may still be running; the repository lease remains reserved.");
+      }
+      lease.release();
+      return leaseMetadataError ? { code: null, error: leaseMetadataError } : result;
+    });
+    activeTermination = actualCompletion;
+    try {
+      lease.update("running", handle.pid);
+    } catch (error) {
+      leaseMetadataError = error;
+      job.executorStopping = true;
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: `Executor lease metadata could not be updated: ${error.message}. The reservation is retained while the owned executor stops.`
+      });
+      resolveIdleCompletion({ code: null, error });
+      try {
+        handle.terminate?.();
+      } catch (terminationError) {
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: `Could not stop the executor after its lease metadata failed: ${terminationError.message}. The reservation remains until termination is verified.`
+        });
+      }
+    }
+    if (job.prestartFrontend && job.targetEnvironment.toLowerCase() === "local") {
+      void prewarmFrontend(job);
+    }
     armIdleWatchdog();
     heartbeatTimer = setInterval(emitHeartbeat, executionHeartbeatMs);
     heartbeatTimer.unref?.();
-    Promise.race([Promise.resolve(handle.completion), idleCompletion])
+    Promise.race([actualCompletion, idleCompletion])
       .then((result) => {
         if (job.holdRequested) {
           holdJob(job);
+        } else if (closing && job.status === "running" && !job.stopRequested) {
+          const recovered = recoverInterruptedDashboardJob(dashboardSnapshot(job));
+          job.status = recovered.status;
+          job.stages = recovered.stages;
+          job.error = recovered.error;
+          job.finishedAt = recovered.finishedAt;
         } else {
           finishJob(job, result);
+        }
+        if (job.stopRequested) {
+          job.status = "blocked";
+          job.error = "Session stopped by the user; resume when ready.";
+          delete job.stopRequested;
         }
         recordJobMetric(job);
       })
@@ -2813,13 +3209,37 @@ export function createDashboardServer({
         } else {
           finishJob(job, { code: null, error });
         }
+        if (job.stopRequested) {
+          job.status = "blocked";
+          job.error = "Session stopped by the user; resume when ready.";
+          delete job.stopRequested;
+        }
         recordJobMetric(job);
       })
-      .finally(() => {
+      .finally(async () => {
         clearTimeout(idleTimer);
         clearInterval(heartbeatTimer);
+        try {
+          await actualCompletion;
+        } catch (error) {
+          job.executorStopping = true;
+          pushLog(job, {
+            index: job.nextLogIndex,
+            timestamp: new Date().toISOString(),
+            stream: "dashboard",
+            message: `Executor termination or lease release is unverified; retaining the repository lease: ${error.message}`
+          });
+          recordJobMetric(job);
+          return;
+        }
+        job.executorStopping = false;
         if (activeHandle === handle) {
           activeHandle = null;
+          activeTermination = null;
+        }
+        recordJobMetric(job);
+        if (closing) {
+          return;
         }
         if (job.status === "held") {
           if (currentJob?.id === job.id) {
@@ -2855,11 +3275,11 @@ export function createDashboardServer({
           }
           return;
         }
-        startNextJob();
+        return startNextJob();
       });
   }
 
-  function startNextJob() {
+  async function startNextJob() {
     if (
       activeHandle ||
       queuedJobs.length === 0 ||
@@ -2878,6 +3298,13 @@ export function createDashboardServer({
     currentJob.lastActivityAt = new Date().toISOString();
     recordJobMetric(currentJob);
     try {
+      const owners = await sessions.list();
+      const conflict = owners.find((owner) =>
+        owner.id !== sessions.id && owner.available && owner.job?.running
+      );
+      if (conflict) {
+        throw new Error(`Queued job cannot start while FixLab dashboard ${conflict.id} owns the repository's agent session. Reconnect or confirm stopping that owner.`);
+      }
       startJob(
         currentJob,
         currentJob.pendingPrompt,
@@ -2898,10 +3325,171 @@ export function createDashboardServer({
       `http://${request.headers.host ?? DASHBOARD_HOST}`
     );
 
+    if (closing && request.method === "POST") {
+      sendJson(response, 503, { error: "the dashboard is shutting down" });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/session") {
+      sendJson(response, 200, {
+        id: sessions.id,
+        scopeId: sessions.scopeId,
+        repository: resolvedRepository,
+        job: currentJob ? {
+          id: currentJob.id,
+          status: currentJob.status,
+          running: Boolean(activeHandle),
+          canResume: publicJob(currentJob).canResume
+        } : null,
+        frontend: {
+          running: Boolean(frontendConnection.handle) || frontendConnection.starting,
+          pid: frontendConnection.handle?.pid ?? null
+        },
+        authentication: { running: Boolean(playwrightConnection.handle) }
+      });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/sessions") {
+      try {
+        sendJson(response, 200, {
+          ownerId: sessions.id,
+          sessions: await sessions.list()
+        });
+      } catch (error) {
+        sendJson(response, 500, { error: error.message });
+      }
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      ["/api/sessions/control", "/api/session/control"].includes(requestUrl.pathname)
+    ) {
+      try {
+        if (!request.headers["content-type"]?.startsWith("application/json")) {
+          throw new Error("Content-Type must be application/json");
+        }
+        const body = await readJsonBody(request);
+        if (
+          !["stop", "resume", "shutdown"].includes(body.action) ||
+          !["job", "frontend", "all"].includes(body.resource) ||
+          typeof body.ownerId !== "string"
+        ) {
+          throw new Error("a session owner, action and resource are required");
+        }
+        if (body.action !== "resume" && body.confirmed !== true) {
+          sendJson(response, 409, { error: "explicit confirmation is required" });
+          return;
+        }
+        if (requestUrl.pathname === "/api/sessions/control") {
+          const result = await sessions.control(body.ownerId, body);
+          sendJson(response, result.status, result.body);
+          return;
+        }
+        if (body.ownerId !== sessions.id) {
+          sendJson(response, 409, { error: "the session owner has changed" });
+          return;
+        }
+        if (
+          ["job", "all"].includes(body.resource) &&
+          body.jobId !== (currentJob?.id ?? null)
+        ) {
+          sendJson(response, 409, { error: "the owned job has changed; refresh before continuing" });
+          return;
+        }
+        if (body.action === "resume" && body.resource === "all") {
+          throw new Error("resume a job or frontend individually");
+        }
+        const cleanupFailures = [];
+        if (body.action === "shutdown") {
+          if (body.resource !== "all") {
+            throw new Error("shutdown requires resource all");
+          }
+          try {
+            await stopProcessTree(playwrightConnection.handle);
+            playwrightConnection.handle = null;
+          } catch (error) {
+            cleanupFailures.push(error.message);
+          }
+        }
+        const paths = body.resource === "all"
+          ? ["/api/frontend/stop", ...(activeHandle ? ["/api/job/stop"] : [])]
+          : body.resource === "frontend"
+            ? [body.action === "resume" ? "/api/frontend/start" : "/api/frontend/stop"]
+            : body.action === "resume" && activeHandle
+              ? []
+              : [body.action === "resume" ? "/api/job/input" : "/api/job/stop"];
+        for (const path of paths) {
+          try {
+            const result = await fetch(`${dashboardUrl}${path}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                action: "continue",
+                details: "Resume the stopped FixLab session using its saved context and existing evidence."
+              }),
+              signal: AbortSignal.timeout(10000),
+              redirect: "error"
+            });
+            const resultBody = await result.json();
+            if (!result.ok) {
+              if (body.resource !== "all") {
+                sendJson(response, result.status, resultBody);
+                return;
+              }
+              cleanupFailures.push(resultBody.error ?? `Owned cleanup failed with HTTP ${result.status}`);
+            }
+          } catch (error) {
+            if (body.resource !== "all") {
+              throw error;
+            }
+            cleanupFailures.push(`Owned cleanup ${path} failed: ${error.message}`);
+          }
+        }
+        if (cleanupFailures.length) {
+          sendJson(response, 500, { error: cleanupFailures.join("; ") });
+          return;
+        }
+        sendJson(response, 202, { accepted: true, ownerId: sessions.id });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
+    if (
+      request.method === "POST" &&
+      ["/api/jobs", "/api/job/input", "/api/frontend/start"].includes(requestUrl.pathname)
+    ) {
+      try {
+        const resource = requestUrl.pathname === "/api/frontend/start" ? "frontend" : "job";
+        const owners = await sessions.list();
+        const conflict = owners.find((owner) =>
+          owner.id !== sessions.id && owner.available && owner[resource]?.running
+        );
+        if (conflict) {
+          sendJson(response, 409, {
+            error: `Another FixLab dashboard owns the ${resource} session. Reconnect to its dashboard or confirm stopping it in Session controls.`,
+            owner: conflict
+          });
+          return;
+        }
+      } catch (error) {
+        sendJson(response, 503, { error: `Could not verify session ownership: ${error.message}` });
+        return;
+      }
+    }
+
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
       persistDashboardState();
       sendJson(response, 200, {
         readiness: inspectRepository(resolvedRepository),
+        runtime: {
+          name: runtime,
+          defaultModel,
+          supportsModelSelection: runtime === "copilot"
+        },
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
         held: publicHeld(heldJobs),
@@ -3117,7 +3705,7 @@ export function createDashboardServer({
       }
       archiveJob(dismissedJob);
       currentJob = null;
-      startNextJob();
+      await startNextJob();
       persistDashboardState();
       sendJson(response, 202, {
         job: publicJob(currentJob),
@@ -3139,7 +3727,9 @@ export function createDashboardServer({
       }
       if (currentJob.resumeDisabled) {
         sendJson(response, 409, {
-          error: "this FixLab job cannot be resumed safely"
+          error: currentJob.runtime !== runtime
+            ? "Saved job runtime is incompatible or unknown; reconnect using its originating runtime or start a new job."
+            : "this FixLab job cannot be resumed safely"
         });
         return;
       }
@@ -3193,6 +3783,18 @@ export function createDashboardServer({
         return;
       }
       const manualResult = ["manual-pass", "manual-fail"].includes(action);
+      if (
+        !running &&
+        !manualResult &&
+        action !== "skip" &&
+        currentJob.stages["live-test"].status === "blocked" &&
+        playwrightConnection.handle
+      ) {
+        sendJson(response, 409, {
+          error: "Authentication is still running and owns the repository browser profile. Finish sign-in and close its browser window before resuming the blocked live test."
+        });
+        return;
+      }
       if (manualResult && !currentJob.manualLocalhostPending) {
         sendJson(response, 409, {
           error: "manual localhost confirmation is not pending"
@@ -3217,7 +3819,7 @@ export function createDashboardServer({
             action === "manual-pass" ? "passed" : "failed"
           }. Record the live-test stage as ${
             action === "manual-pass" ? "passed" : "failed"
-          }, stop only the FixLab-owned frontend process, preserve this manual result in the job evidence, and continue the remaining gated outcome without rerunning Playwright.`
+          }, stop only frontend processes owned by the current job (not a dashboard-managed server), preserve this manual result in the job evidence, and continue the remaining gated outcome without rerunning Playwright.`
         : submittedDetails || defaultDetails;
       if (!details || details.length > 10000) {
         sendJson(response, 400, {
@@ -3292,7 +3894,6 @@ export function createDashboardServer({
     ) {
       if (
         !currentJob ||
-        currentJob.status !== "running" ||
         !activeHandle?.terminate
       ) {
         sendJson(response, 409, {
@@ -3315,10 +3916,13 @@ export function createDashboardServer({
         timestamp: new Date().toISOString(),
         stream: "dashboard",
         message:
-          "Stop requested from FixLab chat; stopping only the owned executor."
+          "Stop requested by the user; stopping only the owned executor process tree."
       });
       try {
+        currentJob.executorStopping = true;
         activeHandle.terminate();
+        currentJob.pendingInputs = [];
+        currentJob.stopRequested = true;
       } catch (error) {
         sendJson(response, 500, {
           error: `could not stop the FixLab-owned executor: ${error.message}`
@@ -3784,6 +4388,13 @@ export function createDashboardServer({
         return;
       }
       const pullRequestStrategy = body.pullRequestStrategy ?? "common";
+      let selectedModel;
+      try {
+        selectedModel = validateCopilotModel(body.model ?? defaultModel, runtime);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       if (!["common", "per-bug"].includes(pullRequestStrategy)) {
         sendJson(response, 400, {
           error: "pullRequestStrategy must be common or per-bug"
@@ -3802,6 +4413,11 @@ export function createDashboardServer({
         sendJson(response, 400, {
           error: "recordPlaywrightVideo must be a boolean"
         });
+        return;
+      }
+      const prestartFrontend = body.prestartFrontend ?? false;
+      if (typeof prestartFrontend !== "boolean") {
+        sendJson(response, 400, { error: "prestartFrontend must be a boolean" });
         return;
       }
       const repositoryProfile = loadRepositoryProfile(resolvedRepository);
@@ -3959,9 +4575,12 @@ export function createDashboardServer({
         createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
+        model: selectedModel,
+        runtime,
         pullRequestStrategy,
         runAllUiScenarios,
         targetEnvironment,
+        prestartFrontend,
         recordPlaywrightVideo,
         manualLocalhostTest,
         manualLocalhostUrl,
@@ -4200,14 +4819,15 @@ export function createDashboardServer({
         return;
       }
       playwrightConnection.lastResult = null;
-      const child = spawn(configuration.command, {
-        cwd: configuration.workingDirectory,
-        env: { ...process.env, ...configuration.environment },
-        shell: true,
-        stdio: "ignore",
-        windowsHide: false
-      });
+      const child = spawnOwnedShell(configuration);
       playwrightConnection.handle = child;
+      child.once("fixlab-input-error", (error) => {
+        playwrightConnection.lastResult = {
+          ok: false,
+          message: `Authentication input failed: ${error.message}`,
+          finishedAt: new Date().toISOString()
+        };
+      });
       child.once("error", (error) => {
         playwrightConnection.lastResult = {
           ok: false,
@@ -4217,6 +4837,23 @@ export function createDashboardServer({
         playwrightConnection.handle = null;
       });
       child.once("close", (code, signal) => {
+        try {
+          if (ownedTreeRunning(child)) {
+            playwrightConnection.lastResult = {
+              ok: false,
+              message: "Authentication descendants remain owned; retry must wait for confirmed termination.",
+              finishedAt: new Date().toISOString()
+            };
+            return;
+          }
+        } catch (error) {
+          playwrightConnection.lastResult = {
+            ok: false,
+            message: `Authentication termination is unverified: ${error.message}`,
+            finishedAt: new Date().toISOString()
+          };
+          return;
+        }
         playwrightConnection.lastResult = {
           ok: code === 0,
           message:
@@ -4255,55 +4892,19 @@ export function createDashboardServer({
       request.method === "POST" &&
       requestUrl.pathname === "/api/frontend/start"
     ) {
-      let configuration;
-      try {
-        configuration = frontendStartConfig(resolvedRepository);
-      } catch (error) {
-        sendJson(response, 400, { error: error.message });
-        return;
-      }
-      if (frontendConnection.handle) {
+      if (frontendConnection.handle || frontendConnection.starting) {
         sendJson(response, 409, { error: "FixLab already started the frontend" });
         return;
       }
-      if (await frontendIsHealthy(configuration.healthUrl)) {
-        sendJson(response, 200, {
+      try {
+        const result = await launchFrontend();
+        sendJson(response, result.started ? 202 : 200, {
           ...(await frontendStatus(resolvedRepository, frontendConnection)),
-          started: false
+          ...result
         });
-        return;
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
       }
-      frontendConnection.lastResult = null;
-      const child = spawn(configuration.command, {
-        cwd: configuration.workingDirectory,
-        detached: process.platform !== "win32",
-        shell: true,
-        stdio: "ignore",
-        windowsHide: true
-      });
-      frontendConnection.handle = child;
-      child.once("error", (error) => {
-        frontendConnection.lastResult = {
-          ok: false,
-          message: error.message,
-          finishedAt: new Date().toISOString()
-        };
-        frontendConnection.handle = null;
-      });
-      child.once("close", (code) => {
-        if (frontendConnection.handle === child) {
-          frontendConnection.handle = null;
-        }
-        frontendConnection.lastResult = {
-          ok: code === 0,
-          message: `Frontend process exited with code ${code ?? "unknown"}.`,
-          finishedAt: new Date().toISOString()
-        };
-      });
-      sendJson(response, 202, {
-        ...(await frontendStatus(resolvedRepository, frontendConnection)),
-        started: true
-      });
       return;
     }
 
@@ -4312,11 +4913,18 @@ export function createDashboardServer({
       requestUrl.pathname === "/api/frontend/stop"
     ) {
       const child = frontendConnection.handle;
+      const wasStarting = frontendConnection.starting;
+      frontendStartGeneration += 1;
+      try {
+        await stopProcessTree(child);
+      } catch (error) {
+        sendJson(response, 500, { error: error.message });
+        return;
+      }
       frontendConnection.handle = null;
-      stopProcessTree(child);
       sendJson(response, 200, {
         ...(await frontendStatus(resolvedRepository, frontendConnection)),
-        stopped: Boolean(child)
+        stopped: Boolean(child) || wasStarting
       });
       return;
     }
@@ -4354,6 +4962,13 @@ export function createDashboardServer({
         server.listen(validatedPort, DASHBOARD_HOST, resolveListen);
       });
       const address = server.address();
+      dashboardUrl = `http://${DASHBOARD_HOST}:${address.port}`;
+      try {
+        sessions.register(dashboardUrl);
+      } catch (error) {
+        await new Promise((resolveClose) => server.close(resolveClose));
+        throw error;
+      }
       return {
         host: DASHBOARD_HOST,
         port: address.port,
@@ -4361,31 +4976,55 @@ export function createDashboardServer({
       };
     },
     async close() {
-      persistDashboardState();
-      if (activeHandle?.terminate) {
-        activeHandle.terminate();
-      }
-      if (
-        playwrightConnection.handle &&
-        playwrightConnection.handle.exitCode === null &&
-        playwrightConnection.handle.signalCode === null
-      ) {
-        playwrightConnection.handle.kill();
-      }
-      stopProcessTree(frontendConnection.handle);
-      frontendConnection.handle = null;
-      for (const directory of artifactDirectories) {
-        removeArtifactDirectory(directory);
-      }
-      artifactDirectories.clear();
-      server.closeIdleConnections?.();
-      await new Promise((resolveClose, reject) => {
-        if (!server.listening) {
-          resolveClose();
+      closing = true;
+      frontendStartGeneration += 1;
+      const failures = [];
+      const attempt = async (action) => {
+        try {
+          await action();
+        } catch (error) {
+          failures.push(error);
+        }
+      };
+      await attempt(() => persistDashboardState());
+      await attempt(async () => {
+        const handle = activeHandle;
+        const termination = activeTermination;
+        if (!handle) {
           return;
         }
-        server.close((error) => (error ? reject(error) : resolveClose()));
+        handle.terminate?.();
+        if (!termination) {
+          throw new Error("Executor termination cannot be verified; its reservation is retained.");
+        }
+        await termination;
       });
+      await attempt(async () => {
+        await stopProcessTree(playwrightConnection.handle);
+        playwrightConnection.handle = null;
+      });
+      await attempt(async () => {
+        await stopProcessTree(frontendConnection.handle);
+        frontendConnection.handle = null;
+      });
+      for (const directory of artifactDirectories) {
+        await attempt(() => removeArtifactDirectory(directory));
+      }
+      artifactDirectories.clear();
+      await attempt(async () => {
+        server.closeIdleConnections?.();
+        await new Promise((resolveClose, reject) => {
+          if (!server.listening) {
+            resolveClose();
+            return;
+          }
+          server.close((error) => (error ? reject(error) : resolveClose()));
+        });
+      });
+      await attempt(() => sessions.unregister());
+      if (failures.length) {
+        throw new AggregateError(failures, "FixLab shutdown could not complete every owned cleanup step");
+      }
     }
   };
 }

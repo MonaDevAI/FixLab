@@ -4,6 +4,21 @@ All notable changes to FixLab are documented in this file.
 
 ## Unreleased
 
+- Keep managed frontend input open so React-style development servers do not
+  stop on EOF; preserve one-shot helper behavior and owned process cleanup.
+
+- Add approved, configuration-only worktree onboarding with `--from`, preserved
+  custom files, missing-browser-config preflight, and reviewed exact-directory
+  grants for linked dependencies; keep credentials and MFA human-controlled.
+- Make chat detect incomplete profiles, open an explicit interactive setup
+  request, and verify Doctor before launching a new dashboard.
+
+- Give Windows tooling descendants one inherited hidden console while retaining
+  captured input/output, Job Object containment, and termination proofs.
+- Publish authorized pull requests after required local validation and approval,
+  verify draft status is cleared, and leave publication-triggered remote builds
+  pending rather than waiting for them before publication.
+
 ## 0.7.3 - 2026-10-05
 
 - Wait for the native keep-awake inhibitor to become ready before reporting

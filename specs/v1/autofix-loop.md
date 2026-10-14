@@ -35,8 +35,15 @@ and pull-request policy.
    pull request after the scoped change and smallest focused regression checks
    pass, while independent required validation continues. It MUST reuse the
    same branch and draft, keep pending or failed gates visible, and MUST NOT
-   mark the pull request ready or the PR stage passed before the required gates
-   reach an accepted terminal outcome.
+   mark the pull request ready or the PR stage passed before required local
+   validation and approval gates reach an accepted terminal outcome.
+10. It MUST then publish the authorized pull request by clearing draft status
+    and verify the provider reports `isDraft=false` before reporting the PR
+    stage passed. It MUST NOT wait for remote PR CI or build completion before
+    publication, because publication may trigger those checks. Pending remote
+    checks MUST remain reported as pending; review and merge policies still
+    apply. Failed publication or state verification MUST block or fail the PR
+    stage.
 
 ## Safety
 

@@ -1,4 +1,5 @@
 import { clearLine, createInterface, cursorTo } from "node:readline";
+import { stripVTControlCharacters } from "node:util";
 
 const DEFAULT_LOG_COUNT = 20;
 const MAX_LOG_COUNT = 100;
@@ -155,6 +156,7 @@ async function requestJson(fetchImpl, url, options) {
 
 export async function runChat({
   baseUrl,
+  model = "",
   input = process.stdin,
   output = process.stdout,
   errorOutput = process.stderr,
@@ -176,21 +178,35 @@ export async function runChat({
   let interactive = false;
   let handlingLine = false;
   let readline;
+  let lastPollingError = "";
   const pendingMessages = [];
-  const writeMessage = (stream, message = "") => {
+  const writeMessages = (messages) => {
+    const safeMessages = messages.map(({ stream, message }) => ({
+      stream,
+      message: stripVTControlCharacters(String(message)).replace(/\r/g, "")
+    }));
+    if (safeMessages.length === 0) {
+      return;
+    }
     if (interactive && readline && !handlingLine && !closed) {
       if (readline.line) {
-        pendingMessages.push({ stream, message });
+        pendingMessages.push(...safeMessages);
         return;
       }
       clearLine(output, 0);
       cursorTo(output, 0);
-      stream.write(`${message}\n`);
+      for (const { stream, message } of safeMessages) {
+        stream.write(`${message}\n`);
+      }
       readline.prompt(true);
       return;
     }
-    stream.write(`${message}\n`);
+    for (const { stream, message } of safeMessages) {
+      stream.write(`${message}\n`);
+    }
   };
+  const writeMessage = (stream, message = "") =>
+    writeMessages([{ stream, message }]);
   const write = (message = "") => writeMessage(output, message);
   const writeError = (message) => writeMessage(errorOutput, message);
   const flushPendingMessages = () => {
@@ -206,12 +222,15 @@ export async function runChat({
 
   const loadStatus = async ({ announce = false } = {}) => {
     const body = await requestJson(fetchImpl, `${dashboardUrl}/api/status`);
+    const messages = [];
+    const announceMessage = (message) => messages.push({ stream: output, message });
     currentJob = body.job;
     currentReadiness = body.readiness ?? null;
     if (!currentJob) {
       if (announce) {
-        write("No FixLab job is available. Start one in the dashboard first.");
+        announceMessage("No FixLab job is available. Start one in the dashboard first.");
       }
+      writeMessages(messages);
       return null;
     }
     if (currentJob.id !== lastJobId) {
@@ -221,23 +240,28 @@ export async function runChat({
         ...(currentJob.logs ?? []).map((entry) => Number(entry.index))
       );
       lastStatus = currentJob.status;
-      write(formatJobStatus(currentJob));
+      announceMessage(formatJobStatus(currentJob));
+      writeMessages(messages);
       return currentJob;
     }
     for (const entry of currentJob.logs ?? []) {
-      if (Number(entry.index) <= lastLogIndex || !entry.message) {
+      if (Number(entry.index) <= lastLogIndex) {
         continue;
       }
-      write(`[${entry.stream}] ${entry.message}`);
       lastLogIndex = Number(entry.index);
+      const message = stripVTControlCharacters(entry.message ?? "").replace(/\r/g, "");
+      if (message.trim()) {
+        announceMessage(`[${entry.stream}] ${message}`);
+      }
     }
     if (currentJob.status !== lastStatus) {
-      write(`[status] ${lastStatus} -> ${currentJob.status}`);
+      announceMessage(`[status] ${lastStatus} -> ${currentJob.status}`);
       lastStatus = currentJob.status;
     }
     if (announce) {
-      write(formatJobStatus(currentJob));
+      announceMessage(formatJobStatus(currentJob));
     }
+    writeMessages(messages);
     return currentJob;
   };
 
@@ -261,6 +285,7 @@ export async function runChat({
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         request: details,
+        ...(model ? { model } : {}),
         mode: "fix-and-validate",
         requestType: "bug-fix",
         pullRequestStrategy: "common",
@@ -368,8 +393,15 @@ export async function runChat({
     polling = true;
     try {
       await loadStatus();
+      if (lastPollingError) {
+        write("Dashboard connection restored.");
+        lastPollingError = "";
+      }
     } catch (error) {
-      writeError(`Dashboard polling failed: ${error.message}`);
+      if (error.message !== lastPollingError) {
+        writeError(`Dashboard polling failed: ${error.message}`);
+        lastPollingError = error.message;
+      }
     } finally {
       polling = false;
     }
