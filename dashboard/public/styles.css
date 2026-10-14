@@ -315,6 +315,11 @@ button.secondary {
   color: #c6cbd3;
 }
 
+.held,
+.holding {
+  color: #ffd58e;
+}
+
 .running {
   color: #8ec5ff;
 }
@@ -413,6 +418,28 @@ button.secondary {
 
 .stage.skipped {
   border-color: #e7ad4e;
+}
+
+.job-controls {
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid #2a3855;
+}
+
+.job-controls h3 {
+  margin: 0;
+}
+
+.history-cleanup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .6rem;
+  margin-top: .8rem;
+}
+
+.history-cleanup input {
+  width: 6rem;
 }
 
 .stage p {
