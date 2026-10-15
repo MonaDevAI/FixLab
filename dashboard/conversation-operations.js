@@ -26,7 +26,7 @@ export const conversationOperations = Object.freeze({
 const resultKeys = new Set([
   "id", "jobId", "ownerId", "requestId", "status", "ready", "error", "message",
   "accepted", "started", "stopped", "queued", "running", "starting", "connected",
-  "configured", "enabled", "available", "pid", "canResume", "canComment",
+  "configured", "enabled", "available", "healthy", "owned", "lastResult", "pid", "canResume", "canComment",
   "canReviewPermissions", "job", "queuedJob", "resumedJob", "heldJob",
   "dismissedJob", "queue", "held", "history", "sessions", "frontend",
   "authentication", "permissionRequest", "kind", "scope", "directory",
@@ -36,7 +36,10 @@ const resultKeys = new Set([
   "pr", "mode", "createdAt", "finishedAt", "lastActivityAt", "warning",
   "workItems", "workItem", "title", "state", "workItemType", "commentCount",
   "deletedCount", "purgedCount", "remainingCount", "period", "metrics",
-  "total", "passed", "failed", "blocked", "cancelled", "heldCount", "queuedCount"
+  "total", "passed", "failed", "blocked", "cancelled", "heldCount", "queuedCount",
+  "completed", "bugs", "averageDurationMs", "usageJobs", "totalInputTokens",
+  "totalCachedInputTokens", "totalCacheWriteTokens", "totalOutputTokens",
+  "averageCacheHitPercent"
 ]);
 
 export function compactControlResult(value, depth = 0) {

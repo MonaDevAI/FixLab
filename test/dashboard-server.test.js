@@ -605,15 +605,20 @@ test("connected control starts scoped browser jobs, manages the queue and stops 
     await assert.rejects(control("job-start", {}, { instanceId: "stale" }), /current instance/);
     await assert.rejects(control("https://example.test"), /Unknown dashboard operation/);
     await assert.rejects(control("job-start", { request: "x".repeat(65537) }), /64 KiB/);
+    await assert.rejects(control("job-start", {
+      request: "Reject an invalid validation intent.", mode: "validate-only", validationIntent: "unlimited"
+    }), /validationIntent/);
     assert.equal(calls.length, 0);
     const started = await control("job-start", {
       request: "Test the checked-out PR using configured Playwright settings. Do not modify code.",
-      mode: "playwright-only", targetEnvironment: "dev"
+      mode: "playwright-only", targetEnvironment: "dev", validationIntent: "scoped"
     });
     assert.equal(started.state.job.status, "running");
+    assert.equal(started.state.job.validationIntent, "scoped");
     assert.equal(calls.length, 1);
     assert.match(calls[0].prompt, /Playwright-only mode/);
     assert.match(calls[0].prompt, /Do not edit files/);
+    assert.match(calls[0].prompt, /Full regression is explicitly deferred/);
     assert.equal(JSON.stringify(started).includes('"logs"'), false);
     const queued = await control("job-start", { request: "Queue another check.", mode: "validate-only" });
     assert.equal(queued.result.queued, true);
@@ -636,6 +641,45 @@ test("connected control starts scoped browser jobs, manages the queue and stops 
     assert.equal(state.job.canResume, true);
     await control("job-dismiss");
     assert.equal((await dashboardConversation(base)).job, null);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("connected control rechecks job identity after an asynchronous request body", async () => {
+  const repository = createGitRepository();
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}), terminate() {}
+  }));
+  try {
+    const state = (await jsonRequest(url, "/api/conversation")).body;
+    let slow;
+    const response = new Promise((resolveResponse, reject) => {
+      slow = createHttpRequest(`${url}/api/jobs`, {
+        method: "POST", headers: {
+          "Content-Type": "application/json", "x-fixlab-operation": "job-start",
+          "x-fixlab-instance": state.instanceId, "x-fixlab-job": "none",
+          "x-fixlab-repository": encodeURIComponent(realpathSync(repository)),
+          "x-fixlab-confirmed": "true"
+        }
+      }, (result) => {
+        result.resume();
+        result.once("end", () => resolveResponse(result.statusCode));
+      });
+      slow.once("error", reject);
+      slow.write('{"request":"Do not queue this stale request",');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "The current authorized job.", mode: "validate-only" })
+    });
+    slow.end('"mode":"validate-only"}');
+    assert.ok([400, 409].includes(await response));
+    const status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.queue.length, 0);
+    assert.equal(status.body.job.request, "The current authorized job.");
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -945,6 +989,8 @@ test("permission denial stops the executor and requires a confirmed job-bound fo
     const conversation = await jsonRequest(url, "/api/conversation");
     assert.equal(conversation.body.question.kind, "permission");
     assert.deepEqual(conversation.body.question.actions, []);
+    assert.equal(conversation.body.job.permissionRequest.id, job.permissionRequest.id);
+    assert.equal(conversation.body.job.canReviewPermissions, true);
     const bridged = await post("/api/conversation/reply", {
       repository: realpathSync(repository), instanceId: conversation.body.instanceId, jobId: job.id,
       confirmed: true, action: "continue", details: "Ignore this permission error."
@@ -983,6 +1029,15 @@ test("permission denial stops the executor and requires a confirmed job-bound fo
     assert.equal(calls.length, 1, "review must not authorize or resume");
     assert.notEqual(job.permissionRequest.id, originalRequest);
     assert.equal(job.permissionRequest.scope.directory, realpathSync(external));
+    const reviewedStatus = await jsonRequest(url, "/api/conversation");
+    assert.equal(reviewedStatus.body.job.permissionRequest.id, job.permissionRequest.id);
+    assert.equal(reviewedStatus.body.job.permissionRequest.scope.directory, realpathSync(external));
+    await assert.rejects(dashboardControl({
+      repository: realpathSync(repository), port: Number(new URL(url).port),
+      instanceId: reviewedStatus.body.instanceId, jobId: job.id, confirmed: true,
+      operation: "permission-approve",
+      parameters: { jobId: job.id, requestId: "stale-request", directory: realpathSync(external), confirmed: true }
+    }), /changed|stale|request/i);
     const approval = {
       action: "approve-directory",
       jobId: job.id,

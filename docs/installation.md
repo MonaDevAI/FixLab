@@ -155,9 +155,11 @@ passed by itself. Independent safe checks can proceed after unrelated
 failures, without bypassing their own prerequisites.
 
 The bridge uses loopback HTTP only, bounded responses and a ten-second
-deadline. It does not expose raw logs or browser state, grant folder/tool
+deadline. It does not expose raw logs or browser state, grant blanket folder/tool
 permissions, complete sign-in, or approve unsafe data access. Permission
-questions link back to the dashboard's scoped review.
+questions include the current request identifier and reviewed folder. Use the
+existing scoped review and approval operations, or review them in the dashboard;
+ordinary conversation replies cannot grant permissions.
 It is request/response, not background injection into an idle Copilot chat:
 ask for status when you want progress or have Copilot check at workflow
 boundaries. A separate background dashboard cannot create native prompts in

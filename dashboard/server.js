@@ -3685,6 +3685,12 @@ export function createDashboardServer({
       controlProtocol: 1,
       job: job ? {
         id: job.id, status: job.status, canResume: job.canResume, canComment: job.canComment,
+        canReviewPermissions: job.canReviewPermissions,
+        permissionRequest: job.permissionRequest ? {
+          id: job.permissionRequest.id,
+          kind: job.permissionRequest.kind,
+          scope: job.permissionRequest.scope ? { directory: job.permissionRequest.scope.directory } : null
+        } : null,
         validationIntent: job.validationIntent,
         stages: Object.fromEntries(Object.entries(job.stages).map(([stage, value]) => [
           stage, { status: value.status, message: safePersistedSummary(value.message).slice(0, 500) }
@@ -5014,6 +5020,11 @@ export function createDashboardServer({
         });
         return;
       }
+      const validationIntent = body.validationIntent ?? "full";
+      if (!["scoped", "full"].includes(validationIntent)) {
+        sendJson(response, 400, { error: "validationIntent must be scoped or full." });
+        return;
+      }
       const requestType = body.requestType ?? "bug-fix";
       if (!["bug-fix", "small-enhancement"].includes(requestType)) {
         sendJson(response, 400, {
@@ -5209,6 +5220,7 @@ export function createDashboardServer({
         createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
+        validationIntent,
         model: selectedModel,
         runtime,
         pullRequestStrategy,
