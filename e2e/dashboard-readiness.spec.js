@@ -3,11 +3,14 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer as createPortProbe } from "node:net";
-import { createDashboardServer } from "../dashboard/server.js";
 
-const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+const packageRoot = process.env.FIXLAB_TEST_PACKAGE_ROOT ??
+  fileURLToPath(new URL("..", import.meta.url));
+const { createDashboardServer } = await import(
+  pathToFileURL(join(packageRoot, "dashboard", "server.js")).href
+);
 let repository;
 let dashboard;
 let baseUrl;

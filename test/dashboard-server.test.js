@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
@@ -12,7 +12,7 @@ import {
   symlinkSync,
   writeFileSync
 } from "node:fs";
-import { createServer as createHttpServer } from "node:http";
+import { createServer as createHttpServer, request as createHttpRequest } from "node:http";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
@@ -578,12 +578,13 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
   }
 });
 
-test("shared dashboard validation rejects sibling worktrees and checks the assigned source", async () => {
+for (const shared of [false, true]) {
+test(`dashboard validation rejects sibling evidence in ${shared ? "shared" : "isolated"} mode`, async () => {
   const source = createGitRepository();
   const repository = mkdtempSync(join(tmpdir(), "fixlab-shared-validation-"));
   const sibling = mkdtempSync(join(tmpdir(), "fixlab-shared-sibling-"));
   writeFileSync(join(source, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({
-    worktreeSetup: { mode: "shared", baseBranch: "develop" },
+    ...(shared ? { worktreeSetup: { mode: "shared", baseBranch: "develop" } } : {}),
     validation: { gates: [{
       id: "tests", command: process.execPath,
       args: ["-e", "require('node:assert/strict').equal(require('node:fs').readFileSync('tracked.txt','utf8'),'assigned fix')"],
@@ -604,7 +605,7 @@ test("shared dashboard validation rejects sibling worktrees and checks the assig
   try {
     const started = await post("/api/jobs", { request: "Validate the assigned checkout.", mode: "fix-and-validate" });
     assert.equal(started.body.job.status, "running");
-    assert.ok(started.body.job.sharedWorkspace);
+    assert.equal(Boolean(started.body.job.sharedWorkspace), shared);
     writeFileSync(join(repository, "tracked.txt"), "assigned fix");
     const rejected = await post("/api/validation/run", {
       jobId: started.body.job.id, gateId: "tests", repository: sibling
@@ -625,6 +626,7 @@ test("shared dashboard validation rejects sibling worktrees and checks the assig
     rmSync(source, { recursive: true, force: true });
   }
 });
+}
 
 test("shared dashboard rejects dirty checkout acquisition without launching or retaining an executor lease", async () => {
   const repository = createGitRepository();
@@ -4826,6 +4828,67 @@ test("holding and held jobs cannot expose stale gate passes as PR readiness", as
     finish?.({ code: 0 });
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("validation admission closes as soon as executor stop or dashboard shutdown begins", async () => {
+  for (const action of ["stop", "close"]) {
+    const repository = createGitRepository();
+    writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({
+      validation: { gates: [{
+        id: "tests", command: process.execPath, args: ["-e", "process.exit(0)"],
+        workingDirectory: ".", timeoutSeconds: 30
+      }] }
+    })));
+    let finish;
+    let closing;
+    let validationRequest;
+    const { dashboard, url } = await startDashboard(repository, () => ({
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() {}
+    }), null, { deferTermination: true });
+    const post = (path, body) => jsonRequest(url, path, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    });
+    try {
+      const started = await post("/api/jobs", { request: "Reject late validation.", mode: "validate-only" });
+      const body = JSON.stringify({ jobId: started.body.job.id, gateId: "tests", repository });
+      const receiving = once(dashboard.server, "request");
+      const pendingResponse = new Promise((resolve, reject) => {
+        validationRequest = createHttpRequest(new URL("/api/validation/run", url), {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) }
+        }, (response) => {
+          let content = "";
+          response.setEncoding("utf8");
+          response.on("data", (chunk) => { content += chunk; });
+          response.on("error", reject);
+          response.on("end", () => {
+            resolve({ status: response.statusCode, body: JSON.parse(content) });
+          });
+        });
+        validationRequest.on("error", reject);
+        validationRequest.write(body.slice(0, -1));
+      });
+      await receiving;
+      if (action === "stop") {
+        assert.equal((await post("/api/job/stop", {})).response.status, 202);
+      } else {
+        closing = dashboard.close();
+      }
+      validationRequest.end(body.slice(-1));
+      const rejected = await pendingResponse;
+      assert.equal(rejected.status, 400);
+      assert.match(rejected.body.error, /current running job/);
+      const pending = await jsonRequest(url, "/api/status");
+      assert.equal(pending.body.job.status, "running");
+      assert.equal(pending.body.job.validation.gates[0].status, "pending");
+    } finally {
+      validationRequest?.destroy();
+      finish?.({ code: null, signal: "SIGTERM" });
+      await (closing ?? dashboard.close());
+      rmSync(repository, { recursive: true, force: true });
+    }
   }
 });
 

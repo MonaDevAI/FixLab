@@ -3085,8 +3085,10 @@ export function createDashboardServer({
     const address = server.address();
     if (validation.status !== "unconfigured" && validation.gates.length > 0) {
       prompt += `\nDashboard-owned required validation:
-- Run each gate against your final isolated worktree using:
-  node "${join(packageRoot, "bin", "fixlab.js")}" gate --port ${address.port} --job ${job.id} --gate <id> --repository <worktree-path>
+- Required gates and code changes must use this job's assigned dashboard checkout. Do not validate a sibling checkout or move gated changes elsewhere.
+- For separate isolation, onboard the worktree and start its dashboard before creating a gated job.
+- Run each gate using:
+  node "${join(packageRoot, "bin", "fixlab.js")}" gate --port ${address.port} --job ${job.id} --gate <id> --repository "${resolvedRepository}"
 - Required gate IDs: ${validation.gates.map((gate) => gate.id).join(", ")}.
 - These operations return compact structured evidence. Do not run the same required commands separately.
 - Run required gates before reporting readiness. Stage markers cannot pass these gates.
@@ -3668,14 +3670,14 @@ export function createDashboardServer({
         }
         const body = await readJsonBody(request);
         const job = currentJob;
-        if (!job || job.status !== "running" || !job.acceptsValidation || body.jobId !== job.id) {
+        if (closing || !job || job.executorStopping || job.status !== "running" || !job.acceptsValidation || body.jobId !== job.id) {
           throw new Error("Validation requires the current running job ID.");
         }
         if (typeof body.gateId !== "string" || typeof body.repository !== "string") {
           throw new Error("gateId and repository are required.");
         }
-        if (job.sharedWorkspace && realpathSync(body.repository) !== realpathSync(resolvedRepository)) {
-          throw new Error("Shared-worktree validation must target the job's assigned checkout.");
+        if (realpathSync(body.repository) !== realpathSync(resolvedRepository)) {
+          throw new Error("Validation must target the job's assigned checkout.");
         }
         if (job.validationSession.active) {
           throw new Error("A validation gate is already running.");

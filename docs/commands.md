@@ -52,6 +52,9 @@ runs a required `validation.gates` entry through the dashboard-owned compact
 executor. The dashboard supplies this command with the correct job and port.
 It returns a nonzero exit code for failed, cancelled, timed-out, or stale
 validation. It does not accept arbitrary commands or an arbitrary repository.
+The repository must be the checkout selected when starting that dashboard.
+For an isolated checkout, onboard it and start its dashboard before the job;
+an agent-created sibling cannot substitute evidence for the assigned source.
 
 Configure each gate in the repository profile:
 

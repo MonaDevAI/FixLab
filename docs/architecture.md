@@ -467,9 +467,13 @@ Dashboard jobs receive `fixlab gate --port <port> --job <id> --gate <id>
 --repository <worktree>` instructions. The loopback endpoint resolves the
 executable from the job's reviewed profile, not from request-supplied commands.
 It accepts only the current running job, rejects browser-origin requests,
-restricts the target to the same Git repository and one selected worktree,
-and runs one bounded gate at a time through the structured executor.
-Shared-worktree jobs must validate their assigned checkout, not a sibling.
+restricts the target to the assigned dashboard checkout, and runs one bounded
+gate at a time through the structured executor. This applies in shared and
+isolated modes; sharing a Git common directory does not establish assignment.
+For isolation, onboard the worktree and start its dashboard before creating a
+gated job. Gated jobs cannot switch checkouts through a validation request.
+Requests are rejected after owned executor stop or dashboard shutdown begins,
+including requests whose bodies were still arriving when shutdown began.
 Only executor results can pass these gates; agent stage markers cannot.
 
 Unchanged successful job-local evidence is reused when a gate is requested
