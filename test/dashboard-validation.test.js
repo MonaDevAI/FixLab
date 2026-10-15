@@ -1,13 +1,13 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 import { ValidationSession, validationGates } from "../dashboard/validation-gates.js";
-import { reusableValidationCommand } from "../bin/structured-command.js";
+import { repositoryState, reusableValidationCommand } from "../bin/structured-command.js";
 import { createCacheContext } from "../dashboard/server.js";
 
 function git(repository, args) {
@@ -109,6 +109,39 @@ test("failed, timed out, cancelled, and source-mutating checks cannot pass gates
     assert.ok(kills >= 1);
   } finally {
     rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("gates fingerprint unstaged deletions and renames including instructions", async () => {
+  for (const operation of ["delete", "rename"]) {
+    const { repository, profile } = fixture();
+    try {
+      writeFileSync(join(repository, "AGENTS.md"), "Tracked instructions");
+      git(repository, ["add", "AGENTS.md"]);
+      git(repository, ["-c", "user.name=FixLab Test", "-c", "user.email=fixlab@example.test", "commit", "--quiet", "-m", "instructions"]);
+      const initial = repositoryState(repository);
+      const session = new ValidationSession(repository, profile, "validate-only");
+      assert.equal((await session.run("tests", repository, profile)).status, 0);
+      for (const path of ["source.txt", "AGENTS.md"]) {
+        if (operation === "delete") {
+          rmSync(join(repository, path));
+        } else {
+          renameSync(join(repository, path), join(repository, `renamed-${path}`));
+        }
+      }
+      const changed = repositoryState(repository);
+      assert.notEqual(changed.worktreeHash, initial.worktreeHash);
+      assert.notEqual(changed.instructionHash, initial.instructionHash);
+      assert.equal(session.verify().gates[0].status, "stale");
+      assert.equal((await session.run("tests", repository, profile)).status, 0);
+      assert.equal(session.verify().status, "passed");
+      git(repository, ["add", "-A"]);
+      assert.equal(session.verify().gates[0].status, "stale");
+      assert.equal((await session.run("tests", repository, profile)).status, 0);
+      assert.equal(session.verify().status, "passed");
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
   }
 });
 

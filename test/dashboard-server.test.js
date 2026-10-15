@@ -4722,6 +4722,110 @@ test("dashboard gate execution rejects forged readiness and stale final-source e
   }
 });
 
+test("holding and held jobs cannot expose stale gate passes as PR readiness", async () => {
+  const repository = createGitRepository();
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({
+    validation: { gates: [{
+      id: "tests", command: process.execPath, args: ["-e", "process.exit(0)"],
+      workingDirectory: ".", timeoutSeconds: 30
+    }] }
+  })));
+  let finish;
+  let emit;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    emit = input.onOutput;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() {}
+    };
+  }, null, { deferTermination: true });
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", { request: "Hold verified work.", mode: "fix-and-validate" });
+    const jobId = started.body.job.id;
+    for (const stage of FIXLAB_STAGES) {
+      emit("stdout", `FIXLAB_STAGE|${stage}|${stage === "pr" ? "blocked" : "passed"}|Waiting for approval\n`);
+    }
+    assert.equal((await post("/api/validation/run", { jobId, gateId: "tests", repository })).body.status, 0);
+    writeFileSync(join(repository, "tracked.txt"), "changed after gate\n");
+    const holding = await post("/api/jobs/hold", { jobId });
+    assert.equal(holding.body.job.status, "holding");
+    assert.equal(holding.body.job.validation.status, "passed");
+    assert.equal(holding.body.job.pullRequestReadiness.ready, false);
+    finish({ code: 0 });
+    let status;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      status = await jsonRequest(url, "/api/status");
+      if (status.body.held.length) {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    assert.equal(status.body.held[0].status, "held");
+    assert.equal(status.body.held[0].pullRequestReadiness.ready, false);
+    await post("/api/jobs/resume", { jobId });
+    assert.equal((await post("/api/validation/run", { jobId, gateId: "tests", repository })).body.status, 0);
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    status = await jsonRequest(url, "/api/status");
+    assert.equal(status.body.job.validation.status, "passed");
+    assert.equal(status.body.job.pullRequestReadiness.ready, true);
+  } finally {
+    finish?.({ code: 0 });
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard-owned gates suspend agent idle detection and rearm it after success or failure", async () => {
+  for (const exitCode of [0, 2]) {
+    const repository = createGitRepository();
+    writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({
+      validation: { gates: [{
+        id: "tests", command: process.execPath,
+        args: ["-e", `setTimeout(()=>process.exit(${exitCode}),1000)`],
+        workingDirectory: ".", timeoutSeconds: 30
+      }] }
+    })));
+    let terminated = 0;
+    const { dashboard, url } = await startDashboard(repository, () => ({
+      completion: new Promise(() => {}),
+      terminate() { terminated += 1; }
+    }), null, { executionIdleTimeoutMs: 500 });
+    try {
+      const started = await jsonRequest(url, "/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Wait for an owned gate.", mode: "validate-only" })
+      });
+      const gate = await jsonRequest(url, "/api/validation/run", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: started.body.job.id, gateId: "tests", repository })
+      });
+      assert.equal(gate.response.status, 200);
+      assert.equal(gate.body.status, exitCode);
+      assert.equal(terminated, 0);
+      const running = await jsonRequest(url, "/api/status");
+      assert.equal(running.body.job.status, "running");
+      assert.equal(running.body.job.validation.gates[0].status, exitCode === 0 ? "passed" : "failed");
+      for (let attempt = 0; attempt < 150 && !terminated; attempt += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(terminated, 1);
+      const stopped = await jsonRequest(url, "/api/status");
+      assert.match(stopped.body.job.error, /produced no output/);
+    } finally {
+      await dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  }
+});
+
 test("dashboard PR strategies publish after local gates without waiting for remote CI", () => {
   for (const pullRequestStrategy of ["per-bug", "common"]) {
     const prompt = buildJobPrompt({

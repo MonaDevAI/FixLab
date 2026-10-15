@@ -95,13 +95,20 @@ export function repositoryState(repository) {
   if (files.status !== 0) {
     throw new Error("fixlab exec could not enumerate repository files");
   }
+  const deleted = git(repository, ["ls-files", "--deleted", "-z"]);
+  if (deleted.status !== 0) {
+    throw new Error("fixlab exec could not inspect deleted repository files");
+  }
+  const deletedPaths = new Set(deleted.stdout.split("\0").filter(Boolean));
   const paths = files.stdout.split("\0").filter(Boolean);
   // A nested Git repository is listed as a directory and cannot be hashed.
   const nestedRepositories = paths.filter((path) => path.endsWith("/"));
-  const filePaths = paths.filter((path) => !path.endsWith("/"));
+  const filePaths = paths.filter((path) =>
+    !path.endsWith("/") && !deletedPaths.has(path)
+  );
   const regularPaths = filePaths.filter((path) => !/[\r\n]/u.test(path));
   const exceptionalPaths = filePaths.filter((path) => /[\r\n]/u.test(path));
-  const contentHashes = [];
+  const contentHashes = [...deletedPaths].map((path) => `${path}\0deleted`);
   for (const path of nestedRepositories) {
     const nestedHead = git(join(repository, path), ["rev-parse", "HEAD"]);
     contentHashes.push(
@@ -159,7 +166,9 @@ export function repositoryState(repository) {
     }
   }
   const instructionHash = sha256([...new Set(instructions)].sort().map(
-    (path) => `${path}\0${sha256(readFileSync(resolve(repository, path)))}`
+    (path) => `${path}\0${deletedPaths.has(path)
+      ? "deleted"
+      : sha256(readFileSync(resolve(repository, path)))}`
   ).join("\0"));
   return {
     head: head.stdout.trim(),

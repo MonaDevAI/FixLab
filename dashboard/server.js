@@ -678,7 +678,7 @@ function getPullRequestReadiness(job) {
         : "Required executor-backed validation is pending, failed, or stale."
     };
   }
-  if (job.status === "running") {
+  if (["running", "holding", "held"].includes(job.status)) {
     return {
       status: "blocked",
       ready: false,
@@ -3143,6 +3143,9 @@ export function createDashboardServer({
     });
     const armIdleWatchdog = () => {
       clearTimeout(idleTimer);
+      if (!job.acceptsValidation || job.validationSession.active || job.status !== "running") {
+        return;
+      }
       idleTimer = setTimeout(() => {
         const error = new Error(
           `FixLab agent produced no output for ${Math.round(
@@ -3181,8 +3184,9 @@ export function createDashboardServer({
       }, idleTimeoutMs);
       idleTimer.unref?.();
     };
+    job.refreshIdleWatchdog = armIdleWatchdog;
     const emitHeartbeat = () => {
-      if (job.status !== "running" || !job.lastActivityAt) {
+      if (job.status !== "running" || job.validationSession.active || !job.lastActivityAt) {
         return;
       }
       const quietMs = Date.now() - Date.parse(job.lastActivityAt);
@@ -3685,8 +3689,14 @@ export function createDashboardServer({
           loadRepositoryProfile(resolvedRepository)
         );
         job.validationCompletion = completion.catch(() => {});
-        const result = await completion;
-        response.removeListener("close", cancel);
+        job.refreshIdleWatchdog();
+        let result;
+        try {
+          result = await completion;
+        } finally {
+          response.removeListener("close", cancel);
+          job.refreshIdleWatchdog();
+        }
         pushLog(job, {
           index: job.nextLogIndex,
           timestamp: new Date().toISOString(),

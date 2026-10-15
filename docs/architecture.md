@@ -479,6 +479,10 @@ must not opt in; unsupported command families never reuse. Failed results are
 not reused. Source changes during a check make its
 result stale. Final job completion fingerprints inputs again and blocks
 readiness for missing, failed, cancelled, timed-out, or stale evidence.
+Holding and held jobs remain blocked until resumed completion verifies inputs.
+Deleted and renamed tracked files are included in source fingerprints.
+While a dashboard-owned gate runs, its own timeout replaces agent-output idle
+detection; the agent idle watchdog is rearmed after gate success or failure.
 Profile changes require a new job. Cancellation and dashboard shutdown stop
 the owned validation command. Evidence from a previous dashboard process is
 not trusted as a fresh pass after restart.
