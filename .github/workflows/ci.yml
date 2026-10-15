@@ -19,7 +19,7 @@ jobs:
         with:
           node-version-file: .nvmrc
       - run: npm ci
-      - run: node --test test\windows-executor.test.js test\dashboard-executor-lease.test.js
+      - run: npm test -- test\windows-executor.test.js test\dashboard-executor-lease.test.js
 
   test:
     runs-on: ubuntu-latest

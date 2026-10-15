@@ -304,6 +304,13 @@ pwsh -File scripts/setup.ps1
 npm run validate
 ```
 
+Local and CI unit suites run at most two test files concurrently. This bounds
+overlapping process-tree, PowerShell compiler, and browser fixtures on shared
+machines without increasing their deadlines or weakening containment checks.
+Individual tests retain their concurrency behavior. CI still fails when an
+initial failure passes its one bounded confirmation; retries never turn flaky
+results into a successful validation gate.
+
 To run browser acceptance against an installed package rather than this checkout:
 
 ```powershell
