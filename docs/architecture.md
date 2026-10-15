@@ -370,12 +370,16 @@ creating a second job.
 
 Git repositories also receive a bounded durable metadata cache in
 `.git/fixlab/dashboard-cache.json`, using the shared Git directory for
-worktrees. Its key combines a hashed repository identity, current `HEAD`, and
-the repository-profile content hash. A matching job prompt may reuse the
-profile shape, prior result, and sanitized concise stage summaries. It never
+worktrees. Its key combines a hashed repository identity, current `HEAD`,
+source/worktree fingerprint, repository-profile hash, and instruction-content
+hash. A matching job prompt may reuse the profile shape, prior result, fixed
+stage/status summaries, and concise validation gate statuses. Agent-written
+messages are not copied into this memory. It never
 stores request text, raw logs, credentials, screenshots, screenshot paths,
 or source contents.
-The file is capped at 20 entries and 64 KiB.
+The file is capped at 20 entries, 64 KiB, and seven days. Memory is advisory;
+it cannot pass a validation gate. Recurring lessons still require review in
+the existing learned-rules workflow before becoming repository instructions.
 
 The shared Git directory also holds
 `.git/fixlab/dashboard-metrics.json`, bounded to 500 job records. Records
@@ -387,8 +391,8 @@ periods. Cache reuse is `cached input / total input`; without a defined
 comparable baseline it is not represented as exact token reduction or cost
 savings.
 
-Changing `HEAD` or profile content causes an automatic cache miss. Instruction
-changes remain an explicit prompt-level invalidation boundary and are reread.
+Changing `HEAD`, worktree inputs, profile content, or discovered repository
+instructions causes an automatic cache miss. Current instructions are reread.
 Non-Git repositories skip durable reuse. This cache is deliberately not a
 repository scan or source-index cache: current diffs and task-relevant files
 remain authoritative.
@@ -445,6 +449,59 @@ working directory, Git `HEAD`, content hashes for every tracked and untracked
 file, worktree status, and repository-profile content. A changed input causes execution;
 failed results are never cached. Evidence and cache records are capped at 100
 entries and seven days, and each output stream is capped at 50 MiB.
+Individual lines exceeding 64 Ki characters are omitted with an explicit
+capture notice so an unbroken output stream cannot grow collector memory
+without bound. Retained diagnostic and failure-tail lines are limited to
+2000 characters; the private evidence retains other lines up to capture limits.
+
+### Dashboard-owned validation gates
+
+Profiles may declare `validation.gates`: between one and 20 required entries
+with a unique lowercase `id`, executable `command`, string `args`,
+repository-relative `workingDirectory`, and `timeoutSeconds` (1-7200).
+Choose the smallest commands that cover the repository contract; gates are
+not inferred from restore, startup, authentication, or deployment commands.
+The template contains examples and must be adapted during onboarding.
+
+Dashboard jobs receive `fixlab gate --port <port> --job <id> --gate <id>
+--repository <worktree>` instructions. The loopback endpoint resolves the
+executable from the job's reviewed profile, not from request-supplied commands.
+It accepts only the current running job, rejects browser-origin requests,
+restricts the target to the assigned dashboard checkout, and runs one bounded
+gate at a time through the structured executor. This applies in shared and
+isolated modes; sharing a Git common directory does not establish assignment.
+For isolation, onboard the worktree and start its dashboard before creating a
+gated job. Gated jobs cannot switch checkouts through a validation request.
+Requests are rejected after owned executor stop or dashboard shutdown begins,
+including requests whose bodies were still arriving when shutdown began.
+Only executor results can pass these gates; agent stage markers cannot.
+
+Unchanged successful job-local evidence is reused when a gate is requested
+again only if the profile explicitly sets `reuse: true` and its command is
+eligible deterministic local validation. Reuse defaults to off. Playwright,
+live checks, startup, authentication, installation, deployments, and mutations
+must not opt in; unsupported command families never reuse. Failed results are
+not reused. Source changes during a check make its
+result stale. Final job completion fingerprints inputs again and blocks
+readiness for missing, failed, cancelled, timed-out, or stale evidence.
+Holding and held jobs remain blocked until resumed completion verifies inputs.
+Deleted and renamed tracked files are included in source fingerprints.
+While a dashboard-owned gate runs, its own timeout replaces agent-output idle
+detection; the agent idle watchdog is rearmed after gate success or failure.
+Profile changes require a new job. Cancellation and dashboard shutdown stop
+the owned validation command. Evidence from a previous dashboard process is
+not trusted as a fresh pass after restart.
+
+Legacy profiles without gates can still launch, but dashboard PR readiness
+is explicitly blocked as unconfigured. Playwright-only jobs retain their
+existing browser-evidence contract and do not acquire non-browser gates.
+Gate status is available in the job API; compact command evidence is shown in
+dashboard logs. Full evidence remains Git-private. This is validation
+enforcement inside FixLab, not interception of every agent shell command or
+an authorization boundary against a process running as the same local user.
+It does not independently prevent an agent from publishing a PR through an
+unmediated external tool. Freshness is verified at job completion; later
+external edits require a resumed job and revalidation.
 
 ## Workflow stages
 

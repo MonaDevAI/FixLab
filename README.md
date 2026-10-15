@@ -304,6 +304,14 @@ pwsh -File scripts/setup.ps1
 npm run validate
 ```
 
+To run browser acceptance against an installed package rather than this checkout:
+
+```powershell
+$env:FIXLAB_TEST_PACKAGE_ROOT = 'C:\path\to\node_modules\@fixlab\cli'
+npm run test:e2e
+Remove-Item Env:FIXLAB_TEST_PACKAGE_ROOT
+```
+
 Run the plugin from this checkout:
 
 ```shell

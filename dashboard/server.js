@@ -41,6 +41,8 @@ import { spawnWindowsExecutor } from "./windows-executor.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { prepareSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "./shared-worktree.js";
 const windowsOwnedTrees = new WeakMap();
+import { ValidationSession, validationGates } from "./validation-gates.js";
+import { repositoryState } from "../bin/structured-command.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -198,6 +200,11 @@ export function validateLiveTestProfile(profile, repository) {
   const missing = [];
   if (repository) {
     missing.push(...browserConfigurationErrors(profile, repository));
+  }
+  try {
+    validationGates(profile ?? {}, "validate-only");
+  } catch (error) {
+    missing.push(error.message);
   }
   const frontend = profile?.applications?.frontend;
   const browserAutomation = profile?.browserAutomation;
@@ -416,6 +423,7 @@ function publicQueue(jobs) {
     bugs: job.bugs,
     screenshotCount: job.screenshots.length,
     stages: job.stages,
+    validation: job.validationSession?.summary() ?? null,
     pullRequestReadiness: getPullRequestReadiness(job),
     createdAt: job.createdAt
   }));
@@ -657,6 +665,26 @@ export function recoverInterruptedDashboardJob(
 
 function getPullRequestReadiness(job) {
   const prStage = job.stages?.pr ?? { status: "pending", message: "" };
+  const validation = job.validationSession?.summary() ?? {
+    status: "unconfigured",
+    message: "Executor-backed validation is not available; resume with configured validation.gates."
+  };
+  if (validation && validation.status !== "passed") {
+    return {
+      status: "blocked",
+      ready: false,
+      message: validation.status === "unconfigured"
+        ? validation.message
+        : "Required executor-backed validation is pending, failed, or stale."
+    };
+  }
+  if (["running", "holding", "held"].includes(job.status)) {
+    return {
+      status: "blocked",
+      ready: false,
+      message: "Waiting for job completion and final source verification."
+    };
+  }
   if (prStage.status === "passed") {
     return {
       status: "created",
@@ -1324,11 +1352,17 @@ export function createCacheContext(repository) {
         .slice(0, 30)
     };
     const profileHash = hash(profileContent);
+    const state = repositoryState(repository);
+    const stateHash = hash(JSON.stringify(state));
+    const instructionHash = state.instructionHash;
     return {
-      key: hash(`${repositoryIdentity}\0${head}\0${profileHash}`),
+      key: hash(`${repositoryIdentity}\0${head}\0${profileHash}\0${stateHash}\0${instructionHash}`),
+      repository,
       repositoryIdentityHash: hash(repositoryIdentity),
       head,
       profileHash,
+      instructionHash,
+      stateHash,
       profileSummary,
       cachePath: join(gitDirectoryPath, "fixlab", "dashboard-cache.json")
     };
@@ -1362,7 +1396,8 @@ export function loadCacheSummary(context) {
   }
   const cache = readCache(context.cachePath);
   const entry = cache.entries.find((candidate) => candidate.key === context.key);
-  if (!entry) {
+  if (!entry || Date.now() - Date.parse(entry.updatedAt) > 7 * 24 * 60 * 60 * 1000 ||
+      !Number.isFinite(Date.parse(entry.updatedAt))) {
     return null;
   }
   return {
@@ -1376,12 +1411,18 @@ function writeCacheSummary(context, job) {
     return;
   }
   try {
+    context = createCacheContext(job.validationSession?.target ?? context.repository);
+    if (!context) {
+      throw new Error("Current repository inputs could not be fingerprinted.");
+    }
     const cache = readCache(context.cachePath);
     const entry = {
       key: context.key,
       repositoryIdentityHash: context.repositoryIdentityHash,
       head: context.head,
       profileHash: context.profileHash,
+      instructionHash: context.instructionHash,
+      stateHash: context.stateHash,
       updatedAt: new Date().toISOString(),
       profile: context.profileSummary,
       priorJob: {
@@ -1393,15 +1434,21 @@ function writeCacheSummary(context, job) {
             stage,
             {
               status: job.stages[stage].status,
-              summary: safeSummary(job.stages[stage].message)
+              summary: `${stage}: ${job.stages[stage].status}`
             }
           ])
-        )
+        ),
+        validation: job.validationSession?.summary().gates.map(
+          ({ id, status }) => ({ id, status })
+        ) ?? []
       }
     };
     cache.entries = [
       entry,
-      ...cache.entries.filter((candidate) => candidate.key !== context.key)
+      ...cache.entries.filter((candidate) =>
+        candidate.key !== context.key &&
+        Date.parse(candidate.updatedAt) >= Date.now() - 7 * 24 * 60 * 60 * 1000
+      )
     ].slice(0, MAX_CACHE_ENTRIES);
 
     mkdirSync(dirname(context.cachePath), { recursive: true });
@@ -1418,7 +1465,12 @@ function writeCacheSummary(context, job) {
     }
     writeFileSync(context.cachePath, content, { mode: 0o600 });
   } catch {
-    // Cache reuse is an optimization and must never change the job outcome.
+    job.memoryWarning = "Repository memory could not be updated; current execution evidence remains authoritative.";
+    pushActivity(job, {
+      timestamp: new Date().toISOString(),
+      stage: "review",
+      message: job.memoryWarning
+    });
   }
 }
 
@@ -1813,6 +1865,8 @@ function publicJob(job) {
     ),
     usage: job.usage,
     stages: job.stages,
+    validation: job.validationSession?.summary() ?? null,
+    memoryWarning: job.memoryWarning ?? null,
     pullRequestReadiness: getPullRequestReadiness(job),
     bugs: job.bugs,
     activity: job.activity,
@@ -2181,6 +2235,20 @@ function finishJob(job, result) {
     const message = "Manual React localhost validation failed.";
     job.stages["live-test"] = { status: "failed", message };
     job.error = job.error ? `${job.error}; ${message}` : message;
+  }
+  if (job.validationSession) {
+    try {
+      const validation = job.validationSession.verify();
+      if (validation.status !== "passed" && validation.status !== "unconfigured") {
+        job.stages.review = {
+          status: "blocked",
+          message: "Required executor-backed validation is missing, failed, or stale."
+        };
+      }
+    } catch (error) {
+      job.stages.review = { status: "blocked", message: error.message };
+      job.validationSession.error = "Could not verify current validation inputs.";
+    }
   }
 
   const missing = FIXLAB_STAGES.filter(
@@ -3007,6 +3075,26 @@ export function createDashboardServer({
     if (closing) {
       throw new Error("the dashboard is shutting down");
     }
+    job.validationSession ??= new ValidationSession(
+      resolvedRepository,
+      loadRepositoryProfile(resolvedRepository),
+      job.mode
+    );
+    const validation = job.validationSession.summary();
+    job.acceptsValidation = true;
+    const address = server.address();
+    if (validation.status !== "unconfigured" && validation.gates.length > 0) {
+      prompt += `\nDashboard-owned required validation:
+- Required gates and code changes must use this job's assigned dashboard checkout. Do not validate a sibling checkout or move gated changes elsewhere.
+- For separate isolation, onboard the worktree and start its dashboard before creating a gated job.
+- Run each gate using:
+  node "${join(packageRoot, "bin", "fixlab.js")}" gate --port ${address.port} --job ${job.id} --gate <id> --repository "${resolvedRepository}"
+- Required gate IDs: ${validation.gates.map((gate) => gate.id).join(", ")}.
+- These operations return compact structured evidence. Do not run the same required commands separately.
+- Run required gates before reporting readiness. Stage markers cannot pass these gates.
+- Rerun affected gates after source edits. Matching job-local evidence is reused only when the profile opts in for deterministic local validation and inputs are unchanged.
+- Unconfigured or stale validation cannot establish pull-request readiness. Never mark a pull request ready outside these checks.`;
+    }
     const profileIdleTimeoutMinutes = Number(
       loadRepositoryProfile(resolvedRepository).validation
         ?.agentIdleTimeoutMinutes
@@ -3057,6 +3145,9 @@ export function createDashboardServer({
     });
     const armIdleWatchdog = () => {
       clearTimeout(idleTimer);
+      if (!job.acceptsValidation || job.validationSession.active || job.status !== "running") {
+        return;
+      }
       idleTimer = setTimeout(() => {
         const error = new Error(
           `FixLab agent produced no output for ${Math.round(
@@ -3082,6 +3173,7 @@ export function createDashboardServer({
           });
         }
         try {
+          job.validationSession?.cancel();
           handle?.terminate?.();
         } catch (terminationError) {
           pushLog(job, {
@@ -3094,8 +3186,9 @@ export function createDashboardServer({
       }, idleTimeoutMs);
       idleTimer.unref?.();
     };
+    job.refreshIdleWatchdog = armIdleWatchdog;
     const emitHeartbeat = () => {
-      if (job.status !== "running" || !job.lastActivityAt) {
+      if (job.status !== "running" || job.validationSession.active || !job.lastActivityAt) {
         return;
       }
       const quietMs = Date.now() - Date.parse(job.lastActivityAt);
@@ -3181,7 +3274,9 @@ export function createDashboardServer({
     if (!handle?.completion || typeof handle.completion.then !== "function") {
       throw new Error("Executor did not provide a termination promise; the repository lease remains reserved.");
     }
-    const actualCompletion = Promise.resolve(handle.completion).then((result) => {
+    const actualCompletion = Promise.resolve(handle.completion).then(async (result) => {
+      job.acceptsValidation = false;
+      await job.validationCompletion;
       if (handle.hasStopped && !handle.hasStopped()) {
         throw new Error("Executor exit was observed but owned descendants may still be running; the repository lease remains reserved.");
       }
@@ -3227,7 +3322,8 @@ export function createDashboardServer({
     heartbeatTimer = setInterval(emitHeartbeat, executionHeartbeatMs);
     heartbeatTimer.unref?.();
     Promise.race([actualCompletion, idleCompletion])
-      .then((result) => {
+      .then(async (result) => {
+        await job.validationCompletion;
         if (job.holdRequested) {
           holdJob(job);
         } else if (closing && job.status === "running" && !job.stopRequested) {
@@ -3559,6 +3655,64 @@ export function createDashboardServer({
         history: dashboardHistory(),
         historyWarning: dashboardHistoryWarning
       });
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/validation/run") {
+      try {
+        const expectedHost = `${DASHBOARD_HOST}:${server.address().port}`;
+        if (
+          request.headers.host !== expectedHost ||
+          request.headers.origin ||
+          !request.headers["content-type"]?.startsWith("application/json")
+        ) {
+          throw new Error("Validation requires a local JSON client without a browser Origin.");
+        }
+        const body = await readJsonBody(request);
+        const job = currentJob;
+        if (closing || !job || job.executorStopping || job.status !== "running" || !job.acceptsValidation || body.jobId !== job.id) {
+          throw new Error("Validation requires the current running job ID.");
+        }
+        if (typeof body.gateId !== "string" || typeof body.repository !== "string") {
+          throw new Error("gateId and repository are required.");
+        }
+        if (realpathSync(body.repository) !== realpathSync(resolvedRepository)) {
+          throw new Error("Validation must target the job's assigned checkout.");
+        }
+        if (job.validationSession.active) {
+          throw new Error("A validation gate is already running.");
+        }
+        const cancel = () => {
+          if (!response.writableFinished) {
+            job.validationSession.cancel();
+          }
+        };
+        response.once("close", cancel);
+        const completion = job.validationSession.run(
+          body.gateId,
+          body.repository,
+          loadRepositoryProfile(resolvedRepository)
+        );
+        job.validationCompletion = completion.catch(() => {});
+        job.refreshIdleWatchdog();
+        let result;
+        try {
+          result = await completion;
+        } finally {
+          response.removeListener("close", cancel);
+          job.refreshIdleWatchdog();
+        }
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: result.summary
+        });
+        persistDashboardState();
+        sendJson(response, 200, result);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
       return;
     }
 
@@ -3971,6 +4125,7 @@ export function createDashboardServer({
       });
       try {
         currentJob.executorStopping = true;
+        currentJob.validationSession?.cancel();
         activeHandle.terminate();
         currentJob.pendingInputs = [];
         currentJob.stopRequested = true;
@@ -4094,6 +4249,7 @@ export function createDashboardServer({
               "Hold requested; stopping only this job's FixLab-owned executor."
           });
           try {
+            currentJob.validationSession?.cancel();
             activeHandle.terminate();
           } catch (error) {
             currentJob.holdRequested = false;
@@ -5028,6 +5184,7 @@ export function createDashboardServer({
     },
     async close() {
       closing = true;
+      currentJob?.validationSession?.cancel();
       frontendStartGeneration += 1;
       const failures = [];
       const attempt = async (action) => {

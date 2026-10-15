@@ -44,6 +44,7 @@ import {
   browserConfigurationErrors,
   planWorktreeSetup
 } from "../dashboard/repository-setup.js";
+import { runValidationGate } from "./validation-gate-client.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -94,6 +95,7 @@ Usage:
   fixlab setup-playwright [repository] [--yes]
   fixlab authenticate [repository] [--yes]
   fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]
+  fixlab gate --port <port> --job <id> --gate <id> --repository <worktree>
   fixlab run [repository] [--runtime <agency|copilot>] [--model <model>] [--environment <name>] [--] [request...]
   fixlab validate [repository] --pr <number> [--runtime <agency|copilot>] [--model <model>]
   fixlab dashboard [repository] [--port <number>] [--open|--no-open] [--keep-awake-minutes <minutes>] [--runtime <agency|copilot>] [--model <model>]
@@ -113,6 +115,7 @@ Commands:
   authenticate
             Plan or run the repository-owned browser authentication command.
   exec      Run a command with compact structured output and private evidence.
+  gate      Run a profile-defined validation gate owned by a dashboard job.
   run       Launch the FixLab agent for a request.
   validate  Launch validation-only mode for a pull request.
   dashboard Start the local FixLab dashboard (127.0.0.1:${DEFAULT_DASHBOARD_PORT}).
@@ -1697,6 +1700,9 @@ async function main(args) {
 
   if (command === "exec") {
     return runStructuredCommand(rest, process.cwd());
+  }
+  if (command === "gate") {
+    return runValidationGate(rest);
   }
 
   if (command === "run") {

@@ -45,6 +45,44 @@ The commands read `.github/fixlab/repository-profile.json` and repository
 instructions before acting. They never replace repository-owned commands,
 environment controls, or approval requirements.
 
+## Executor-backed dashboard checks
+
+`fixlab gate --port <port> --job <id> --gate <id> --repository <worktree>`
+runs a required `validation.gates` entry through the dashboard-owned compact
+executor. The dashboard supplies this command with the correct job and port.
+It returns a nonzero exit code for failed, cancelled, timed-out, or stale
+validation. It does not accept arbitrary commands or an arbitrary repository.
+The repository must be the checkout selected when starting that dashboard.
+For an isolated checkout, onboard it and start its dashboard before the job;
+an agent-created sibling cannot substitute evidence for the assigned source.
+
+Configure each gate in the repository profile:
+
+```json
+{
+  "validation": {
+    "gates": [
+      {
+        "id": "frontend-typecheck",
+        "command": "npm",
+        "args": ["run", "type-check"],
+        "workingDirectory": "frontend",
+        "timeoutSeconds": 300
+      }
+    ]
+  }
+}
+```
+
+Use focused, repository-owned commands and finite timeouts. Every configured
+gate is required; agent markers and ordinary `fixlab exec` runs cannot replace
+its evidence. A profile may explicitly set `reuse: true` on eligible
+deterministic local gates; reuse is off by default and must never be enabled
+for live/browser checks or mutations. Source edits require revalidation.
+Legacy profiles without gates
+remain runnable but cannot establish executor-backed PR readiness. These
+checks do not intercept all agent tools or enforce external PR permissions.
+
 ## Visual Studio Code bugfix agent
 
 `fixlab init` also installs `.github/agents/fixlab-autofix.agent.md`. Open the
@@ -194,7 +232,9 @@ focused risk-scaled validation. It avoids unchanged-file rereads, repeated
 diagnosis, dependency reinstalls, and unjustified broad checks. Stage summaries
 are concise and the dashboard raw-log view is bounded. Git repositories use a
 metadata-only cache under `.git/fixlab`, keyed by repository identity, `HEAD`,
-and profile hash. It reuses only sanitized profile shape, prior result, and
-stage summaries, with 20-entry and 64-KiB limits. It is not a repository scan
-or source cache. `HEAD` or profile changes miss automatically, instruction
-changes require rereading, and non-Git repositories skip durable reuse.
+worktree inputs, profile hash, and discovered instruction hashes. It reuses
+only profile shape, prior result, fixed stage/status summaries, and gate
+statuses, with 20-entry, 64-KiB, and seven-day limits. It retains no
+agent-authored messages or source contents and cannot pass a gate. Current
+instructions are reread; recurring lessons require review before promotion.
+Non-Git repositories skip durable reuse.

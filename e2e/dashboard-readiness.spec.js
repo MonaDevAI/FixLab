@@ -3,11 +3,14 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer as createPortProbe } from "node:net";
-import { createDashboardServer } from "../dashboard/server.js";
 
-const packageRoot = fileURLToPath(new URL("..", import.meta.url));
+const packageRoot = process.env.FIXLAB_TEST_PACKAGE_ROOT ??
+  fileURLToPath(new URL("..", import.meta.url));
+const { createDashboardServer } = await import(
+  pathToFileURL(join(packageRoot, "dashboard", "server.js")).href
+);
 let repository;
 let dashboard;
 let baseUrl;
@@ -435,8 +438,24 @@ test("dashboard lets users select active and queued job roadmaps", async ({
   page
 }) => {
   let cancelledBody;
+  let cancelledJob;
+  let cancellationObserved = false;
   await page.route("**/api/jobs/cancel", async (route) => {
     cancelledBody = route.request().postDataJSON();
+    cancelledJob = {
+      id: "queued-job",
+      request: "Queued bug",
+      requestType: "bug-fix",
+      status: "cancelled",
+      durationMs: 0,
+      stages: {},
+      bugs: [],
+      logs: [],
+      canComment: false,
+      canResume: false,
+      inputCount: 0,
+      pendingInputCount: 0
+    };
     await route.fulfill({
       status: 202,
       contentType: "application/json",
@@ -455,26 +474,14 @@ test("dashboard lets users select active and queued job roadmaps", async ({
           inputCount: 0,
           pendingInputCount: 0
         },
-        cancelledJob: {
-          id: "queued-job",
-          request: "Queued bug",
-          requestType: "bug-fix",
-          status: "cancelled",
-          durationMs: 0,
-          stages: {},
-          bugs: [],
-          logs: [],
-          canComment: false,
-          canResume: false,
-          inputCount: 0,
-          pendingInputCount: 0
-        },
+        cancelledJob,
         queue: [],
-        history: []
+        history: [cancelledJob]
       })
     });
   });
   await page.route("**/api/status", async (route) => {
+    cancellationObserved ||= Boolean(cancelledJob);
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
@@ -513,7 +520,7 @@ test("dashboard lets users select active and queued job roadmaps", async ({
           inputCount: 0,
           pendingInputCount: 0
         },
-        queue: [
+        queue: cancelledJob ? [] : [
           {
             id: "queued-job",
             position: 1,
@@ -543,6 +550,7 @@ test("dashboard lets users select active and queued job roadmaps", async ({
           }
         ],
         history: [
+          ...(cancelledJob ? [cancelledJob] : []),
           {
             id: "completed-job",
             request: "Completed bug",
@@ -600,6 +608,7 @@ test("dashboard lets users select active and queued job roadmaps", async ({
   ).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Remove from queue" }).click();
+  await expect.poll(() => cancellationObserved).toBe(true);
   await expect(page.locator("#job-status")).toContainText(
     "cancelled · bug-fix"
   );
