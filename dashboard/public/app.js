@@ -68,6 +68,97 @@ const jobInputActionLabel = document.querySelector(
 const jobInputDetailsLabel = document.querySelector(
   "label[for='job-input-details']"
 );
+const permissionPanel = document.querySelector("#permission-panel");
+const permissionDirectory = document.querySelector("#permission-directory");
+const permissionReview = document.querySelector("#permission-review");
+const permissionApprove = document.querySelector("#permission-approve");
+const permissionScope = document.querySelector("#permission-scope");
+const permissionMessage = document.querySelector("#permission-message");
+const permissionHelper = document.querySelector("#permission-helper");
+let permissionSelection = null;
+let runtimeHelperDirectory = "";
+let permissionBusy = false;
+let permissionEdited = false;
+
+function renderPermission(job, isActive) {
+  const pending = isActive ? job?.permissionRequest : null;
+  permissionPanel.hidden = !pending;
+  if (!pending) {
+    permissionSelection = null;
+    return;
+  }
+  const key = `${job.id}:${pending.id}`;
+  if (permissionSelection?.key !== key) {
+    permissionDirectory.value = pending.scope?.requested ?? "";
+    permissionMessage.textContent = "";
+    permissionEdited = false;
+  }
+  permissionSelection = { key, jobId: job.id, requestId: pending.id, scope: pending.scope };
+  permissionHelper.textContent = runtimeHelperDirectory
+    ? `If the denied command needs the installed FixLab helper, its folder is ${runtimeHelperDirectory}. This is a candidate, not a verified cause of the denial. Already granted for this job: ${(job.runtimeDirectoryGrants ?? []).join(", ") || "none"}.`
+    : "";
+  permissionScope.hidden = !pending.scope || permissionEdited;
+  permissionScope.textContent = pending.scope
+    ? `Review: read/write access to ${pending.scope.directory} and its descendants for this job only. This approval is not retained after a dashboard restart.`
+    : "";
+  permissionApprove.hidden = !pending.scope || permissionEdited;
+  const stopped = job.canReviewPermissions && job.status === "blocked";
+  permissionDirectory.disabled = permissionBusy || !stopped;
+  permissionReview.disabled = permissionBusy || !stopped;
+  permissionApprove.disabled = permissionBusy || !stopped;
+}
+
+permissionDirectory.addEventListener("input", () => {
+  permissionEdited = true;
+  permissionApprove.hidden = true;
+  permissionScope.hidden = true;
+});
+
+async function submitPermission(action) {
+  const selection = permissionSelection;
+  if (!selection || permissionBusy) {
+    return;
+  }
+  const directory = action === "review-directory"
+    ? permissionDirectory.value
+    : selection.scope?.directory;
+  if (action === "approve-directory" && !window.confirm(
+    `Grant this job read/write access to ${directory} and its descendants, and resume its background executor? This does not approve tools, URLs, or production changes.`
+  )) {
+    return;
+  }
+  permissionBusy = true;
+  permissionDirectory.disabled = true;
+  permissionReview.disabled = true;
+  permissionApprove.disabled = true;
+  try {
+    const body = await fetchJson("/api/job/permissions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action,
+        jobId: selection.jobId,
+        requestId: selection.requestId,
+        directory,
+        confirmed: action === "approve-directory"
+      })
+    });
+    activeJob = body.job;
+    observedJobs.set(body.job.id, body.job);
+    renderJob(body.job, activeJob);
+    permissionMessage.textContent = action === "review-directory"
+      ? "Review the resolved folder above. Nothing has been authorized yet."
+      : "The scoped executor restart was requested. A successful grant is not proof that the blocked command passed.";
+  } catch (error) {
+    permissionMessage.textContent = error.message;
+  } finally {
+    permissionBusy = false;
+    renderPermission(activeJob, true);
+  }
+}
+
+permissionReview.addEventListener("click", () => void submitPermission("review-directory"));
+permissionApprove.addEventListener("click", () => void submitPermission("approve-directory"));
 const retryLiveTestButton = document.createElement("button");
 retryLiveTestButton.id = "retry-live-test";
 retryLiveTestButton.type = "button";
@@ -244,6 +335,7 @@ function renderReadiness(readiness) {
 }
 
 function renderRuntime(runtime) {
+  runtimeHelperDirectory = runtime?.helperDirectory ?? "";
   const supported = runtime?.supportsModelSelection === true;
   modelControl.hidden = !supported;
   modelSelect.disabled = !supported;
@@ -473,8 +565,9 @@ function renderJob(job, currentActiveJob = job) {
   logsElement.scrollTop = logsElement.scrollHeight;
   formError.textContent = job?.error ?? "";
 
-  const canResume = isActive && Boolean(job?.canResume);
-  const canComment = isActive && Boolean(job?.canComment);
+  renderPermission(job, isActive);
+  const canResume = isActive && Boolean(job?.canResume) && !job?.permissionRequest;
+  const canComment = isActive && Boolean(job?.canComment) && !job?.permissionRequest;
   const canRetryLiveTest =
     canResume &&
     job?.status === "blocked" &&
@@ -497,7 +590,7 @@ function renderJob(job, currentActiveJob = job) {
   const canCancelQueuedJob =
     !isActive && job?.status === "queued";
   const canHoldJob =
-    Boolean(job?.id) &&
+    Boolean(job?.id) && !job?.permissionRequest &&
     ((isActive && ["running", "blocked", "failed"].includes(job.status)) ||
       (!isActive && job.status === "queued"));
   const canResumeHeldJob = !isActive && job?.status === "held";

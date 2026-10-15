@@ -111,6 +111,28 @@ without sharing shell state between jobs. Input, output and errors remain piped
 to the supervisor and dashboard logs. Noninteractive CLI probes and setup
 helpers also hide their Windows console windows; interactive agent sessions
 continue using the user's terminal.
+If the runtime reports that permission was denied because no interactive user
+was available, the dashboard stops its owned executor at the first denial and
+keeps the lease until termination is verified. It displays a separate permission
+panel rather than treating ordinary workflow input or PR approval as runtime
+authorization. Current CLI text output does not identify a structured permission
+scope; the panel says so and does not infer that a denied command is safe.
+
+For a confirmed external-folder restriction, the user can review an absolute
+folder and explicitly grant its resolved path before restarting the same job.
+The resumed executor receives only that additional `--add-dir` scope; the grant
+includes read/write access and trusted agent configuration beneath that folder.
+Roots, home and repository ancestors, broader installation parents, and known
+credential/browser-state/configuration folders are rejected. The target is
+revalidated at approval and each subsequent launch. Approval is bound to the
+current job and request nonce, requires the dashboard's exact loopback host and
+same origin, and never survives a restart or transfers to a new job. A late,
+stale, or unconfirmed approval cannot start an executor. Ordinary comments,
+retries and automatic continuation cannot bypass the pending permission review.
+Tool, URL, sandbox and organization-policy restrictions remain authoritative;
+a folder grant does not authorize them. Another denial pauses again instead of
+automatically retrying or granting blanket access. This is a folder-access
+handoff, not an interactive Copilot permission-prompt bridge.
 Managed long-running frontends keep their input pipe open until owned shutdown;
 React-style servers can interpret EOF as a request to exit. One-shot setup and
 authentication helpers still receive EOF, and process-tree containment and

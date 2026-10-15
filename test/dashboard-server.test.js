@@ -731,6 +731,209 @@ async function jsonRequest(url, path, options) {
   return { response, body: await response.json() };
 }
 
+test("permission denial stops the executor and requires a confirmed job-bound folder review before one scoped resume", async () => {
+  const repository = createRepository();
+  const external = mkdtempSync(join(tmpdir(), "fixlab-approved-scope-"));
+  const calls = [];
+  let stopped = 0;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    calls.push(input);
+    if (calls.length === 2) {
+      for (const stage of FIXLAB_STAGES) {
+        input.onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|Verified after scoped resume.\n`);
+      }
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }
+    input.onOutput("stdout", "FIXLAB_STAGE|intake|passed|Read the request.\nFIXLAB_STAGE|diagnosis|running|Inspecting the code.\n");
+    return { completion: new Promise(() => {}), terminate() { stopped += 1; } };
+  });
+  const post = (path, body, headers = {}) => jsonRequest(url, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...headers },
+    body: JSON.stringify(body)
+  });
+  const getJob = async () => (await jsonRequest(url, "/api/job")).body.job;
+  const waitFor = async (predicate) => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const job = await getJob();
+      if (predicate(job)) {
+        return job;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail("Permission job did not reach the expected state.");
+  };
+  try {
+    await post("/api/jobs", { request: "Verify scoped permissions.", mode: "validate-only" });
+    await post("/api/job/input", { action: "comment", details: "Preserve this queued guidance." });
+    calls[0].onOutput("stdout", "Permission denied because no interactive ");
+    calls[0].onOutput("stdout", "user response was available. Retry in an interactive session.\n");
+    calls[0].onOutput("stdout", "FIXLAB_STAGE|diagnosis|passed|This buffered claim must not pass.\n");
+    let job = await waitFor((candidate) => candidate.status === "blocked" && candidate.canReviewPermissions);
+    assert.equal(stopped, 1);
+    assert.equal(calls.length, 1, "queued comments must not trigger an automatic retry");
+    assert.equal(job.pendingInputCount, 1);
+    assert.equal(job.canResume, false);
+    assert.equal(job.stages.diagnosis.status, "blocked");
+    assert.equal(job.stages.fix.status, "skipped");
+    assert.equal(job.pullRequestReadiness.ready, false);
+    assert.equal(job.permissionRequest.kind, "unclassified");
+    assert.equal(job.permissionRequest.scope, null);
+    const originalRequest = job.permissionRequest.id;
+    const request = { jobId: job.id, requestId: originalRequest };
+    assert.equal((await post("/api/job/input", { action: "continue" })).response.status, 409);
+    assert.equal((await post("/api/job/permissions", null)).response.status, 400);
+    assert.equal((await post("/api/job/permissions", {
+      ...request, action: "approve-directory", confirmed: true, directory: external
+    })).response.status, 400);
+    assert.equal((await post("/api/job/permissions", {
+      ...request, action: "review-directory", directory: external
+    }, { Origin: "https://example.invalid" })).response.status, 403);
+    const wrongHost = await new Promise((resolveResponse, reject) => {
+      const responseRequest = createHttpRequest(`${url}/api/job/permissions`, {
+        method: "POST",
+        headers: { Host: "localhost:12345", "Content-Type": "application/json" }
+      }, (response) => {
+        response.resume();
+        response.on("end", () => resolveResponse(response.statusCode));
+      });
+      responseRequest.on("error", reject);
+      responseRequest.end(JSON.stringify({
+        ...request, action: "review-directory", directory: external
+      }));
+    });
+    assert.equal(wrongHost, 403);
+    const reviewed = await post("/api/job/permissions", {
+      ...request, action: "review-directory", directory: external
+    });
+    assert.equal(reviewed.response.status, 200, JSON.stringify(reviewed.body));
+    job = reviewed.body.job;
+    assert.equal(calls.length, 1, "review must not authorize or resume");
+    assert.notEqual(job.permissionRequest.id, originalRequest);
+    assert.equal(job.permissionRequest.scope.directory, realpathSync(external));
+    const approval = {
+      action: "approve-directory",
+      jobId: job.id,
+      requestId: job.permissionRequest.id,
+      directory: job.permissionRequest.scope.directory,
+      confirmed: true
+    };
+    assert.equal((await post("/api/job/permissions", { ...approval, requestId: originalRequest })).response.status, 409);
+    assert.equal((await post("/api/job/permissions", { ...approval, confirmed: false })).response.status, 400);
+    assert.equal((await post("/api/job/permissions", { ...approval, directory: repository })).response.status, 400);
+    assert.equal((await post("/api/job/permissions", approval)).response.status, 202);
+    assert.equal(calls[1].resume, true);
+    assert.equal(calls[1].sessionId, calls[0].sessionId);
+    assert.deepEqual(calls[0].runtimeDirectories, []);
+    assert.deepEqual(calls[1].runtimeDirectories, [realpathSync(external)]);
+    assert.match(calls[1].prompt, /does not authorize a denied tool/);
+    // The queued comment is intentionally delivered after the authorized turn.
+    job = await waitFor((candidate) => calls.length === 3 && candidate.status === "running");
+    calls[2].onOutput("stdout", "Denied, no one to approve\n");
+    job = await waitFor((candidate) => candidate.status === "blocked" && candidate.canReviewPermissions);
+    assert.equal(calls.length, 3);
+    assert.notEqual(job.permissionRequest.id, approval.requestId);
+    assert.equal(job.permissionRequest.scope, null);
+    assert.equal((await post("/api/job/permissions", approval)).response.status, 409);
+    const duplicate = await post("/api/job/permissions", {
+      action: "review-directory",
+      jobId: job.id,
+      requestId: job.permissionRequest.id,
+      directory: external
+    });
+    assert.equal(duplicate.response.status, 400);
+    assert.match(duplicate.body.error, /already granted/);
+    const restarted = await post("/api/jobs/restart", { jobId: job.id });
+    assert.equal(restarted.response.status, 202, JSON.stringify(restarted.body));
+    assert.equal(calls.length, 4);
+    assert.notEqual(calls[3].sessionId, calls[0].sessionId);
+    assert.deepEqual(calls[3].runtimeDirectories, []);
+    assert.equal((await post("/api/job/permissions", approval)).response.status, 409);
+    calls[3].onOutput("stdout", "Denied, no one to approve\n");
+    await waitFor((candidate) => candidate.status === "blocked" && candidate.canReviewPermissions);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("permission review waits for owned termination and grants do not survive dashboard recovery", async () => {
+  const repository = createGitRepository();
+  const external = mkdtempSync(join(tmpdir(), "fixlab-expiring-scope-"));
+  let emit;
+  let finish;
+  let first = await startDashboard(repository, ({ onOutput }) => {
+    emit = onOutput;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() {}
+    };
+  }, undefined, { deferTermination: true, runtime: "copilot" });
+  const post = (path, body) => jsonRequest(first.url, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  let reviewed;
+  try {
+    await post("/api/jobs", { request: "Retain an honest permission blocker.", mode: "validate-only" });
+    emit("stdout", "Permission denied because no interactive user response was available.\n");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    let job = (await jsonRequest(first.url, "/api/job")).body.job;
+    assert.equal(job.canReviewPermissions, false);
+    assert.equal((await post("/api/job/permissions", {
+      jobId: job.id, requestId: job.permissionRequest.id,
+      action: "review-directory", directory: external
+    })).response.status, 409);
+    finish({ code: null, signal: "SIGTERM" });
+    for (let attempt = 0; attempt < 100 && !job.canReviewPermissions; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      job = (await jsonRequest(first.url, "/api/job")).body.job;
+    }
+    assert.equal(job.canReviewPermissions, true);
+    reviewed = await post("/api/job/permissions", {
+      jobId: job.id, requestId: job.permissionRequest.id,
+      action: "review-directory", directory: external
+    });
+    assert.equal(reviewed.response.status, 200);
+    const scope = reviewed.body.job.permissionRequest.scope;
+    assert.equal((await post("/api/job/permissions", {
+      jobId: job.id, requestId: reviewed.body.job.permissionRequest.id,
+      action: "approve-directory", directory: scope.directory, confirmed: true
+    })).response.status, 202);
+    emit("stdout", "Denied, no one to approve\n");
+    finish({ code: null, signal: "SIGTERM" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    job = (await jsonRequest(first.url, "/api/job")).body.job;
+    assert.equal(job.status, "blocked");
+    assert.deepEqual(job.runtimeDirectoryGrants, [realpathSync(external)]);
+    await first.dashboard.close();
+    const historyPath = join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json");
+    const history = JSON.parse(readFileSync(historyPath, "utf8"));
+    const interrupted = history.jobs.find((saved) => saved.id === job.id);
+    interrupted.status = "running";
+    interrupted.stages.diagnosis = { status: "running", message: "Waiting for permission pause termination." };
+    interrupted.stages.fix = { status: "pending", message: "" };
+    writeFileSync(historyPath, JSON.stringify(history));
+    first = await startDashboard(repository, () => {
+      throw new Error("Recovered permission requests must not automatically execute.");
+    }, undefined, { runtime: "copilot" });
+    job = (await jsonRequest(first.url, "/api/job")).body.job;
+    assert.equal(job.status, "blocked");
+    assert.equal(job.canReviewPermissions, true);
+    assert.equal(job.canResume, false);
+    assert.equal(job.permissionRequest.scope, null);
+    assert.notEqual(job.permissionRequest.id, reviewed.body.job.permissionRequest.id);
+    assert.deepEqual(job.runtimeDirectoryGrants, []);
+  } finally {
+    finish?.({ code: null, signal: "SIGTERM" });
+    await first.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
 test("Copilot dashboard retains model defaults, overrides and queue state through recovery", async () => {
   const repository = createGitRepository();
   const calls = [];
@@ -749,7 +952,8 @@ test("Copilot dashboard retains model defaults, overrides and queue state throug
     assert.deepEqual(status.body.runtime, {
       name: "copilot",
       defaultModel: "hydrafusion",
-      supportsModelSelection: true
+      supportsModelSelection: true,
+      helperDirectory: realpathSync(packageRoot)
     });
     const started = await post("/api/jobs", {
       request: "Retain the configured model.",

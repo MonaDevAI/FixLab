@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
@@ -135,6 +135,72 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await dashboard.close();
   rmSync(repository, { recursive: true, force: true });
+});
+
+test("runtime folder approval is reviewed and confirmed in the browser without another terminal", async ({ page }) => {
+  const permissionRepository = mkdtempSync(join(tmpdir(), "fixlab-permission-e2e-"));
+  const external = mkdtempSync(join(tmpdir(), "fixlab-permission-scope-e2e-"));
+  const directory = join(permissionRepository, ".github", "fixlab");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
+  const calls = [];
+  const permissionDashboard = createDashboardServer({
+    repository: permissionRepository,
+    packageRoot,
+    runtime: "copilot",
+    executor(input) {
+      calls.push(input);
+      if (calls.length === 1) {
+        input.onOutput("stdout", "FIXLAB_STAGE|diagnosis|running|Inspecting startup.\n");
+        input.onOutput("stdout", "Permission denied because no interactive user response was available.\n");
+        let finish;
+        return {
+          completion: new Promise((resolve) => { finish = resolve; }),
+          terminate() { finish({ code: null, signal: "SIGTERM" }); }
+        };
+      }
+      input.onOutput("stdout", "FIXLAB_TEST|synthetic-intercepted|intercepted|Scoped runtime approval browser journey.\n");
+      for (const stage of ["intake", "diagnosis", "reproduce", "fix", "review", "local-stack", "live-test", "pr"]) {
+        input.onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|Verified after approved folder access.\n`);
+      }
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }
+  });
+  try {
+    const address = await permissionDashboard.listen({ port: await availablePort() });
+    await page.request.post(`${address.url}/api/jobs`, {
+      data: { request: "Verify browser-only scoped runtime approval.", mode: "validate-only" }
+    });
+    await page.goto(address.url);
+    await expect(page.getByRole("heading", { name: "Copilot permission required" })).toBeVisible();
+    await expect(page.locator("#job-input-submit")).toBeHidden();
+    await expect(page.locator("#permission-review")).toBeEnabled();
+    await expect(page.locator("#permission-approve")).toBeHidden();
+    await page.getByLabel("Exact folder to review").fill(external);
+    await page.getByRole("button", { name: "Review folder access" }).click();
+    await expect(page.locator("#permission-scope")).toContainText(realpathSync(external));
+    await expect(page.locator("#permission-approve")).toBeVisible();
+    expect(calls).toHaveLength(1);
+    await page.getByLabel("Exact folder to review").fill(`${external}-changed`);
+    await expect(page.locator("#permission-approve")).toBeHidden();
+    await page.waitForTimeout(1200);
+    await expect(page.locator("#permission-approve")).toBeHidden();
+    await page.getByLabel("Exact folder to review").fill(external);
+    await page.getByRole("button", { name: "Review folder access" }).click();
+    await expect(page.locator("#permission-approve")).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Grant this folder and resume" }).click();
+    await expect(page.locator("#permission-panel")).toBeHidden();
+    await expect.poll(() => calls.length).toBe(2);
+    expect(calls[1].runtimeDirectories).toEqual([realpathSync(external)]);
+    expect(calls[1].sessionId).toBe(calls[0].sessionId);
+    expect(calls[1].resume).toBe(true);
+  } finally {
+    await permissionDashboard.close();
+    rmSync(permissionRepository, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
 });
 
 test("Copilot model control honors configured defaults and explicit per-job selection", async ({ page }) => {

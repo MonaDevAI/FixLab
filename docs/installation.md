@@ -33,7 +33,7 @@ The machine running FixLab needs:
 
 - Agency with GitHub Copilot CLI support, or GitHub Copilot CLI directly
 - Git
-- Node.js 18 or later
+- Node.js 20 or later (the selected Copilot runtime may require a newer version)
 - PowerShell 7
 - The .NET SDK required by the target repository
 - A repository-local `@playwright/test` or `playwright` package
@@ -79,6 +79,35 @@ public GitHub repository with npm:
 npm install --global github:MonaDevAI/FixLab
 fixlab --help
 ```
+
+### Starting from an existing Copilot session
+
+The agent plugin and executable CLI are separate installations:
+
+```powershell
+copilot plugin install MonaDevAI/FixLab
+npm install --global github:MonaDevAI/FixLab
+```
+
+The plugin command installs the agent definition; it does not run npm, add
+`fixlab` to `PATH`, restore application dependencies, or authenticate the
+application. Installing the CLI does not start the dashboard.
+
+Open Copilot in the target repository and select `/agent fixlab:fixlab`.
+If working entirely through an existing Copilot session, ask it:
+
+```text
+Check whether the FixLab CLI is installed. Ask before installing it from
+github:MonaDevAI/FixLab. Inspect this repository and configure its FixLab
+profile, show the onboarding plan, and ask before dependency setup or browser
+authentication. Run Doctor and start the dashboard only after readiness passes.
+Preserve existing changes and do not grant blanket runtime permissions.
+```
+
+For a background permission blocker, use the dashboard's scoped folder review
+when a specific external folder is needed. A workflow approval is not runtime
+authorization. Unknown tool or organization-policy denials remain blocked;
+see [permission troubleshooting](troubleshooting.md#a-validation-command-is-denied-before-execution).
 
 ### Intelligent Windows bootstrap
 

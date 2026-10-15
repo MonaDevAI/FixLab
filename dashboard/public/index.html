@@ -233,6 +233,20 @@
         </div>
       </section>
 
+      <section id="permission-panel" class="panel intervention" aria-labelledby="permission-heading" hidden>
+        <h2 id="permission-heading">Copilot permission required</h2>
+        <p class="guidance">This background job cannot show an interactive permission prompt. No additional access has been granted for this request. The runtime did not identify a structured permission scope; inspect the raw logs before choosing a folder.</p>
+        <p class="guidance">For a path restriction, review one specific external folder below. Approval grants read/write access to that folder and its descendants, including trusted agent configuration, for this job only. Do not choose folders containing credentials or browser state. It does not approve tools, URLs, production changes, or other folders. The job pauses again if execution is still denied.</p>
+        <p id="permission-helper" class="guidance"></p>
+        <label for="permission-directory">Exact folder to review</label>
+        <input id="permission-directory" type="text" maxlength="2048" autocomplete="off" spellcheck="false">
+        <button id="permission-review" type="button">Review folder access</button>
+        <pre id="permission-scope" hidden></pre>
+        <button id="permission-approve" type="button" hidden>Grant this folder and resume</button>
+        <p class="guidance">Leave the job paused if the scope is unclear. A folder grant cannot resolve a tool-policy or organization-policy denial; FixLab will not bypass those policies.</p>
+        <p id="permission-message" class="guidance" role="status" aria-live="polite"></p>
+      </section>
+
       <section id="job-input-panel" class="panel intervention" hidden>
         <div class="section-heading">
           <h2 id="job-input-title">Continue this job</h2>

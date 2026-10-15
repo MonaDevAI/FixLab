@@ -94,3 +94,23 @@ operations. Treat every runner as privileged engineering infrastructure.
 - Allowlist tools, paths, domains, repositories, and commands.
 - Require confirmation for destructive or externally visible operations.
 - Preserve an audit trail of decisions and tool execution.
+
+## Background permission review
+
+The dashboard's workflow and PR approvals are not runtime permission grants.
+A reported non-interactive denial pauses the owned executor without automatic
+retries; approval remains unavailable until its termination is verified.
+
+Folder review requires the exact loopback Host, a matching browser Origin when
+present, JSON, the current job and request nonce, and a separate explicit
+confirmation of the resolved scope. A reviewed folder becomes a job-local
+`--add-dir` grant, including read/write access and trusted agent configuration.
+Network/device paths, broad roots and known credential/configuration folders
+are rejected, and substituted directory targets require another review.
+Users must not select folders containing secrets or browser state.
+
+Grants are not persisted or copied to restarted jobs. Tool, URL, sandbox and
+organization-policy restrictions are not overridden by folder approval. Text
+denials without a structured scope remain explicitly unclassified; this panel
+is not a general-purpose interactive runtime permission bridge or an
+authorization boundary against other processes running as the same user.
