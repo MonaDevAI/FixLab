@@ -112,6 +112,24 @@ test("failed, timed out, cancelled, and source-mutating checks cannot pass gates
   }
 });
 
+test("a nonzero gate exit with changed inputs is stale and preserves the original failure evidence", async () => {
+  const { repository, profile } = fixture();
+  try {
+    profile.validation.gates[0].args = [
+      "-e", "require('node:fs').writeFileSync('source.txt','changed');process.exitCode=2"
+    ];
+    const session = new ValidationSession(repository, profile, "validate-only");
+    const result = await session.run("tests", repository, profile);
+    assert.equal(result.status, 2);
+    assert.match(result.summary, /source inputs changed during validation/);
+    assert.equal(session.summary().gates[0].status, "stale");
+    assert.equal(session.summary().gates[0].exitCode, 2);
+    assert.equal(session.summary().status, "blocked");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("gates fingerprint unstaged deletions and renames including instructions", async () => {
   for (const operation of ["delete", "rename"]) {
     const { repository, profile } = fixture();

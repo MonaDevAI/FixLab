@@ -7,6 +7,8 @@ import {
 } from "node:fs";
 import { resolve, join } from "node:path";
 import { createInterface } from "node:readline";
+import { dashboardControl, dashboardConversation } from "./dashboard-client.js";
+import { conversationOperations } from "../dashboard/conversation-operations.js";
 
 const protocolVersion = "2024-11-05";
 const tools = [
@@ -37,6 +39,58 @@ const tools = [
           description: "Absolute or current-directory-relative repository path."
         }
       },
+      additionalProperties: false
+    }
+  },
+  {
+    name: "fixlab_dashboard_status",
+    description: "Read compact status and any pending recovery question from an existing loopback dashboard. Ask the user using the host's question UI; never assume approval. Does not start or modify jobs.",
+    inputSchema: {
+      type: "object",
+      properties: { repository: { type: "string" }, port: { type: "integer", minimum: 1, maximum: 65535 } },
+      required: ["repository", "port"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "fixlab_dashboard_reply",
+    description: "Submit the user's explicit answer to the exact dashboard instance and same job returned by status. Never infer confirmed=true. For workspace reuse, review the diff with the user and send the approved branch/fingerprint. Cannot grant runtime permissions or bypass authentication or required gates. Read status again after conflicts.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        repository: { type: "string" },
+        port: { type: "integer", minimum: 1, maximum: 65535 },
+        instanceId: { type: "string" }, jobId: { type: "string" },
+        confirmed: { type: "boolean", const: true },
+        action: { type: "string", enum: ["comment", "continue", "retry", "skip", "manual-pass", "manual-fail"] },
+        details: { type: "string", minLength: 1, maxLength: 10000 },
+        validationIntent: { type: "string", enum: ["scoped", "full"] },
+        reviewedWorkspace: {
+          type: "object",
+          properties: { branch: { type: "string" }, fingerprint: { type: "string" } },
+          required: ["branch", "fingerprint"],
+          additionalProperties: false
+        }
+      },
+      required: ["repository", "port", "instanceId", "jobId", "confirmed", "action", "details"],
+      additionalProperties: false
+    }
+  },
+  {
+    name: "fixlab_dashboard_control",
+    description: "Run an existing FixLab dashboard operation authorized by the user: jobs/queue, configured gates, frontend, human authentication, scoped permissions, sessions and intake. Read status first and bind to its instance/job IDs (jobId=null when none). parameters uses that dashboard operation's existing JSON payload. confirmed=true represents actual user authorization, not permission to bypass normal guards. Prefer the dedicated reply tool for blocker answers. No arbitrary shell commands, URLs or credential access. A successful start is not evidence that validation passed.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        repository: { type: "string" },
+        port: { type: "integer", minimum: 1, maximum: 65535 },
+        instanceId: { type: "string" },
+        jobId: { type: ["string", "null"] },
+        operation: { type: "string", enum: Object.keys(conversationOperations) },
+        parameters: { type: "object", additionalProperties: true },
+        confirmed: { type: "boolean" }
+      },
+      required: ["repository", "port", "instanceId", "jobId", "operation", "parameters"],
       additionalProperties: false
     }
   }
@@ -125,13 +179,20 @@ function validationCommands(repositoryValue) {
   };
 }
 
-function toolCall(params = {}) {
+async function toolCall(params = {}) {
   const repository = params.arguments?.repository;
   if (params.name === "fixlab_inspect_repository") {
     return textResult(inspectRepository(repository));
   }
   if (params.name === "fixlab_validation_commands") {
     return textResult(validationCommands(repository));
+  }
+  if (params.name === "fixlab_dashboard_status" || params.name === "fixlab_dashboard_reply") {
+    return textResult(await dashboardConversation(params.arguments ?? {}, params.name === "fixlab_dashboard_reply"));
+  }
+  if (params.name === "fixlab_dashboard_control") {
+    const result = await dashboardControl(params.arguments ?? {});
+    return textResult(result, params.arguments.operation === "validation-run" && result.result.status !== 0);
   }
   throw new Error(`unknown tool: ${params.name ?? ""}`);
 }
@@ -178,7 +239,7 @@ async function handleMessage(message) {
     return;
   }
   if (message.method === "tools/call") {
-    response(message.id, toolCall(message.params));
+    response(message.id, await toolCall(message.params));
     return;
   }
   if (message.id !== undefined) {

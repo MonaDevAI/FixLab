@@ -109,6 +109,60 @@ when a specific external folder is needed. A workflow approval is not runtime
 authorization. Unknown tool or organization-policy denials remain blocked;
 see [permission troubleshooting](troubleshooting.md#a-validation-command-is-denied-before-execution).
 
+### Chat with an existing dashboard from Copilot
+
+Keep the dashboard running. In Copilot CLI, open `/mcp` and add a local stdio
+server using `fixlab-mcp` from the same updated FixLab installation. If it is
+not on `PATH`, use command `node` with one argument: the absolute installed
+`mcp/server.js` path (on Windows, for example
+`C:\tools\fixlab\node_modules\@fixlab\cli\mcp\server.js`).
+Do not point it at a different preview version accidentally. This registers
+the bridge; it does not launch another dashboard or agent job.
+
+Ask Copilot to call `fixlab_dashboard_status` with your explicit repository
+path and dashboard port, then show any pending question using its question
+UI. After your answer, it calls `fixlab_dashboard_reply` with `confirmed:
+true`, the returned `instanceId` and `jobId`, your selected action and details.
+Conflicts require reading status again rather than retrying an old answer.
+Replies continue the same dashboard-owned job, not a replacement job.
+
+`fixlab_dashboard_control` exposes the existing dashboard operations through
+that same identity-bound connection. Your explicit request authorizes routine
+steps; Copilot should not ask again for every command. Missing decisions,
+folder grants, sign-in/MFA, unsafe-data approvals and deployment approvals
+still require their normal review. See the
+[operation reference](commands.md#copilot-dashboard-control).
+
+You can ask: "FixLab, test this PR using the configured Playwright settings;
+do not change code." Copilot must first verify the assigned checkout matches
+the PR source commit, then use `job-start` with `mode: "playwright-only"`,
+the request and selected environment. This uses the repository's configured
+browser journey and authentication instead of guessing an E2E command or
+running full regression. It must not label mock results as live backend
+validation. If the checkout or required authenticated session is missing, it
+reports that exact prerequisite rather than testing an unrelated branch.
+
+For a workspace blocker, review `git status` and the effective diff first.
+Explicitly approving reuse sends the reviewed branch and fingerprint; FixLab
+rechecks them under its executor lease and keeps the current branch, existing
+PR and uncommitted work. Only the configured user's FixLab job branches are
+eligible. No reset, stash, base refresh or branch switch is performed.
+
+Choose `validationIntent: "scoped"` to run only affected tests during
+iteration. Full regression stays explicitly deferred and PR readiness blocked.
+Choose `"full"` later to run the required gates; this does not mark any gate
+passed by itself. Independent safe checks can proceed after unrelated
+failures, without bypassing their own prerequisites.
+
+The bridge uses loopback HTTP only, bounded responses and a ten-second
+deadline. It does not expose raw logs or browser state, grant folder/tool
+permissions, complete sign-in, or approve unsafe data access. Permission
+questions link back to the dashboard's scoped review.
+It is request/response, not background injection into an idle Copilot chat:
+ask for status when you want progress or have Copilot check at workflow
+boundaries. A separate background dashboard cannot create native prompts in
+an unconnected conversation.
+
 ### Intelligent Windows bootstrap
 
 An npm-based installer cannot recover when the shell resolves a damaged or

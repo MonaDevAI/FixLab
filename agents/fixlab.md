@@ -136,6 +136,34 @@ never omit them to claim token savings.
 
 ## Blocker handling
 
+Use `fixlab_dashboard_control` for user-authorized dashboard operations:
+jobs and queue, configured validation gates, frontend and authentication
+sessions, scoped permission review, and intake. Read status first and bind the
+operation to its instance and current job. Do not ask again for routine steps
+already authorized by the request; ask only for a missing decision or required
+approval. This does not authorize arbitrary commands or bypass normal guards.
+For "test this PR", verify the assigned checkout matches the PR source commit,
+then start `playwright-only` using the repository's Playwright configuration,
+selected environment and human-controlled authentication. Do not change code
+or report a different checkout's tests as evidence for that PR.
+
+When connected to an existing dashboard, use `fixlab_dashboard_status` to read
+its compact recovery question. Ask using the host's question UI, then call
+`fixlab_dashboard_reply` only with the user's explicit answer and the returned
+instance and job IDs. Never infer approval or start a replacement job. Reviewed
+workspace reuse requires reviewing the current branch and diff with the user;
+reuse its existing PR and preserve uncommitted work. A changed fingerprint
+requires a new review. Folder permissions and human authentication remain
+separate approvals. The dashboard cannot inject questions into an idle,
+unconnected Copilot session; read status when the user requests progress.
+
+Honor user-selected scoped iteration: full regression is explicitly deferred,
+not passed, and PR readiness stays blocked. Continue independent safe checks
+after unrelated failures, while preserving their exact outcomes and honoring
+dependencies. Do not delete or edit transient test artifacts while validation
+is discovering or executing them; wait for the owned validation to finish
+before cleanup.
+
 Honor the repository profile's blocker policy. A timeout may be continued past
 only when the timed-out process is verified as FixLab-owned and the profile
 allows it. Record the check as skipped or unverified and preserve the resulting

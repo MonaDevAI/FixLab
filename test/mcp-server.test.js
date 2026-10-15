@@ -5,6 +5,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
+import { createServer } from "node:http";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -61,7 +62,7 @@ test("MCP server initializes and lists FixLab tools", async () => {
     });
     assert.deepEqual(
       listed.result.tools.map((tool) => tool.name),
-      ["fixlab_inspect_repository", "fixlab_validation_commands"]
+      ["fixlab_inspect_repository", "fixlab_validation_commands", "fixlab_dashboard_status", "fixlab_dashboard_reply", "fixlab_dashboard_control"]
     );
   } finally {
     await client.stop();
@@ -93,12 +94,119 @@ test("MCP server reports repository profile readiness", async () => {
         arguments: { repository }
       }
     });
+
     const result = JSON.parse(response.result.content[0].text);
     assert.equal(result.profileReady, true);
     assert.equal(result.name, "Example");
     assert.deepEqual(result.applicationNames, ["frontend"]);
   } finally {
     await client.stop();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("MCP dashboard bridge is asynchronous, explicit and bound to repository, instance and job", async () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-mcp-dashboard-"));
+  const state = { repository, controlProtocol: 1, instanceId: "instance-a", job: { id: "job-a", status: "blocked" }, question: null, workspaceReview: null };
+  let replyCount = 0;
+  let received;
+  const dashboard = createServer(async (request, response) => {
+    response.setHeader("Content-Type", "application/json");
+    if (request.method === "POST") {
+      let body = "";
+      for await (const chunk of request) {
+        body += chunk;
+      }
+      received = JSON.parse(body);
+      replyCount += 1;
+    }
+    response.end(JSON.stringify(state));
+  });
+  dashboard.listen(0, "127.0.0.1");
+  await once(dashboard, "listening");
+  const client = await startServer();
+  let id = 10;
+  const call = (name, args) => client.request({
+    jsonrpc: "2.0", id: id++, method: "tools/call", params: { name, arguments: args }
+  });
+  const args = { repository, port: dashboard.address().port };
+  try {
+    const status = await call("fixlab_dashboard_status", args);
+    assert.equal(JSON.parse(status.result.content[0].text).instanceId, state.instanceId);
+    for (const bad of [
+      { confirmed: false, instanceId: state.instanceId, jobId: state.job.id },
+      { confirmed: true, instanceId: "old-instance", jobId: state.job.id },
+      { confirmed: true, instanceId: state.instanceId, jobId: "old-job" }
+    ]) {
+      const rejected = await call("fixlab_dashboard_reply", {
+        ...args, action: "continue", details: "Continue scoped checks.", ...bad
+      });
+      assert.match(rejected.error.message, /explicit answer|current dashboard/);
+    }
+    assert.equal(replyCount, 0);
+    const answer = await call("fixlab_dashboard_reply", {
+      ...args, ...state, jobId: state.job.id, confirmed: true,
+      action: "continue", details: "Run scoped tests; defer full regression.", validationIntent: "scoped"
+    });
+    assert.equal(answer.result.isError, false);
+    assert.equal(replyCount, 1);
+    assert.equal(received.validationIntent, "scoped");
+    assert.equal(received.jobId, state.job.id);
+    const controlled = await call("fixlab_dashboard_control", {
+      ...args, instanceId: state.instanceId, jobId: state.job.id, confirmed: true,
+      operation: "permission-review",
+      parameters: { jobId: state.job.id, requestId: "request-a", directory: repository, action: "approve-directory" }
+    });
+    assert.equal(controlled.result.isError, false);
+    assert.equal(JSON.parse(controlled.result.content[0].text).operation, "permission-review");
+    assert.equal(received.action, "review-directory", "a review cannot be changed into an approval");
+    state.controlProtocol = 0;
+    const incompatible = await call("fixlab_dashboard_control", {
+      ...args, instanceId: state.instanceId, jobId: state.job.id, confirmed: true,
+      operation: "frontend-stop", parameters: {}
+    });
+    assert.match(incompatible.error.message, /Update the FixLab dashboard/);
+    state.controlProtocol = 1;
+    const wrong = await call("fixlab_dashboard_status", { ...args, port: 0 });
+    assert.match(wrong.error.message, /loopback dashboard port/);
+    const invalid = await call("fixlab_dashboard_status", { ...args, port: "http://example.test" });
+    assert.match(invalid.error.message, /loopback dashboard port/);
+    state.repository = tmpdir();
+    const mismatch = await call("fixlab_dashboard_status", args);
+    assert.match(mismatch.error.message, /repository mismatch/);
+  } finally {
+    await client.stop();
+    await new Promise((resolve) => dashboard.close(resolve));
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("MCP dashboard bridge rejects oversized, malformed and redirect responses without following them", async () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-mcp-response-"));
+  let mode = "large";
+  const dashboard = createServer((_request, response) => {
+    if (mode === "redirect") {
+      response.writeHead(302, { Location: "http://example.test" });
+      response.end(JSON.stringify({ error: "redirect refused" }));
+    } else {
+      response.end(mode === "large" ? "x".repeat(129 * 1024) : "{invalid");
+    }
+  });
+  dashboard.listen(0, "127.0.0.1");
+  await once(dashboard, "listening");
+  const client = await startServer();
+  try {
+    for (const [index, value] of ["large", "malformed", "redirect"].entries()) {
+      mode = value;
+      const result = await client.request({
+        jsonrpc: "2.0", id: index + 30, method: "tools/call",
+        params: { name: "fixlab_dashboard_status", arguments: { repository, port: dashboard.address().port } }
+      });
+      assert.ok(result.error, `${value} must not produce success-shaped status`);
+    }
+  } finally {
+    await client.stop();
+    await new Promise((resolve) => dashboard.close(resolve));
     rmSync(repository, { recursive: true, force: true });
   }
 });
