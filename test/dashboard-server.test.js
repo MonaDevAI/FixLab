@@ -4695,7 +4695,7 @@ test("dashboard gate execution rejects forged readiness and stale final-source e
       "--port", new URL(url).port, "--job", jobId,
       "--gate", "focused-tests", "--repository", repository
     ], { stdout: { write(text) { output += text; } }, stderr: { write(text) { output += text; } } });
-    assert.equal(exitCode, 0);
+    assert.equal(exitCode, 0, output);
     assert.match(output, /unchanged job-local evidence reused/);
     writeFileSync(join(repository, "tracked.txt"), "edited after validation\n");
     finish({ code: 0 });

@@ -25,7 +25,7 @@ function fixture() {
         command: process.execPath,
         args: ["-e", "console.log('# tests 1');console.log('# pass 1')"],
         workingDirectory: ".",
-        timeoutSeconds: 1
+        timeoutSeconds: 30
       }]
     }
   };
@@ -85,6 +85,7 @@ test("failed, timed out, cancelled, and source-mutating checks cannot pass gates
       "require('node:fs').writeFileSync('source.txt','changed')"
     ]) {
       profile.validation.gates[0].args = ["-e", script];
+      profile.validation.gates[0].timeoutSeconds = script.includes("setTimeout") ? 1 : 30;
       const session = new ValidationSession(repository, profile, "validate-only");
       const result = await session.run("tests", repository, profile, { terminationGraceMs: 10 });
       assert.notEqual(result.status, 0);
