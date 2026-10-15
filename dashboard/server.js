@@ -3674,6 +3674,9 @@ export function createDashboardServer({
         if (typeof body.gateId !== "string" || typeof body.repository !== "string") {
           throw new Error("gateId and repository are required.");
         }
+        if (job.sharedWorkspace && realpathSync(body.repository) !== realpathSync(resolvedRepository)) {
+          throw new Error("Shared-worktree validation must target the job's assigned checkout.");
+        }
         if (job.validationSession.active) {
           throw new Error("A validation gate is already running.");
         }

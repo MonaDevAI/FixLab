@@ -578,6 +578,54 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
   }
 });
 
+test("shared dashboard validation rejects sibling worktrees and checks the assigned source", async () => {
+  const source = createGitRepository();
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-shared-validation-"));
+  const sibling = mkdtempSync(join(tmpdir(), "fixlab-shared-sibling-"));
+  writeFileSync(join(source, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({
+    worktreeSetup: { mode: "shared", baseBranch: "develop" },
+    validation: { gates: [{
+      id: "tests", command: process.execPath,
+      args: ["-e", "require('node:assert/strict').equal(require('node:fs').readFileSync('tracked.txt','utf8'),'assigned fix')"],
+      workingDirectory: ".", timeoutSeconds: 30
+    }] }
+  })));
+  git(source, ["branch", "-m", "develop"]);
+  git(source, ["add", "."]);
+  git(source, ["commit", "--quiet", "-m", "shared validation"]);
+  git(source, ["clone", "--quiet", source, repository]);
+  git(repository, ["worktree", "add", "--quiet", "--detach", sibling]);
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}), terminate() {}
+  }));
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", { request: "Validate the assigned checkout.", mode: "fix-and-validate" });
+    assert.equal(started.body.job.status, "running");
+    assert.ok(started.body.job.sharedWorkspace);
+    writeFileSync(join(repository, "tracked.txt"), "assigned fix");
+    const rejected = await post("/api/validation/run", {
+      jobId: started.body.job.id, gateId: "tests", repository: sibling
+    });
+    assert.equal(rejected.response.status, 400);
+    assert.match(rejected.body.error, /assigned checkout/);
+    const pending = await jsonRequest(url, "/api/status");
+    assert.equal(pending.body.job.validation.gates[0].status, "pending");
+    const accepted = await post("/api/validation/run", {
+      jobId: started.body.job.id, gateId: "tests", repository
+    });
+    assert.equal(accepted.response.status, 200);
+    assert.equal(accepted.body.status, 0);
+  } finally {
+    await dashboard.close();
+    git(repository, ["worktree", "remove", "--force", sibling]);
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(source, { recursive: true, force: true });
+  }
+});
+
 test("shared dashboard rejects dirty checkout acquisition without launching or retaining an executor lease", async () => {
   const repository = createGitRepository();
   writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({

@@ -469,6 +469,7 @@ executable from the job's reviewed profile, not from request-supplied commands.
 It accepts only the current running job, rejects browser-origin requests,
 restricts the target to the same Git repository and one selected worktree,
 and runs one bounded gate at a time through the structured executor.
+Shared-worktree jobs must validate their assigned checkout, not a sibling.
 Only executor results can pass these gates; agent stage markers cannot.
 
 Unchanged successful job-local evidence is reused when a gate is requested
