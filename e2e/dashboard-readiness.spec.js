@@ -151,7 +151,7 @@ test("runtime folder approval is reviewed and confirmed in the browser without a
     runtime: "copilot",
     executor(input) {
       calls.push(input);
-      if (calls.length === 1) {
+      if (calls.length % 2 === 1) {
         input.onOutput("stdout", "FIXLAB_STAGE|diagnosis|running|Inspecting startup.\n");
         input.onOutput("stdout", "Permission denied because no interactive user response was available.\n");
         let finish;
@@ -196,6 +196,26 @@ test("runtime folder approval is reviewed and confirmed in the browser without a
     expect(calls[1].runtimeDirectories).toEqual([realpathSync(external)]);
     expect(calls[1].sessionId).toBe(calls[0].sessionId);
     expect(calls[1].resume).toBe(true);
+    await expect.poll(async () =>
+      (await (await page.request.get(`${address.url}/api/job`)).json()).job.status
+    ).toBe("passed");
+    await page.request.post(`${address.url}/api/jobs`, {
+      data: { request: "Dismiss an unresolved tool-policy blocker.", mode: "validate-only" }
+    });
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Copilot permission required" })).toBeVisible();
+    await expect(page.locator("#job-input-submit")).toBeHidden();
+    await expect(page.locator("#job-input-details")).toBeHidden();
+    await page.request.post(`${address.url}/api/jobs`, {
+      data: { request: "Continue the queue after safe dismissal.", mode: "validate-only" }
+    });
+    const dismiss = page.getByRole("button", { name: "Dismiss blocked job and continue queue" });
+    await expect(dismiss).toBeVisible();
+    await expect(dismiss).toBeEnabled();
+    page.once("dialog", (dialog) => dialog.accept());
+    await dismiss.click();
+    await expect.poll(() => calls.length).toBe(4);
+    expect(calls[3].runtimeDirectories).toEqual([]);
   } finally {
     await permissionDashboard.close();
     rmSync(permissionRepository, { recursive: true, force: true });

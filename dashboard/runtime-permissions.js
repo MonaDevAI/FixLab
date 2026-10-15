@@ -13,7 +13,7 @@ export function runtimePermissionDenied(text) {
 export function runtimePermissionDenialLine(line) {
   const text = line.replace(/\u001b\[[0-9;]*m/gu, "").trim();
   return /^(?:[\u2514\u2570\u2502]\s*)?(?:Permission denied because no interactive user response was available|(?:[X\u2717]\s*)?Denied, no one to approve)/iu.test(text) ||
-    (/^FIXLAB_STAGE\|[^|]+\|blocked\|/u.test(text) && runtimePermissionDenied(text));
+    (/^FIXLAB_STAGE(?:\|[^|]+\|blocked\||\s+\S+\s+blocked\s+-\s+)/u.test(text) && runtimePermissionDenied(text));
 }
 
 export function permissionRequest(stages) {
@@ -39,16 +39,21 @@ function contains(parent, child) {
   return path === "" || (!path.startsWith(`..${sep}`) && path !== ".." && !isAbsolute(path));
 }
 
+function requireLocalDirectory(value) {
+  if (/^(?:\\\\|\/\/)/u.test(value)) {
+    throw new Error("Permission review supports local folders only, not network shares or device paths.");
+  }
+}
+
 export function reviewPermissionDirectory(value, { repository, packageRoot }) {
   if (typeof value !== "string" || value.length > 2048 ||
       /[\u0000-\u001f]/u.test(value) || !isAbsolute(value)) {
     throw new Error("Enter an absolute folder path of at most 2048 characters.");
   }
-  if (/^(?:\\\\|\/\/)/u.test(value)) {
-    throw new Error("Permission review supports local folders only, not network shares or device paths.");
-  }
+  requireLocalDirectory(value);
   const requested = resolve(value);
   const directory = realpathSync(requested);
+  requireLocalDirectory(directory);
   if (!statSync(directory).isDirectory()) {
     throw new Error("The permission scope must be an existing folder.");
   }

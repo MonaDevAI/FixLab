@@ -882,6 +882,7 @@ test("permission review waits for owned termination and grants do not survive da
     await new Promise((resolve) => setTimeout(resolve, 0));
     let job = (await jsonRequest(first.url, "/api/job")).body.job;
     assert.equal(job.canReviewPermissions, false);
+    assert.equal(job.canDismiss, false);
     assert.equal((await post("/api/job/permissions", {
       jobId: job.id, requestId: job.permissionRequest.id,
       action: "review-directory", directory: external
@@ -892,6 +893,7 @@ test("permission review waits for owned termination and grants do not survive da
       job = (await jsonRequest(first.url, "/api/job")).body.job;
     }
     assert.equal(job.canReviewPermissions, true);
+    assert.equal(job.canDismiss, true);
     reviewed = await post("/api/job/permissions", {
       jobId: job.id, requestId: job.permissionRequest.id,
       action: "review-directory", directory: external
@@ -931,6 +933,119 @@ test("permission review waits for owned termination and grants do not survive da
     await first.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
     rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("whitespace permission stage markers pause execution and disable ordinary continuation", async () => {
+  const repository = createRepository();
+  const { dashboard, url } = await startDashboard(repository, ({ onOutput }) => {
+    onOutput("stdout", "FIXLAB_STAGE diagnosis blocked - Execution remains denied\n");
+    for (const stage of FIXLAB_STAGES) {
+      onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|Buffered output must not bypass permission review.\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  });
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Respect both stage marker formats.", mode: "validate-only" })
+    });
+    let job;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      job = (await jsonRequest(url, "/api/job")).body.job;
+      if (job.status !== "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(job.status, "blocked");
+    assert.equal(job.canReviewPermissions, true);
+    assert.equal(job.canDismiss, true);
+    assert.equal(job.canResume, false);
+    assert.equal(job.stages.diagnosis.status, "blocked");
+    const resumed = await jsonRequest(url, "/api/job/input", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "continue" })
+    });
+    assert.equal(resumed.response.status, 409);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("a stale existing grant cannot overwrite its replacement permission request or poison later approvals", async () => {
+  const repository = createRepository();
+  const base = mkdtempSync(join(tmpdir(), "fixlab-stale-grants-"));
+  const first = join(base, "first");
+  const replacement = join(base, "replacement");
+  const later = join(base, "later");
+  const link = join(base, "link");
+  for (const directory of [first, replacement, later]) {
+    mkdirSync(directory);
+  }
+  symlinkSync(first, link, "junction");
+  const calls = [];
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    calls.push(input);
+    input.onOutput("stdout", "Denied, no one to approve\n");
+    return { completion: new Promise(() => {}), terminate() {} };
+  });
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const paused = async () => {
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const job = (await jsonRequest(url, "/api/job")).body.job;
+      if (job.canReviewPermissions) {
+        return job;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.fail("Permission job did not pause after verified termination.");
+  };
+  const review = async (job, directory) => {
+    const result = await post("/api/job/permissions", {
+      action: "review-directory", jobId: job.id,
+      requestId: job.permissionRequest.id, directory
+    });
+    assert.equal(result.response.status, 200, JSON.stringify(result.body));
+    return result.body.job;
+  };
+  const approve = (job) => post("/api/job/permissions", {
+    action: "approve-directory", jobId: job.id,
+    requestId: job.permissionRequest.id,
+    directory: job.permissionRequest.scope.directory, confirmed: true
+  });
+  try {
+    await post("/api/jobs", { request: "Recover from substituted prior grants.", mode: "validate-only" });
+    let job = await review(await paused(), link);
+    assert.equal((await approve(job)).response.status, 202);
+    job = await review(await paused(), later);
+    const staleRequestId = job.permissionRequest.id;
+    rmSync(link);
+    symlinkSync(replacement, link, "junction");
+    const failed = await approve(job);
+    assert.equal(failed.response.status, 409);
+    assert.match(failed.body.error, /previously approved folder changed/);
+    job = failed.body.job;
+    assert.equal(calls.length, 2, "no executor may start with a substituted prior grant");
+    assert.notEqual(job.permissionRequest.id, staleRequestId);
+    assert.equal(job.permissionRequest.scope, null);
+    assert.deepEqual(job.runtimeDirectoryGrants, []);
+    job = await review(job, later);
+    assert.equal((await approve(job)).response.status, 202);
+    await paused();
+    assert.equal(calls.length, 3);
+    assert.deepEqual(calls[2].runtimeDirectories, [realpathSync(later)]);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(base, { recursive: true, force: true });
   }
 });
 

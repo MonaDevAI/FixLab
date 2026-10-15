@@ -582,7 +582,9 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
   const canDismissFailedJob =
-    canResume && ["failed", "blocked"].includes(job?.status);
+    isActive && Boolean(job?.canDismiss ?? canResume) &&
+    ["failed", "blocked"].includes(job?.status);
+  const dismissOnly = canDismissFailedJob && !canResume && !canComment;
   dismissFailedJobButton.textContent =
     job?.status === "blocked"
       ? "Dismiss blocked job and continue queue"
@@ -604,15 +606,15 @@ function renderJob(job, currentActiveJob = job) {
   resumeHeldJobButton.disabled = !canResumeHeldJob;
   restartJobButton.hidden = !canRestartJob;
   restartJobButton.disabled = !canRestartJob;
-  jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob);
+  jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob || canDismissFailedJob);
   jobInputSubmit.disabled = !(canResume || canComment);
-  jobInputSubmit.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
-  jobInputAction.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
+  jobInputSubmit.hidden = canCancelQueuedJob || canConfirmManualLocalhost || dismissOnly;
+  jobInputAction.hidden = canCancelQueuedJob || canConfirmManualLocalhost || dismissOnly;
   jobInputActionLabel.hidden =
-    canCancelQueuedJob || canConfirmManualLocalhost;
-  jobInputDetails.hidden = canCancelQueuedJob || canConfirmManualLocalhost;
+    canCancelQueuedJob || canConfirmManualLocalhost || dismissOnly;
+  jobInputDetails.hidden = canCancelQueuedJob || canConfirmManualLocalhost || dismissOnly;
   jobInputDetailsLabel.hidden =
-    canCancelQueuedJob || canConfirmManualLocalhost;
+    canCancelQueuedJob || canConfirmManualLocalhost || dismissOnly;
   openManualLocalhostButton.hidden = !canConfirmManualLocalhost;
   openManualLocalhostButton.disabled = !canConfirmManualLocalhost;
   passManualLocalhostButton.hidden = !canConfirmManualLocalhost;
@@ -666,6 +668,13 @@ function renderJob(job, currentActiveJob = job) {
       jobInputGuidance.textContent =
         "Continue this completed session with one focused addition. FixLab reuses its evidence, branch, and pull request.";
     }
+  } else if (dismissOnly) {
+    jobInputTitle.textContent = job.permissionRequest
+      ? "Permission-blocked job"
+      : "Stopped job";
+    jobInputGuidance.textContent = job.permissionRequest
+      ? "The executor has stopped. Review folder access above if appropriate, or dismiss this job as blocked and continue the queue without granting access or resuming it."
+      : "This stopped job cannot be resumed through the current dashboard. Dismiss it to preserve its outcome and continue the queue without resuming it.";
   } else if (canCancelQueuedJob) {
     jobInputTitle.textContent = "Remove waiting job";
     jobInputGuidance.textContent =
