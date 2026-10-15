@@ -141,6 +141,10 @@ If the denial's scope is unclear, leave the job paused. The runtime's text outpu
 does not identify structured permission scopes, and a folder grant cannot fix
 every permission denial. Another denial pauses the job again without repeated
 automatic retries; a separate terminal is not needed for this folder review.
+After owned termination is verified, **Dismiss blocked job and continue queue**
+also remains available without granting permissions or enabling ordinary Resume.
+If an already approved folder target changes, its grants are cleared and a new
+permission review is required; a failed restart cannot restore the stale grants.
 The UI starts one selected-runtime job at a time
 and displays the intake, diagnosis, reproduce, fix, review, local-stack,
 live-test, and pull-request stages with polled logs.

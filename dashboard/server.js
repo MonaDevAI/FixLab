@@ -1881,6 +1881,9 @@ function publicJob(job) {
       !job.resumeDisabled &&
       !job.executorStopping &&
       job.status === "blocked",
+    canDismiss:
+      !job.executorStopping &&
+      ["blocked", "failed"].includes(job.status),
     canComment: job.status === "running" && !job.permissionRequest,
     inputCount: job.inputs.length,
     pendingInputCount: job.pendingInputs.length,
@@ -4131,8 +4134,10 @@ export function createDashboardServer({
         try {
           startJob(job, prompt, true);
         } catch (error) {
-          job.runtimeDirectoryGrants = previousGrants;
-          job.permissionRequest = pending;
+          if (!job.permissionRequest) {
+            job.runtimeDirectoryGrants = previousGrants;
+            job.permissionRequest = pending;
+          }
           job.status = "blocked";
           job.error = `Scoped resume could not start: ${error.message}`;
           recordJobMetric(job);

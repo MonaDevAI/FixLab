@@ -13,11 +13,12 @@ export function classifyAttempts(firstStatus, secondStatus = null) {
   return { status: "failed", attempts: 2, exitCode: 1 };
 }
 
-function runTests(reportPath) {
+export function runTests(reportPath) {
   return spawnSync(
     process.execPath,
     [
       "--test",
+      "--test-concurrency=2",
       "--test-reporter=junit",
       `--test-reporter-destination=${reportPath}`
     ],
