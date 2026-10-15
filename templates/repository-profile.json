@@ -24,6 +24,30 @@
     }
   ],
   "validation": {
+    "gates": [
+      {
+        "id": "frontend-tests",
+        "command": "npm",
+        "args": ["test", "--", "--runInBand", "--watchAll=false"],
+        "workingDirectory": "frontend",
+        "timeoutSeconds": 300
+      },
+      {
+        "id": "frontend-typecheck",
+        "command": "npm",
+        "args": ["run", "type-check"],
+        "workingDirectory": "frontend",
+        "reuse": true,
+        "timeoutSeconds": 300
+      },
+      {
+        "id": "backend-tests",
+        "command": "dotnet",
+        "args": ["test"],
+        "workingDirectory": "backend",
+        "timeoutSeconds": 600
+      }
+    ],
     "commands": {
       "frontendRestore": "npm ci",
       "frontendTest": "npm test -- --runInBand",

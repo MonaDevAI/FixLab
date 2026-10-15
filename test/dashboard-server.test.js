@@ -40,6 +40,7 @@ import {
   validateCopilotModel
 } from "../dashboard/server.js";
 import { createExecutorLease } from "../dashboard/executor-lease.js";
+import { runValidationGate } from "../bin/validation-gate-client.js";
 
 const packageRoot = new URL("..", import.meta.url).pathname.replace(
   /^\/([A-Za-z]:)/,
@@ -1187,7 +1188,7 @@ test("loads and starts one Azure DevOps multi-bug batch", async () => {
     );
     assert.equal(
       completed.body.job.pullRequestReadiness.status,
-      "created"
+      "blocked"
     );
   } finally {
     await dashboard.close();
@@ -3124,7 +3125,7 @@ test("dashboard restores private job summaries and PR readiness after restart", 
     assert.equal(status.body.job.status, "blocked");
     assert.equal(
       status.body.job.pullRequestReadiness.status,
-      "approval-required"
+      "blocked"
     );
   } finally {
     await first.dashboard.close();
@@ -3140,7 +3141,7 @@ test("dashboard restores private job summaries and PR readiness after restart", 
     assert.equal(status.body.job.bugs[0].id, "17032997");
     assert.equal(
       status.body.job.pullRequestReadiness.status,
-      "approval-required"
+      "blocked"
     );
 
     const context = createCacheContext(repository);
@@ -4622,7 +4623,87 @@ test("dashboard cache hits and invalidates on profile or HEAD changes", async ()
     assert.doesNotMatch(cacheContent, /raw diagnostic output/);
     assert.doesNotMatch(cacheContent, /first request is not cache content/);
     assert.doesNotMatch(cacheContent, /must-not-be-cached/);
-    assert.match(cacheContent, /omitted potentially sensitive summary/);
+    assert.match(cacheContent, /review: passed/);
+    assert.doesNotMatch(cacheContent, /concise/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard gate execution rejects forged readiness and stale final-source evidence", async () => {
+  const repository = createGitRepository();
+  const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+  writeFileSync(profilePath, JSON.stringify(validProfile({
+    validation: {
+      gates: [{
+        id: "focused-tests",
+        command: process.execPath,
+        args: ["--test", "focused.test.cjs"],
+        workingDirectory: ".",
+        reuse: true,
+        timeoutSeconds: 30
+      }]
+    }
+  })));
+  writeFileSync(join(repository, "focused.test.cjs"),
+    "const test=require('node:test');for(let i=0;i<1000;i++)test('check '+i,()=>{});\n");
+  let finish;
+  let emit;
+  let prompt;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    emit = input.onOutput;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); }
+    };
+  });
+  try {
+    const started = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Check focused behavior.", mode: "validate-only" })
+    });
+    assert.equal(started.response.status, 202);
+    const jobId = started.body.job.id;
+    assert.match(prompt, /gate --port \d+ --job/);
+    assert.match(prompt, /Required gate IDs: focused-tests/);
+    for (const stage of FIXLAB_STAGES) {
+      emit("stdout", `FIXLAB_STAGE|${stage}|passed|claimed success\n`);
+    }
+    let status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.job.pullRequestReadiness.ready, false);
+    const run = (overrides = {}, headers = {}) => jsonRequest(url, "/api/validation/run", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ jobId, gateId: "focused-tests", repository, ...overrides })
+    });
+    assert.equal((await run({ jobId: "different-job" })).response.status, 400);
+    assert.equal((await run({ gateId: "invented-gate" })).response.status, 400);
+    assert.equal((await run({}, { Origin: "https://example.com" })).response.status, 400);
+    const result = await run();
+    assert.equal(result.response.status, 200);
+    assert.equal(result.body.status, 0);
+    assert.match(result.body.summary, /1000 passed/);
+    status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.job.validation.status, "passed");
+    assert.ok(status.body.job.validation.gates[0].context.reductionPercent > 90);
+    assert.ok(Buffer.byteLength(result.body.summary) < 2000);
+    let output = "";
+    const exitCode = await runValidationGate([
+      "--port", new URL(url).port, "--job", jobId,
+      "--gate", "focused-tests", "--repository", repository
+    ], { stdout: { write(text) { output += text; } }, stderr: { write(text) { output += text; } } });
+    assert.equal(exitCode, 0);
+    assert.match(output, /unchanged job-local evidence reused/);
+    writeFileSync(join(repository, "tracked.txt"), "edited after validation\n");
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.job.status, "blocked");
+    assert.equal(status.body.job.validation.gates[0].status, "stale");
+    assert.equal(status.body.job.pullRequestReadiness.ready, false);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

@@ -15,6 +15,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "nod
 const MAX_CAPTURE_BYTES_PER_STREAM = 50 * 1024 * 1024;
 const MAX_DIAGNOSTICS = 20;
 const MAX_TAIL_LINES = 20;
+const MAX_LINE_CHARACTERS = 64 * 1024;
 const MAX_EVIDENCE_DIRECTORIES = 100;
 const EVIDENCE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_TIMEOUT_SECONDS = 2_147_483;
@@ -72,7 +73,7 @@ function resolveEvidenceRoot(repository) {
   return resolve(repository, path);
 }
 
-function repositoryState(repository) {
+export function repositoryState(repository) {
   const head = git(repository, ["rev-parse", "HEAD"]);
   if (head.status !== 0) {
     throw new Error("fixlab exec could not resolve the repository HEAD");
@@ -148,14 +149,27 @@ function repositoryState(repository) {
   const profileHash = existsSync(profilePath)
     ? sha256(readFileSync(profilePath))
     : "";
+  const instructions = paths.filter((path) =>
+    /(?:^|\/)(?:AGENTS|CLAUDE|GEMINI)\.md$/u.test(path) ||
+    /^\.github\/(?:copilot-instructions\.md|instructions\/.*\.instructions\.md)$/u.test(path)
+  );
+  for (const path of ["AGENTS.md", "CLAUDE.md", "GEMINI.md", ".github/copilot-instructions.md"]) {
+    if (existsSync(resolve(repository, path))) {
+      instructions.push(path);
+    }
+  }
+  const instructionHash = sha256([...new Set(instructions)].sort().map(
+    (path) => `${path}\0${sha256(readFileSync(resolve(repository, path)))}`
+  ).join("\0"));
   return {
     head: head.stdout.trim(),
     worktreeHash: sha256(`${status.stdout}\0${contentHashes.join("\0")}`),
-    profileHash
+    profileHash,
+    instructionHash
   };
 }
 
-function reusableValidationCommand(command, args) {
+export function reusableValidationCommand(command, args) {
   const executable = basename(command).toLowerCase().replace(/\.cmd|\.exe$/gu, "");
   const first = String(args[0] ?? "").toLowerCase();
   const second = String(args[1] ?? "").toLowerCase();
@@ -173,15 +187,9 @@ function reusableValidationCommand(command, args) {
     if (first !== "run") {
       return false;
     }
-    return /^(?:build|check|format(?::check)?|lint|test(?::.+)?|type-?check|typecheck|validate)$/u.test(
+    return /^(?:build|check|format:check|lint|test(?::unit)?|type-?check|typecheck)$/u.test(
       second
     );
-  }
-  if (executable === "npx") {
-    return first === "playwright" && second === "test";
-  }
-  if (executable === "playwright") {
-    return first === "test";
   }
   return false;
 }
@@ -410,6 +418,8 @@ function createCollector(path) {
   let capturedBytes = 0;
   let totalBytes = 0;
   let remainder = "";
+  let oversizedLine = false;
+  let oversizedLines = 0;
   let truncated = false;
   const errors = [];
   const warnings = [];
@@ -447,7 +457,7 @@ function createCollector(path) {
   };
 
   const inspectLine = (rawLine) => {
-    const line = sanitize(rawLine).trim();
+    const line = sanitize(rawLine).trim().slice(0, 2000);
     lineCount += 1;
     if (!line) {
       return;
@@ -529,15 +539,31 @@ function createCollector(path) {
     const lines = `${remainder}${text}`.split(/\r?\n/u);
     remainder = lines.pop() ?? "";
     for (const line of lines) {
-      const sanitizedLine = sanitize(line);
+      const omitted = oversizedLine || line.length > MAX_LINE_CHARACTERS;
+      const sanitizedLine = omitted
+        ? "[Oversized output line omitted by the capture limit]"
+        : sanitize(line);
+      if (omitted) {
+        oversizedLines += 1;
+      }
+      oversizedLine = false;
       appendSanitized(`${sanitizedLine}\n`);
       inspectLine(sanitizedLine);
+    }
+    if (oversizedLine || remainder.length > MAX_LINE_CHARACTERS) {
+      oversizedLine = true;
+      remainder = "";
     }
   };
 
   const finish = () => {
-    if (remainder) {
-      const sanitizedLine = sanitize(remainder);
+    if (remainder || oversizedLine) {
+      const sanitizedLine = oversizedLine
+        ? "[Oversized output line omitted by the capture limit]"
+        : sanitize(remainder);
+      if (oversizedLine) {
+        oversizedLines += 1;
+      }
       appendSanitized(sanitizedLine);
       inspectLine(sanitizedLine);
       remainder = "";
@@ -547,6 +573,7 @@ function createCollector(path) {
       totalBytes,
       capturedBytes,
       truncated,
+      oversizedLines,
       lineCount,
       errors,
       warnings,
@@ -621,6 +648,10 @@ function formatSummary(result, reused = false) {
       `Evidence capture reached the ${MAX_CAPTURE_BYTES_PER_STREAM / 1024 / 1024} MiB per-stream safety limit.`
     );
   }
+  const oversizedLines = (result.stdout.oversizedLines ?? 0) + (result.stderr.oversizedLines ?? 0);
+  if (oversizedLines > 0) {
+    lines.push(`Oversized output lines omitted: ${oversizedLines} (64 KiB character limit).`);
+  }
   lines.push(`Evidence: ${result.evidenceDirectory}`);
   const rawBytes = result.stdout.totalBytes + result.stderr.totalBytes;
   const rawLines = result.stdout.lineCount + result.stderr.lineCount;
@@ -684,7 +715,7 @@ export async function executeStructuredCommand(options, io = {}) {
   mkdirSync(evidenceRoot, { recursive: true, mode: 0o700 });
   pruneEvidence(evidenceRoot, now());
 
-  const state = repositoryState(options.repository);
+  const state = io.repositoryState ?? repositoryState(options.repository);
   const fingerprint = cacheFingerprint(options, state);
   const cacheDirectory = join(evidenceRoot, "cache");
   const cachePath = join(cacheDirectory, `${fingerprint}.json`);
@@ -752,16 +783,53 @@ export async function executeStructuredCommand(options, io = {}) {
     let timeout = null;
     let forceTimeout = null;
     let abandonTimeout = null;
+    let cancelled = false;
+    const terminate = (exitCode) => {
+      if (process.platform === "win32" && Number.isInteger(child.pid)) {
+        const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
+          encoding: "utf8",
+          windowsHide: true
+        });
+        if (killed.status !== 0 && child.exitCode === null) {
+          stderrCollector.write("Could not terminate the owned command tree; attempting direct termination.\n");
+          child.kill("SIGTERM");
+        }
+      } else {
+        child.kill("SIGTERM");
+      }
+      forceTimeout = setTimeout(() => {
+        if (!settled) {
+          child.kill("SIGKILL");
+          abandonTimeout = setTimeout(() => {
+            if (!settled) {
+              settled = true;
+              clearTimers();
+              child.stdout.destroy();
+              child.stderr.destroy();
+              resolveStatus(exitCode);
+            }
+          }, terminationGraceMs);
+        }
+      }, terminationGraceMs);
+    };
+    const abort = () => {
+      cancelled = true;
+      stderrCollector.write("Command cancelled by its dashboard job.\n");
+      terminate(130);
+    };
     const clearTimers = () => {
+      io.signal?.removeEventListener("abort", abort);
       for (const timer of [timeout, forceTimeout, abandonTimeout]) {
         if (timer) {
           clearTimeout(timer);
         }
       }
     };
+    const environment = { ...process.env };
+    delete environment.NODE_TEST_CONTEXT;
     const child = spawnProcess(executable, spawnedArguments, {
       cwd: options.cwd,
-      env: process.env,
+      env: environment,
       shell: false,
       windowsVerbatimArguments: windowsCommandShell,
       windowsHide: true,
@@ -769,13 +837,19 @@ export async function executeStructuredCommand(options, io = {}) {
     });
     child.stdout.on("data", stdoutCollector.write);
     child.stderr.on("data", stderrCollector.write);
+    io.signal?.addEventListener("abort", abort, { once: true });
+    if (io.signal?.aborted) {
+      abort();
+    }
     child.on("error", (error) => {
       stderrCollector.write(`${error.message}\n`);
       if (!settled) {
         settled = true;
         clearTimers();
         let exitCode = 1;
-        if (timedOut) {
+        if (cancelled) {
+          exitCode = 130;
+        } else if (timedOut) {
           exitCode = 124;
         } else if (error.code === "ENOENT") {
           exitCode = 127;
@@ -791,7 +865,9 @@ export async function executeStructuredCommand(options, io = {}) {
           stderrCollector.write(`Command terminated by signal ${signal}.\n`);
         }
         let exitCode = 1;
-        if (timedOut) {
+        if (cancelled) {
+          exitCode = 130;
+        } else if (timedOut) {
           exitCode = 124;
         } else if (Number.isInteger(code)) {
           exitCode = code;
@@ -805,20 +881,7 @@ export async function executeStructuredCommand(options, io = {}) {
         stderrCollector.write(
           `Command exceeded ${options.timeoutSeconds} second(s) and was terminated.\n`
         );
-        child.kill("SIGTERM");
-        forceTimeout = setTimeout(() => {
-          if (!settled) {
-            child.kill("SIGKILL");
-            abandonTimeout = setTimeout(() => {
-              if (!settled) {
-                settled = true;
-                child.stdout.destroy();
-                child.stderr.destroy();
-                resolveStatus(124);
-              }
-            }, terminationGraceMs);
-          }
-        }, terminationGraceMs);
+        terminate(124);
       }, options.timeoutSeconds * 1000);
     }
   });
@@ -852,6 +915,7 @@ export async function executeStructuredCommand(options, io = {}) {
       mode: 0o600
     });
   }
+  io.onResult?.(result);
   (status === 0 ? stdout : stderr).write(summary.text);
   return status;
 }

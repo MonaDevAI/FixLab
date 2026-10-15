@@ -128,6 +128,31 @@ test("structured execution keeps compact diagnostics and redacted evidence", asy
       suites: null,
       durationMs: null
     });
+
+    test("oversized lines remain bounded and never expose partial credentials", async () => {
+      const repository = createRepository();
+      const output = capture();
+      try {
+        const status = await executeStructuredCommand({
+          repository,
+          cwd: repository,
+          stage: "validation",
+          reuse: false,
+          timeoutSeconds: 5,
+          command: process.execPath,
+          commandArgs: ["-e", "process.stdout.write('token='+ 'x'.repeat(300000));console.log('\\n# tests 1\\n# pass 1')"]
+        }, { stdout: output.stream, stderr: output.stream });
+        assert.equal(status, 0);
+        assert.match(output.text(), /Oversized output lines omitted: 1/);
+        assert.ok(Buffer.byteLength(output.text()) < 2000);
+        const evidenceDirectory = output.text().match(/^Evidence: (.+)$/mu)[1];
+        const evidence = readFileSync(join(evidenceDirectory, "stdout.log"), "utf8");
+        assert.doesNotMatch(evidence, /token=|xxxxxxxx/);
+        assert.ok(Buffer.byteLength(evidence) < 1000);
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+      }
+    });
     assert.equal(result.context.rawLines > result.context.structuredLines, true);
     assert.equal(result.context.reductionPercent > 80, true);
     assert.equal(
