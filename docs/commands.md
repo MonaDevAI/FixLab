@@ -120,6 +120,27 @@ opening the browser. Open the printed URL manually, request `open dashboard`
 in chat, or explicitly supply `--open`. `--no-open` remains supported.
 Onboarding and reconnecting do not automatically open browser tabs.
 The dashboard does not run during installation or `fixlab init`.
+
+### Background runtime permissions
+
+A background Copilot job cannot show an interactive terminal permission prompt.
+When it reports a non-interactive permission denial, FixLab stops the owned
+executor and shows **Copilot permission required** in the browser. Do not use
+ordinary Resume or PR approval to grant runtime access.
+
+Inspect the raw logs first. If a specific external folder is needed, enter its
+absolute path, select **Review folder access**, verify the resolved folder and
+read/write scope, then select **Grant this folder and resume** and confirm.
+This adds only that folder and its descendants to this job's runtime access.
+It can also load trusted agent configuration from that folder. It does not
+approve tools, URLs, credentials, production operations, or organization-policy
+exceptions. The grant expires when the dashboard restarts and is never copied
+to a new job.
+
+If the denial's scope is unclear, leave the job paused. The runtime's text output
+does not identify structured permission scopes, and a folder grant cannot fix
+every permission denial. Another denial pauses the job again without repeated
+automatic retries; a separate terminal is not needed for this folder review.
 The UI starts one selected-runtime job at a time
 and displays the intake, diagnosis, reproduce, fix, review, local-stack,
 live-test, and pull-request stages with polled logs.

@@ -43,6 +43,14 @@ import { prepareSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, ve
 const windowsOwnedTrees = new WeakMap();
 import { ValidationSession, validationGates } from "./validation-gates.js";
 import { repositoryState } from "../bin/structured-command.js";
+import {
+  newPermissionRequest,
+  permissionRequest,
+  PERMISSION_BLOCKED_MESSAGE,
+  reviewPermissionDirectory,
+  runtimePermissionDenialLine,
+  verifyPermissionDirectory
+} from "./runtime-permissions.js";
 
 export const DASHBOARD_HOST = "127.0.0.1";
 export const DEFAULT_DASHBOARD_PORT = 4317;
@@ -487,6 +495,7 @@ function dashboardSnapshot(job) {
     finishedAt: job.finishedAt,
     lastActivityAt: job.lastActivityAt,
     error: job.error ? safePersistedSummary(job.error) : null,
+    permissionBlocked: Boolean(job.permissionRequest),
     stages: Object.fromEntries(
       FIXLAB_STAGES.map((stage) => [
         stage,
@@ -523,6 +532,10 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    permissionRequest: snapshot.permissionBlocked
+      ? newPermissionRequest()
+      : permissionRequest(snapshot.stages),
+    runtimeDirectoryGrants: [],
     model: snapshot.model ?? "",
     runtime: snapshot.runtime ?? (snapshot.model ? "copilot" : ""),
     manualLocalhostTest:
@@ -560,6 +573,10 @@ function restoreDashboardJob(snapshot, repository) {
     cacheContext: createCacheContext(repository),
     partial: { stdout: "", stderr: "" }
   };
+  if (restored.permissionRequest && restored.status !== "held") {
+    restored.status = "blocked";
+    restored.error = PERMISSION_BLOCKED_MESSAGE;
+  }
   restored.heldAt = snapshot.heldAt ?? null;
   restored.holdRequested = false;
   restored.resumeSession = false;
@@ -664,6 +681,9 @@ export function recoverInterruptedDashboardJob(
 }
 
 function getPullRequestReadiness(job) {
+  if (job.permissionRequest) {
+    return { status: "blocked", ready: false, message: PERMISSION_BLOCKED_MESSAGE };
+  }
   const prStage = job.stages?.pr ?? { status: "pending", message: "" };
   const validation = job.validationSession?.summary() ?? {
     status: "unconfigured",
@@ -1635,6 +1655,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
   return ({
     repository,
     artifactDirectories = [],
+    runtimeDirectories = [],
     prompt,
     sessionId,
     resume,
@@ -1659,7 +1680,8 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
         model: model ?? defaultModel,
         additionalDirs: [
           ...linkedDependencyDirectories(repository),
-          ...artifactDirectories
+          ...artifactDirectories,
+          ...runtimeDirectories
         ]
       });
     } catch (error) {
@@ -1847,11 +1869,19 @@ function publicJob(job) {
     finishedAt: job.finishedAt,
     lastActivityAt: job.lastActivityAt,
     error: job.error,
+    permissionRequest: job.permissionRequest ?? null,
+    runtimeDirectoryGrants: (job.runtimeDirectoryGrants ?? []).map((scope) => scope.directory),
     canResume:
       !job.resumeDisabled &&
       !job.executorStopping &&
+      !job.permissionRequest &&
       ["blocked", "failed", "passed", "held"].includes(job.status),
-    canComment: job.status === "running",
+    canReviewPermissions:
+      Boolean(job.permissionRequest) &&
+      !job.resumeDisabled &&
+      !job.executorStopping &&
+      job.status === "blocked",
+    canComment: job.status === "running" && !job.permissionRequest,
     inputCount: job.inputs.length,
     pendingInputCount: job.pendingInputs.length,
     durationMs: Math.max(
@@ -2091,6 +2121,12 @@ function appendLine(job, stream, line) {
   if (usage) {
     job.usage = usage;
   }
+  if (runtimePermissionDenialLine(line)) {
+    job.permissionRequest ??= newPermissionRequest();
+  }
+  if (job.permissionRequest) {
+    return;
+  }
   const activityMarker = line.match(/^FIXLAB_ACTIVITY\|([^|]+)\|(.*)$/);
   if (activityMarker) {
     const [, stage, message] = activityMarker;
@@ -2211,6 +2247,30 @@ function pushActivity(job, entry) {
 
 function finishJob(job, result) {
   flushPartialOutput(job);
+
+  if (job.permissionRequest) {
+    const activeStage = FIXLAB_STAGES.find(
+      (stage) => job.stages[stage].status === "running"
+    ) ?? FIXLAB_STAGES.find(
+      (stage) => job.stages[stage].status === "blocked"
+    ) ?? "diagnosis";
+    job.stages[activeStage] = {
+      status: "blocked",
+      message: PERMISSION_BLOCKED_MESSAGE
+    };
+    for (const stage of FIXLAB_STAGES) {
+      if (["pending", "running"].includes(job.stages[stage].status)) {
+        job.stages[stage] = {
+          status: "skipped",
+          message: "Not run while runtime permission is unresolved."
+        };
+      }
+    }
+    job.status = "blocked";
+    job.error = PERMISSION_BLOCKED_MESSAGE;
+    job.finishedAt = new Date().toISOString();
+    return;
+  }
 
   if (
     job.testEvidence.enabled &&
@@ -3025,6 +3085,7 @@ export function createDashboardServer({
       finishedAt: null,
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
+      permissionBlocked: false,
       manualLocalhostOpenedAt: null,
       manualLocalhostPending: false,
       manualLocalhostResult: null,
@@ -3068,6 +3129,22 @@ export function createDashboardServer({
   }
 
   function startJob(job, prompt, resume = false) {
+    if (job.permissionRequest) {
+      throw new Error("Runtime permission is unresolved; review its scope in the dashboard before resuming.");
+    }
+    let runtimeDirectories;
+    try {
+      runtimeDirectories = (job.runtimeDirectoryGrants ?? []).map(
+        (scope) => verifyPermissionDirectory(scope, {
+          repository: resolvedRepository,
+          packageRoot
+        })
+      );
+    } catch (error) {
+      job.permissionRequest = newPermissionRequest();
+      job.runtimeDirectoryGrants = [];
+      throw new Error(`A previously approved folder changed; review permissions again: ${error.message}`);
+    }
     if (job.runtime !== runtime) {
       throw new Error("Saved job runtime does not match this dashboard; reconnect using its originating runtime.");
     }
@@ -3111,6 +3188,51 @@ export function createDashboardServer({
     let leaseMetadataError = null;
     let handle;
     const lease = executorLease.acquire(job.id);
+    const pauseForPermission = () => {
+      if (!job.permissionRequest || job.permissionStopRequested) {
+        return;
+      }
+      job.permissionStopRequested = true;
+      job.executorStopping = true;
+      job.acceptsValidation = false;
+      clearTimeout(idleTimer);
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: "Runtime permission denial detected. Stopping the owned executor without retrying; directory access can be reviewed in the dashboard. Tool and URL denials are not approved by a folder grant."
+      });
+      try {
+        lease.update("stopping");
+      } catch (error) {
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: `Could not update the permission-paused executor lease: ${error.message}`
+        });
+      }
+      try {
+        job.validationSession?.cancel();
+      } catch (error) {
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: `Could not cancel validation during permission pause: ${error.message}`
+        });
+      }
+      try {
+        handle?.terminate?.();
+      } catch (error) {
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: `Could not stop the permission-paused executor: ${error.message}. Resume remains unavailable until termination is verified.`
+        });
+      }
+    };
     try {
       if (job.mode === "fix-and-validate") {
         job.sharedWorkspace = prepareSharedWorktree({
@@ -3217,6 +3339,7 @@ export function createDashboardServer({
       handle = executor({
         repository: resolvedRepository,
         artifactDirectories: job.artifactDirectory ? [job.artifactDirectory] : [],
+        runtimeDirectories,
         prompt: (job.prestartFrontend && job.targetEnvironment.toLowerCase() === "local"
           ? `${prompt}\nReact warm-up is requested in parallel in the dashboard repository. Before live testing, reuse that server only after its profile health check passes and you verify it serves the checkout containing the changes being validated. If using another isolated worktree, start the correct checkout instead; a healthy baseline server does not prove the fix. Never mark local-stack passed merely because warm-up was requested.`
           : prompt) + sharedWorktreeGuidance(job.sharedWorkspace),
@@ -3229,6 +3352,9 @@ export function createDashboardServer({
           const localStackWasReady =
             job.stages["local-stack"].status === "passed";
           appendOutput(job, stream, text);
+          if (job.permissionRequest) {
+            queueMicrotask(pauseForPermission);
+          }
           if (
             job.manualLocalhostTest &&
             !job.manualLocalhostOpenedAt &&
@@ -3271,6 +3397,9 @@ export function createDashboardServer({
     }
     activeHandle = handle;
     job.executorStopping = false;
+    if (job.permissionRequest) {
+      pauseForPermission();
+    }
     if (!handle?.completion || typeof handle.completion.then !== "function") {
       throw new Error("Executor did not provide a termination promise; the repository lease remains reserved.");
     }
@@ -3293,7 +3422,7 @@ export function createDashboardServer({
     });
     activeTermination = actualCompletion;
     try {
-      lease.update("running", handle.pid);
+      lease.update(job.executorStopping ? "stopping" : "running", handle.pid);
     } catch (error) {
       leaseMetadataError = error;
       job.executorStopping = true;
@@ -3315,7 +3444,7 @@ export function createDashboardServer({
         });
       }
     }
-    if (job.prestartFrontend && job.targetEnvironment.toLowerCase() === "local") {
+    if (!job.permissionRequest && job.prestartFrontend && job.targetEnvironment.toLowerCase() === "local") {
       void prewarmFrontend(job);
     }
     armIdleWatchdog();
@@ -3389,6 +3518,9 @@ export function createDashboardServer({
           }
           persistDashboardState();
           startNextJob();
+          return;
+        }
+        if (job.permissionRequest) {
           return;
         }
         if (job.pendingInputs.length > 0) {
@@ -3603,7 +3735,7 @@ export function createDashboardServer({
 
     if (
       request.method === "POST" &&
-      ["/api/jobs", "/api/job/input", "/api/jobs/resume", "/api/jobs/restart", "/api/frontend/start"].includes(requestUrl.pathname)
+      ["/api/jobs", "/api/job/input", "/api/job/permissions", "/api/jobs/resume", "/api/jobs/restart", "/api/frontend/start"].includes(requestUrl.pathname)
     ) {
       try {
         const resource = requestUrl.pathname === "/api/frontend/start" ? "frontend" : "job";
@@ -3635,7 +3767,8 @@ export function createDashboardServer({
         runtime: {
           name: runtime,
           defaultModel,
-          supportsModelSelection: runtime === "copilot"
+          supportsModelSelection: runtime === "copilot",
+          helperDirectory: realpathSync(packageRoot)
         },
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
@@ -3922,6 +4055,98 @@ export function createDashboardServer({
       return;
     }
 
+    if (request.method === "POST" && requestUrl.pathname === "/api/job/permissions") {
+      const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+      if (request.headers.host !== new URL(expectedOrigin).host ||
+          (request.headers.origin && request.headers.origin !== expectedOrigin)) {
+        sendJson(response, 403, { error: "Permission approval requires the dashboard's exact loopback host and origin." });
+        return;
+      }
+      let body;
+      try {
+        if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+          throw new Error("Content-Type must be application/json");
+        }
+        body = await readJsonBody(request);
+        if (!body || typeof body !== "object" || Array.isArray(body)) {
+          throw new Error("Permission approval requires a JSON object.");
+        }
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (closing || activeHandle || currentJob?.executorStopping ||
+          !currentJob || currentJob.status !== "blocked" ||
+          currentJob.resumeDisabled || body.jobId !== currentJob.id ||
+          !currentJob.permissionRequest ||
+          body.requestId !== currentJob.permissionRequest.id) {
+        sendJson(response, 409, { error: "The permission request changed or its executor is not safely stopped. Refresh before approving." });
+        return;
+      }
+      const job = currentJob;
+      const pending = job.permissionRequest;
+      try {
+        if (body.action === "review-directory") {
+          const scope = reviewPermissionDirectory(body.directory, {
+            repository: resolvedRepository,
+            packageRoot
+          });
+          if (job.runtimeDirectoryGrants?.some((grant) => grant.directory === scope.directory)) {
+            throw new Error("This folder is already granted for this job. Repeating the same grant cannot resolve the remaining runtime denial.");
+          }
+          job.permissionRequest = {
+            ...newPermissionRequest(),
+            scope
+          };
+          sendJson(response, 200, { job: publicJob(job) });
+          return;
+        }
+        if (body.action !== "approve-directory" || body.confirmed !== true ||
+            !pending.scope || body.directory !== pending.scope.directory) {
+          sendJson(response, 400, { error: "Review an exact folder scope and explicitly confirm it before approval." });
+          return;
+        }
+        verifyPermissionDirectory(pending.scope, {
+          repository: resolvedRepository,
+          packageRoot
+        });
+        const previousGrants = job.runtimeDirectoryGrants ?? [];
+        if (previousGrants.length >= 8) {
+          throw new Error("This job already has eight folder grants; review its runtime policy instead of broadening access further.");
+        }
+        job.runtimeDirectoryGrants = [...previousGrants, pending.scope];
+        pushLog(job, {
+          index: job.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: `The user approved folder access for this job only: ${pending.scope.directory}. The grant is not retained after a dashboard restart and does not approve tools or URLs.`
+        });
+        job.permissionRequest = null;
+        job.permissionStopRequested = false;
+        const prompt = buildResumePrompt(job, {
+          action: "retry",
+          details: `The user explicitly approved access to this folder for this job only: ${pending.scope.directory}. The new executor receives that exact --add-dir grant. This does not authorize a denied tool, URL, production data change, or any other folder. Retry only the blocked prerequisite once. If still denied, stop and report the unresolved permission; do not loop or request blanket access.`
+        });
+        resetJobForResume(job);
+        try {
+          startJob(job, prompt, true);
+        } catch (error) {
+          job.runtimeDirectoryGrants = previousGrants;
+          job.permissionRequest = pending;
+          job.status = "blocked";
+          job.error = `Scoped resume could not start: ${error.message}`;
+          recordJobMetric(job);
+          sendJson(response, 409, { error: job.error, job: publicJob(job) });
+          return;
+        }
+        recordJobMetric(job);
+        sendJson(response, 202, { job: publicJob(job) });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
     if (
       request.method === "POST" &&
       requestUrl.pathname === "/api/job/input"
@@ -3935,6 +4160,12 @@ export function createDashboardServer({
           error: currentJob.runtime !== runtime
             ? "Saved job runtime is incompatible or unknown; reconnect using its originating runtime or start a new job."
             : "this FixLab job cannot be resumed safely"
+        });
+        return;
+      }
+      if (currentJob.permissionRequest) {
+        sendJson(response, 409, {
+          error: "Runtime permission is unresolved. Use the scoped permission review; a comment or workflow approval cannot grant runtime access."
         });
         return;
       }
@@ -3971,6 +4202,10 @@ export function createDashboardServer({
         return;
       }
       const action = body.action ?? "continue";
+      if (currentJob.permissionRequest) {
+        sendJson(response, 409, { error: "Runtime permission is unresolved; use the scoped permission review." });
+        return;
+      }
       if (
         ![
           "comment",

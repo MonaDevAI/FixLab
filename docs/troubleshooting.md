@@ -241,7 +241,20 @@ A runtime permission denial is not a test failure. Compound shell commands,
 cross-directory dependency reuse, or an unapproved executable can be blocked
 before Jest, TypeScript, or another validator starts.
 
-Use the repository's configured command directly from its working directory:
+For a dashboard job that reports "no interactive user response was available"
+or "Denied, no one to approve", use the browser's **Copilot permission required**
+panel. Inspect the logs, then review and explicitly confirm a specific external
+folder only when the failure is a path restriction. Ordinary workflow or PR
+approval cannot authorize the background runtime. Review itself grants nothing.
+No separate terminal is needed for folder approval.
+
+A folder grant cannot resolve a denied tool, URL or organization policy. If the
+scope is unknown, keep the job paused. Do not grant blanket access or reroute an
+operation through another wrapper to evade a denial. See
+[background runtime permissions](commands.md#background-runtime-permissions).
+
+After the required access is authorized, use the repository's configured
+command directly from its working directory:
 
 ```powershell
 $env:CI = "true"
