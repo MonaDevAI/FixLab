@@ -4364,6 +4364,18 @@ test("shutdown completes frontend and HTTP cleanup even when executor terminatio
       error instanceof AggregateError &&
       error.errors.some((failure) => /Synthetic executor termination error/.test(failure.message)));
     await assert.rejects(fetch(`${url}/api/status`));
+    // POSIX signal delivery can finish after the HTTP listener has closed.
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      try {
+        process.kill(pid, 0);
+      } catch (error) {
+        if (error.code === "ESRCH") {
+          break;
+        }
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
     finish({ code: null });
     await new Promise((resolve) => setTimeout(resolve, 0));
