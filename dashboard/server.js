@@ -39,7 +39,8 @@ import { createSessionRegistry } from "./sessions.js";
 import { createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
-import { prepareSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "./shared-worktree.js";
+import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "./shared-worktree.js";
+import { compactControlResult, conversationOperations } from "./conversation-operations.js";
 const windowsOwnedTrees = new WeakMap();
 import { ValidationSession, validationGates } from "./validation-gates.js";
 import { repositoryState } from "../bin/structured-command.js";
@@ -416,6 +417,8 @@ function publicQueue(jobs) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     sharedWorkspace: job.sharedWorkspace ?? null,
+    workspaceReview: job.workspaceReview ?? null,
+    validationIntent: job.validationIntent ?? "full",
     prestartFrontend: job.prestartFrontend ?? false,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
@@ -484,6 +487,8 @@ function dashboardSnapshot(job) {
     },
     branchNaming: job.branchNaming ?? null,
     sharedWorkspace: job.sharedWorkspace ?? null,
+    workspaceReview: job.workspaceReview ?? null,
+    validationIntent: job.validationIntent ?? "full",
     intakeSource: job.intakeSource,
     workItem: persistedWorkItem(job.workItem),
     workItems: job.workItems.map(persistedWorkItem),
@@ -683,6 +688,9 @@ export function recoverInterruptedDashboardJob(
 function getPullRequestReadiness(job) {
   if (job.permissionRequest) {
     return { status: "blocked", ready: false, message: PERMISSION_BLOCKED_MESSAGE };
+  }
+  if (job.validationIntent === "scoped") {
+    return { status: "blocked", ready: false, message: "Full regression is explicitly deferred during scoped iteration, not passed." };
   }
   const prStage = job.stages?.pr ?? { status: "pending", message: "" };
   const validation = job.validationSession?.summary() ?? {
@@ -981,6 +989,9 @@ ${manualLocalhostGuidance}
 ${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
+- Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For "test this PR", verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.
+- For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed, and PR readiness stays blocked. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.
+- Do not delete or edit transient test artifacts while validation is discovering or executing them; wait for owned validation to finish before cleanup.
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
 - ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
 - Run verbose repository-owned tests, builds, linters, type checks, and package validation through \`fixlab exec --stage <stage> -- <command> [args...]\`. In Windows PowerShell quote the separator (\`'--'\`) because an unquoted \`--\` is dropped, and never wrap \`fixlab exec\` in \`cmd /c\`; that wrapper is denied in non-interactive sessions. Keep its compact result in context and inspect the private evidence path only when an exact diagnostic is needed.
@@ -1826,6 +1837,9 @@ export function createRuntimeExecutor({ packageRoot, runtime = "agency", model =
 }
 
 function sendJson(response, statusCode, body) {
+  if (response.fixlabCompact) {
+    body = compactControlResult(body);
+  }
   response.writeHead(statusCode, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store",
@@ -1848,6 +1862,8 @@ function publicJob(job) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     sharedWorkspace: job.sharedWorkspace ?? null,
+    workspaceReview: job.workspaceReview ?? null,
+    validationIntent: job.validationIntent ?? "full",
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: job.manualLocalhostUrl,
@@ -1951,6 +1967,9 @@ function persistedWorkItem(workItem) {
 }
 
 async function readJsonBody(request, maxBytes = 64 * 1024) {
+  if (request.verifyConversation) {
+    maxBytes = Math.min(maxBytes, 64 * 1024);
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -1971,6 +1990,10 @@ async function readJsonBody(request, maxBytes = 64 * 1024) {
   }
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new Error("request body must be a JSON object");
+  }
+  request.verifyConversation?.();
+  if (request.fixlabControlAction && body.action !== request.fixlabControlAction) {
+    throw new Error("The control payload action does not match the authorized operation.");
   }
   return body;
 }
@@ -2251,6 +2274,20 @@ function pushActivity(job, entry) {
 function finishJob(job, result) {
   flushPartialOutput(job);
 
+  if (result.error?.workspaceReview) {
+    job.workspaceReview = result.error.workspaceReview;
+    job.stages.intake = { status: "blocked", message: result.error.message };
+    for (const stage of FIXLAB_STAGES.slice(1)) {
+      if (["pending", "running"].includes(job.stages[stage].status)) {
+        job.stages[stage] = { status: "skipped", message: "Waiting for an explicit workspace recovery decision." };
+      }
+    }
+    job.status = "blocked";
+    job.error = result.error.message;
+    job.finishedAt = new Date().toISOString();
+    return;
+  }
+
   if (job.permissionRequest) {
     const activeStage = FIXLAB_STAGES.find(
       (stage) => job.stages[stage].status === "running"
@@ -2298,6 +2335,9 @@ function finishJob(job, result) {
     const message = "Manual React localhost validation failed.";
     job.stages["live-test"] = { status: "failed", message };
     job.error = job.error ? `${job.error}; ${message}` : message;
+  }
+  if (job.validationIntent === "scoped") {
+    job.stages.review = { status: "blocked", message: "Full regression is explicitly deferred during scoped iteration, not passed." };
   }
   if (job.validationSession) {
     try {
@@ -2427,9 +2467,22 @@ ${details}`;
 }
 
 function requiresFreshRetry(job, action) {
+  const dashboardOnlyReview = (stage) => stage === "review" &&
+    job.stages[stage].status === "blocked" && [
+      "Required executor-backed validation is missing, failed, or stale.",
+      "Full regression is explicitly deferred during scoped iteration, not passed."
+    ].includes(job.stages[stage].message);
+  const noRuntimeProgress = FIXLAB_STAGES.every((stage) =>
+    job.stages[stage].status === "pending" || dashboardOnlyReview(stage)
+  );
+  const admissionOnly = job.workspaceReview &&
+    job.stages.intake.status === "blocked" &&
+    FIXLAB_STAGES.slice(1).every((stage) =>
+      job.stages[stage].status === "skipped" || dashboardOnlyReview(stage)
+    );
   return (
     action === "retry" &&
-    FIXLAB_STAGES.every((stage) => job.stages[stage].status === "pending") &&
+    (noRuntimeProgress || admissionOnly) &&
     job.usage.inputTokens === 0 &&
     job.usage.outputTokens === 0
   );
@@ -2854,7 +2907,7 @@ export function createDashboardServer({
   let dashboardUrl = "";
   let closing = false;
 
-  async function launchFrontend() {
+  async function launchFrontend(verifyConversation = () => {}) {
     const generation = frontendStartGeneration;
     const configuration = frontendStartConfig(resolvedRepository);
     if (frontendConnection.handle || frontendConnection.starting) {
@@ -2878,6 +2931,7 @@ export function createDashboardServer({
       if (closing || generation !== frontendStartGeneration) {
         throw new Error("frontend startup was cancelled");
       }
+      verifyConversation();
       frontendConnection.lastResult = null;
       const child = spawnOwnedShell(configuration, true);
       frontendConnection.handle = child;
@@ -3161,6 +3215,9 @@ export function createDashboardServer({
       job.mode
     );
     const validation = job.validationSession.summary();
+    if (job.validationIntent === "scoped") {
+      prompt += "\nUser-selected scoped iteration: run only tests covering changed behavior for now. Full regression is explicitly deferred, not passed. Keep required broad gates pending and PR readiness blocked. Continue independent safe checks after an unrelated failure; never bypass dependencies, authentication, runtime permissions or data-safety approvals.";
+    }
     job.acceptsValidation = true;
     const address = server.address();
     if (validation.status !== "unconfigured" && validation.gates.length > 0) {
@@ -3243,10 +3300,13 @@ export function createDashboardServer({
           profile: loadRepositoryProfile(resolvedRepository),
           jobId: job.id,
           saved: job.sharedWorkspace,
+          reviewedWorkspace: job.reviewedWorkspace,
           resume,
           resourcesRunning: Boolean(frontendConnection.handle) ||
             frontendConnection.starting || Boolean(playwrightConnection.handle)
         });
+        delete job.reviewedWorkspace;
+        job.workspaceReview = null;
         if (job.sharedWorkspace) {
           persistDashboardState();
           const readiness = inspectRepository(resolvedRepository);
@@ -3597,14 +3657,97 @@ export function createDashboardServer({
     }
   }
 
+  function conversation() {
+    const job = currentJob ? publicJob(currentJob) : null;
+    let question = null;
+    let workspaceReview = null;
+    if (job?.permissionRequest) {
+      question = { kind: "permission", message: PERMISSION_BLOCKED_MESSAGE, actions: [] };
+    } else if (job?.manualLocalhostPending) {
+      question = { kind: "manual-test", message: "Report the actual manual localhost result.", actions: ["manual-pass", "manual-fail"] };
+    } else if (job?.workspaceReview) {
+      workspaceReview = reviewSharedWorktree(resolvedRepository, loadRepositoryProfile(resolvedRepository));
+      question = {
+        kind: "workspace",
+        message: "Review the current branch and diff. Explicitly reuse it with its existing PR, or preserve the work and resolve the blocker in the dashboard. No branch switch, reset or stash will be performed.",
+        actions: job.canResume && workspaceReview ? ["continue"] : []
+      };
+    } else if (job?.canResume && ["blocked", "failed"].includes(job.status)) {
+      question = {
+        kind: "recovery",
+        message: safePersistedSummary(job.error || "Choose how to continue this same job."),
+        actions: ["continue", "retry"]
+      };
+    }
+    return {
+      instanceId: sessions.id,
+      repository: resolvedRepository,
+      controlProtocol: 1,
+      job: job ? {
+        id: job.id, status: job.status, canResume: job.canResume, canComment: job.canComment,
+        canReviewPermissions: job.canReviewPermissions,
+        permissionRequest: job.permissionRequest ? {
+          id: job.permissionRequest.id,
+          kind: job.permissionRequest.kind,
+          scope: job.permissionRequest.scope ? { directory: job.permissionRequest.scope.directory } : null
+        } : null,
+        validationIntent: job.validationIntent,
+        stages: Object.fromEntries(Object.entries(job.stages).map(([stage, value]) => [
+          stage, { status: value.status, message: safePersistedSummary(value.message).slice(0, 500) }
+        ])),
+        validation: job.validation ? {
+          status: job.validation.status,
+          gates: job.validation.gates.map(({ id, status }) => ({ id, status }))
+        } : null,
+        pullRequestReadiness: job.pullRequestReadiness
+      } : null,
+      question, workspaceReview
+    };
+  }
+
   const server = createServer(async (request, response) => {
     const requestUrl = new URL(
       request.url,
       `http://${request.headers.host ?? DASHBOARD_HOST}`
     );
+    if (request.headers["x-fixlab-operation"] !== undefined) {
+      const operation = conversationOperations[request.headers["x-fixlab-operation"]];
+      response.fixlabCompact = true;
+      request.fixlabControlAction = operation?.action;
+      request.verifyConversation = () => {
+        if (!operation || operation.path !== requestUrl.pathname ||
+            operation.method !== request.method ||
+            request.headers.host !== `${DASHBOARD_HOST}:${server.address().port}` ||
+            request.headers.origin ||
+            request.headers["x-fixlab-instance"] !== sessions.id ||
+            request.headers["x-fixlab-job"] !== (currentJob?.id ?? "none") ||
+            request.headers["x-fixlab-repository"] !== encodeURIComponent(realpathSync(resolvedRepository)) ||
+            (request.method === "POST" && request.headers["x-fixlab-confirmed"] !== "true")) {
+          throw new Error("Dashboard control requires an authorized operation matching the current instance, repository and job. Read status again.");
+        }
+      };
+      try {
+        request.verifyConversation();
+        if (Number(request.headers["content-length"] ?? 0) > 64 * 1024) {
+          throw new Error("Dashboard control payload exceeds 64 KiB.");
+        }
+      } catch (error) {
+        sendJson(response, 409, { error: error.message });
+        return;
+      }
+    }
 
     if (closing && request.method === "POST") {
       sendJson(response, 503, { error: "the dashboard is shutting down" });
+      return;
+    }
+
+    if (request.method === "GET" && requestUrl.pathname === "/api/conversation") {
+      try {
+        sendJson(response, 200, conversation());
+      } catch (error) {
+        sendJson(response, 409, { error: error.message });
+      }
       return;
     }
 
@@ -4154,8 +4297,13 @@ export function createDashboardServer({
 
     if (
       request.method === "POST" &&
-      requestUrl.pathname === "/api/job/input"
+      ["/api/job/input", "/api/conversation/reply"].includes(requestUrl.pathname)
     ) {
+      const connectedReply = requestUrl.pathname === "/api/conversation/reply";
+      if (connectedReply && (request.headers.host !== `${DASHBOARD_HOST}:${server.address().port}` || request.headers.origin)) {
+        sendJson(response, 403, { error: "Connected replies require the exact loopback host and a non-browser client." });
+        return;
+      }
       if (!currentJob) {
         sendJson(response, 404, { error: "no FixLab job is available" });
         return;
@@ -4174,7 +4322,8 @@ export function createDashboardServer({
         });
         return;
       }
-      const running = currentJob.status === "running" && Boolean(activeHandle);
+      let running = currentJob.status === "running" && Boolean(activeHandle);
+      const inputJobId = currentJob.id;
       if (
         !running &&
         !["blocked", "failed", "passed"].includes(currentJob.status)
@@ -4204,6 +4353,23 @@ export function createDashboardServer({
         body = await readJsonBody(request);
       } catch (error) {
         sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (!currentJob || currentJob.id !== inputJobId) {
+        sendJson(response, 409, { error: "The current job changed while reading the reply. Read status again." });
+        return;
+      }
+      if (connectedReply && (body.confirmed !== true ||
+          body.instanceId !== sessions.id || body.jobId !== currentJob.id ||
+          typeof body.repository !== "string" ||
+          resolve(body.repository) !== resolvedRepository)) {
+        sendJson(response, 409, { error: "An explicit answer matching this dashboard instance, repository and job is required. Read status again." });
+        return;
+      }
+      running = currentJob.status === "running" && Boolean(activeHandle);
+      if (currentJob.resumeDisabled || currentJob.executorStopping ||
+          (!running && (activeHandle || !["blocked", "failed", "passed"].includes(currentJob.status)))) {
+        sendJson(response, 409, { error: "This job cannot safely accept a reply while its executor is stopping or incompatible." });
         return;
       }
       const action = body.action ?? "continue";
@@ -4278,6 +4444,33 @@ export function createDashboardServer({
         });
         return;
       }
+      if (body.validationIntent !== undefined && !["scoped", "full"].includes(body.validationIntent)) {
+        sendJson(response, 400, { error: "validationIntent must be scoped or full." });
+        return;
+      }
+      if (body.reviewedWorkspace && (running || !currentJob.workspaceReview ||
+          !["continue", "retry"].includes(action))) {
+        sendJson(response, 409, { error: "Reviewed workspace reuse is available only for a stopped workspace recovery question." });
+        return;
+      }
+      if (body.reviewedWorkspace) {
+        let review;
+        try {
+          review = reviewSharedWorktree(resolvedRepository, loadRepositoryProfile(resolvedRepository));
+        } catch (error) {
+          sendJson(response, 409, { error: `Workspace review failed: ${error.message}` });
+          return;
+        }
+        if (!review || body.reviewedWorkspace.branch !== review.branch ||
+            body.reviewedWorkspace.fingerprint !== review.fingerprint) {
+          sendJson(response, 409, { error: "The workspace changed since review. Read status and review the diff again." });
+          return;
+        }
+        currentJob.reviewedWorkspace = review;
+      }
+      if (body.validationIntent !== undefined) {
+        currentJob.validationIntent = body.validationIntent;
+      }
 
       const input = {
         action,
@@ -4298,7 +4491,7 @@ export function createDashboardServer({
           stream: "dashboard",
           message: `Comment ${currentJob.inputs.length} queued for the same FixLab session after the current agent turn.`
         });
-        sendJson(response, 202, {
+        sendJson(response, 202, connectedReply ? conversation() : {
           job: publicJob(currentJob),
           queued: true,
           queue: publicQueue(queuedJobs),
@@ -4312,7 +4505,7 @@ export function createDashboardServer({
         stream: "dashboard",
         message: `User input ${currentJob.inputs.length} accepted; resuming the same FixLab session.`
       });
-      const freshRetry = requiresFreshRetry(currentJob, action);
+      const freshRetry = requiresFreshRetry(currentJob, body.reviewedWorkspace ? "retry" : action);
       const prompt = freshRetry
         ? buildFreshRetryPrompt(currentJob, details)
         : buildResumePrompt(currentJob, { action, details });
@@ -4325,7 +4518,7 @@ export function createDashboardServer({
         recordJobMetric(currentJob);
         activeHandle = null;
       }
-      sendJson(response, 202, {
+      sendJson(response, 202, connectedReply ? conversation() : {
         job: publicJob(currentJob),
         queue: publicQueue(queuedJobs),
         held: publicHeld(heldJobs)
@@ -4827,6 +5020,11 @@ export function createDashboardServer({
         });
         return;
       }
+      const validationIntent = body.validationIntent ?? "full";
+      if (!["scoped", "full"].includes(validationIntent)) {
+        sendJson(response, 400, { error: "validationIntent must be scoped or full." });
+        return;
+      }
       const requestType = body.requestType ?? "bug-fix";
       if (!["bug-fix", "small-enhancement"].includes(requestType)) {
         sendJson(response, 400, {
@@ -5022,6 +5220,7 @@ export function createDashboardServer({
         createdAt: new Date().toISOString(),
         request: requestText,
         requestType,
+        validationIntent,
         model: selectedModel,
         runtime,
         pullRequestStrategy,
@@ -5344,7 +5543,7 @@ export function createDashboardServer({
         return;
       }
       try {
-        const result = await launchFrontend();
+        const result = await launchFrontend(request.verifyConversation);
         sendJson(response, result.started ? 202 : 200, {
           ...(await frontendStatus(resolvedRepository, frontendConnection)),
           ...result

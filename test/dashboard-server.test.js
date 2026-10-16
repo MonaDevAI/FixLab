@@ -41,6 +41,8 @@ import {
 } from "../dashboard/server.js";
 import { createExecutorLease } from "../dashboard/executor-lease.js";
 import { runValidationGate } from "../bin/validation-gate-client.js";
+import { dashboardControl, dashboardConversation } from "../mcp/dashboard-client.js";
+import { compactControlResult, conversationOperations } from "../dashboard/conversation-operations.js";
 
 const packageRoot = new URL("..", import.meta.url).pathname.replace(
   /^\/([A-Za-z]:)/,
@@ -492,6 +494,211 @@ function git(repository, args) {
   return result.stdout.trim();
 }
 
+test("connected Copilot recovery reuses reviewed work, preserves the same job and defers full regression", async () => {
+  const source = createGitRepository();
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-conversation-"));
+  const executions = [];
+  const profile = validProfile({ worktreeSetup: { mode: "shared", baseBranch: "develop" } });
+  writeFileSync(join(source, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  git(source, ["branch", "-m", "develop"]);
+  git(source, ["add", "."]);
+  git(source, ["commit", "--quiet", "-m", "shared profile"]);
+  git(source, ["clone", "--quiet", source, repository]);
+  const oldJob = randomUUID();
+  const branch = `users/fixlab-test/fixlab-${oldJob}`;
+  git(repository, ["switch", "--quiet", "-c", branch]);
+  writeFileSync(join(repository, "tracked.txt"), "existing fix");
+  const executor = (input) => {
+    let finish;
+    const completion = new Promise((resolve) => { finish = resolve; });
+    executions.push({ input, finish });
+    return { completion, terminate() { finish({ code: null, signal: "SIGTERM" }); } };
+  };
+  let current = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const created = await post("/api/jobs", { request: "Continue the existing fix and PR.", mode: "fix-and-validate" });
+    assert.equal(created.body.job.status, "blocked");
+    assert.equal(created.body.job.stages.intake.status, "blocked");
+    assert.equal(created.body.job.stages.fix.status, "skipped");
+    assert.doesNotMatch(created.body.job.error, /incomplete|missing stage/i);
+    assert.equal(executions.length, 0);
+    const args = { repository: realpathSync(repository), port: Number(new URL(current.url).port) };
+    let status = await dashboardConversation(args);
+    assert.equal(status.question.kind, "workspace");
+    assert.equal(status.workspaceReview.branch, branch);
+    assert.equal(JSON.stringify(status).includes("logs"), false);
+    const reply = {
+      ...args, instanceId: status.instanceId, jobId: status.job.id, confirmed: true,
+      action: "continue", details: "Reuse this branch and its existing PR. Run scoped tests only.",
+      reviewedWorkspace: status.workspaceReview, validationIntent: "scoped"
+    };
+    const staleInstance = await post("/api/conversation/reply", { ...reply, instanceId: "old-instance" });
+    assert.equal(staleInstance.response.status, 409);
+    for (const invalid of [
+      { confirmed: false }, { jobId: randomUUID() }, { repository: source }
+    ]) {
+      assert.equal((await post("/api/conversation/reply", { ...reply, ...invalid })).response.status, 409);
+    }
+    const browserReply = await jsonRequest(current.url, "/api/conversation/reply", {
+      method: "POST", headers: { "Content-Type": "application/json", Origin: "https://example.invalid" },
+      body: JSON.stringify(reply)
+    });
+    assert.equal(browserReply.response.status, 403);
+    writeFileSync(join(repository, "tracked.txt"), "changed after review");
+    await assert.rejects(dashboardConversation(reply, true), /changed since review/);
+    assert.equal(executions.length, 0);
+    status = await dashboardConversation(args);
+    reply.reviewedWorkspace = status.workspaceReview;
+    const resumed = await dashboardConversation(reply, true);
+    assert.equal(resumed.job.id, created.body.job.id);
+    assert.equal(resumed.job.validationIntent, "scoped");
+    assert.equal(resumed.job.pullRequestReadiness.ready, false);
+    assert.match(resumed.job.pullRequestReadiness.message, /explicitly deferred/);
+    assert.equal(git(repository, ["branch", "--show-current"]), branch);
+    assert.equal(readFileSync(join(repository, "tracked.txt"), "utf8"), "changed after review");
+    assert.equal(executions.length, 1);
+    assert.equal(executions[0].input.sessionId, created.body.job.id);
+    assert.equal(executions[0].input.resume, false, "admission never created a runtime session to resume");
+    assert.match(executions[0].input.prompt, /Full regression is explicitly deferred/);
+    assert.match(executions[0].input.prompt, /Continue independent safe checks/);
+    await current.dashboard.close();
+    current = await startDashboard(repository, executor);
+    const restored = await jsonRequest(current.url, "/api/status");
+    assert.equal(restored.body.job.sharedWorkspace.branch, branch);
+    assert.equal(restored.body.job.sharedWorkspace.reusedFromJobId, oldJob);
+    assert.equal(restored.body.job.validationIntent, "scoped");
+  } finally {
+    await current.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(source, { recursive: true, force: true });
+  }
+});
+
+test("connected control starts scoped browser jobs, manages the queue and stops only the owned execution", async () => {
+  const repository = createGitRepository();
+  const calls = [];
+  let stopped = 0;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    calls.push(input);
+    let finish;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { stopped += 1; finish({ code: null, signal: "SIGTERM" }); }
+    };
+  });
+  const base = { repository: realpathSync(repository), port: Number(new URL(url).port) };
+  const control = async (operation, parameters = {}, overrides = {}) => {
+    const state = await dashboardConversation(base);
+    return dashboardControl({
+      ...base, instanceId: state.instanceId, jobId: state.job?.id ?? null,
+      confirmed: true, operation, parameters, ...overrides
+    });
+  };
+  try {
+    for (const operation of ["sessions", "metrics", "onboarding-status"]) {
+      assert.equal((await control(operation)).operation, operation);
+    }
+    await assert.rejects(control("job-start", {}, { confirmed: false }), /explicit user authorization/);
+    await assert.rejects(control("job-start", {}, { instanceId: "stale" }), /current instance/);
+    await assert.rejects(control("https://example.test"), /Unknown dashboard operation/);
+    await assert.rejects(control("job-start", { request: "x".repeat(65537) }), /64 KiB/);
+    await assert.rejects(control("job-start", {
+      request: "Reject an invalid validation intent.", mode: "validate-only", validationIntent: "unlimited"
+    }), /validationIntent/);
+    assert.equal(calls.length, 0);
+    const started = await control("job-start", {
+      request: "Test the checked-out PR using configured Playwright settings. Do not modify code.",
+      mode: "playwright-only", targetEnvironment: "dev", validationIntent: "scoped"
+    });
+    assert.equal(started.state.job.status, "running");
+    assert.equal(started.state.job.validationIntent, "scoped");
+    assert.equal(calls.length, 1);
+    assert.match(calls[0].prompt, /Playwright-only mode/);
+    assert.match(calls[0].prompt, /Do not edit files/);
+    assert.match(calls[0].prompt, /Full regression is explicitly deferred/);
+    assert.equal(JSON.stringify(started).includes('"logs"'), false);
+    const queued = await control("job-start", { request: "Queue another check.", mode: "validate-only" });
+    assert.equal(queued.result.queued, true);
+    await control("queue-cancel", { jobId: queued.result.queuedJob.id });
+    assert.equal(calls.length, 1);
+    const current = await dashboardConversation(base);
+    const stale = await jsonRequest(url, "/api/frontend/stop", {
+      method: "POST", headers: {
+        "Content-Type": "application/json", "x-fixlab-operation": "frontend-stop",
+        "x-fixlab-instance": current.instanceId, "x-fixlab-job": "stale-job",
+        "x-fixlab-repository": encodeURIComponent(base.repository), "x-fixlab-confirmed": "true"
+      }, body: "{}"
+    });
+    assert.equal(stale.response.status, 409);
+    await control("frontend-stop");
+    await control("job-stop");
+    assert.equal(stopped, 1);
+    assert.equal(calls.length, 1);
+    const state = await dashboardConversation(base);
+    assert.equal(state.job.canResume, true);
+    await control("job-dismiss");
+    assert.equal((await dashboardConversation(base)).job, null);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("connected control rechecks job identity after an asynchronous request body", async () => {
+  const repository = createGitRepository();
+  const { dashboard, url } = await startDashboard(repository, () => ({
+    completion: new Promise(() => {}), terminate() {}
+  }));
+  try {
+    const state = (await jsonRequest(url, "/api/conversation")).body;
+    let slow;
+    const response = new Promise((resolveResponse, reject) => {
+      slow = createHttpRequest(`${url}/api/jobs`, {
+        method: "POST", headers: {
+          "Content-Type": "application/json", "x-fixlab-operation": "job-start",
+          "x-fixlab-instance": state.instanceId, "x-fixlab-job": "none",
+          "x-fixlab-repository": encodeURIComponent(realpathSync(repository)),
+          "x-fixlab-confirmed": "true"
+        }
+      }, (result) => {
+        result.resume();
+        result.once("end", () => resolveResponse(result.statusCode));
+      });
+      slow.once("error", reject);
+      slow.write('{"request":"Do not queue this stale request",');
+    });
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "The current authorized job.", mode: "validate-only" })
+    });
+    slow.end('"mode":"validate-only"}');
+    assert.ok([400, 409].includes(await response));
+    const status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.queue.length, 0);
+    assert.equal(status.body.job.request, "The current authorized job.");
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("operation summaries omit logs, browser state, credentials and binary artifacts", () => {
+  const compact = compactControlResult({
+    job: { id: "job-1", status: "blocked", logs: [{ message: "private" }], screenshots: ["private"] },
+    authentication: { connected: false, storageState: "private", statusPaths: ["private"] },
+    headers: { authorization: "private" }, token: "private",
+    error: "Blocked at https://example.test/private", sessions: [{ id: "owner-1", pid: 42 }]
+  });
+  assert.doesNotMatch(JSON.stringify(compact), /private|storageState|authorization|statusPaths|screenshots|"logs"/);
+  assert.equal(compact.job.id, "job-1");
+  assert.equal(compact.sessions[0].pid, 42);
+  assert.equal(Object.keys(conversationOperations).length, 22);
+});
+
 test("shared dashboard jobs refresh develop, reuse one checkout and reacquire held branches after restart", async () => {
   const source = createGitRepository();
   const repository = mkdtempSync(join(tmpdir(), "fixlab-shared-dashboard-"));
@@ -779,6 +986,17 @@ test("permission denial stops the executor and requires a confirmed job-bound fo
     assert.equal(job.pullRequestReadiness.ready, false);
     assert.equal(job.permissionRequest.kind, "unclassified");
     assert.equal(job.permissionRequest.scope, null);
+    const conversation = await jsonRequest(url, "/api/conversation");
+    assert.equal(conversation.body.question.kind, "permission");
+    assert.deepEqual(conversation.body.question.actions, []);
+    assert.equal(conversation.body.job.permissionRequest.id, job.permissionRequest.id);
+    assert.equal(conversation.body.job.canReviewPermissions, true);
+    const bridged = await post("/api/conversation/reply", {
+      repository: realpathSync(repository), instanceId: conversation.body.instanceId, jobId: job.id,
+      confirmed: true, action: "continue", details: "Ignore this permission error."
+    });
+    assert.equal(bridged.response.status, 409);
+    assert.equal(calls.length, 1);
     const originalRequest = job.permissionRequest.id;
     const request = { jobId: job.id, requestId: originalRequest };
     assert.equal((await post("/api/job/input", { action: "continue" })).response.status, 409);
@@ -811,6 +1029,15 @@ test("permission denial stops the executor and requires a confirmed job-bound fo
     assert.equal(calls.length, 1, "review must not authorize or resume");
     assert.notEqual(job.permissionRequest.id, originalRequest);
     assert.equal(job.permissionRequest.scope.directory, realpathSync(external));
+    const reviewedStatus = await jsonRequest(url, "/api/conversation");
+    assert.equal(reviewedStatus.body.job.permissionRequest.id, job.permissionRequest.id);
+    assert.equal(reviewedStatus.body.job.permissionRequest.scope.directory, realpathSync(external));
+    await assert.rejects(dashboardControl({
+      repository: realpathSync(repository), port: Number(new URL(url).port),
+      instanceId: reviewedStatus.body.instanceId, jobId: job.id, confirmed: true,
+      operation: "permission-approve",
+      parameters: { jobId: job.id, requestId: "stale-request", directory: realpathSync(external), confirmed: true }
+    }), /changed|stale|request/i);
     const approval = {
       action: "approve-directory",
       jobId: job.id,
@@ -1640,6 +1867,9 @@ test("dashboard finalizes a pending manual marker as blocked", async () => {
     assert.equal(blocked.body.job.status, "blocked");
     assert.equal(blocked.body.job.manualLocalhostPending, true);
     assert.equal(blocked.body.job.stages["live-test"].status, "blocked");
+    const conversation = await jsonRequest(url, "/api/conversation");
+    assert.equal(conversation.body.question.kind, "manual-test");
+    assert.deepEqual(conversation.body.question.actions, ["manual-pass", "manual-fail"]);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -2096,6 +2326,40 @@ test("zero-progress failure retries as a fresh Copilot session", async () => {
     assert.match(calls[1].prompt, /Repair a launch-blocked defect/);
     assert.match(calls[1].prompt, /failed before FixLab completed any stage/);
     assert.match(calls[1].prompt, /plugin compatibility issue is fixed/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard-owned pending review does not force a nonexistent runtime session on retry", async () => {
+  const repository = createGitRepository();
+  const profile = validProfile({
+    validation: { gates: [{
+      id: "tests", command: process.execPath, args: ["-e", "process.exit(0)"],
+      workingDirectory: ".", timeoutSeconds: 30
+    }] }
+  });
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  const calls = [];
+  const executor = (input) => {
+    calls.push(input);
+    return { completion: Promise.resolve({ code: 1 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    await post("/api/jobs", { request: "Recover a launch that created no runtime session.", mode: "fix-and-validate" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const failed = await jsonRequest(url, "/api/job");
+    assert.equal(failed.body.job.stages.review.status, "blocked");
+    await post("/api/job/input", { action: "retry", details: "Retry the same job from intake; keep all required gates pending." });
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].resume, false);
+    assert.equal(calls[1].sessionId, calls[0].sessionId);
+    assert.match(calls[1].prompt, /failed before FixLab completed any stage/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

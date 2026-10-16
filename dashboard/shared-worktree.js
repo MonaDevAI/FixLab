@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
+import { repositoryState } from "../bin/structured-command.js";
+
+const jobIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
 function git(repository, args, description) {
   const result = spawnSync("git", args, {
@@ -63,7 +67,33 @@ export function sharedWorktreeConfig(profile, repository) {
   return { remote, baseBranch, prefix };
 }
 
-export function prepareSharedWorktree({ repository, profile, jobId, saved = null, resume = false, resourcesRunning = false }) {
+export function reviewSharedWorktree(repository, profile) {
+  const config = sharedWorktreeConfig(profile, repository);
+  if (!config) {
+    return null;
+  }
+  const branch = git(repository, ["branch", "--show-current"], "Workspace review");
+  const prefix = `${config.prefix}/fixlab-`;
+  const owner = branch.startsWith(prefix) ? branch.slice(prefix.length) : "";
+  if (!jobIdPattern.test(owner)) {
+    return null;
+  }
+  const state = repositoryState(repository);
+  return {
+    branch,
+    head: state.head,
+    dirty: Boolean(git(repository, ["status", "--porcelain", "--untracked-files=all"], "Workspace review")),
+    fingerprint: createHash("sha256").update(JSON.stringify({ branch, config, state })).digest("hex")
+  };
+}
+
+function recoveryRequired(repository, profile, message) {
+  const error = new Error(message);
+  error.workspaceReview = reviewSharedWorktree(repository, profile);
+  return error;
+}
+
+export function prepareSharedWorktree({ repository, profile, jobId, saved = null, resume = false, resourcesRunning = false, reviewedWorkspace = null }) {
   const config = sharedWorktreeConfig(profile, repository);
   if (!config) {
     if (saved) {
@@ -71,7 +101,7 @@ export function prepareSharedWorktree({ repository, profile, jobId, saved = null
     }
     return null;
   }
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(jobId)) {
+  if (!jobIdPattern.test(jobId)) {
     throw new Error("Shared worktree jobs require a valid job ID");
   }
   const gitPath = (name) => {
@@ -83,11 +113,31 @@ export function prepareSharedWorktree({ repository, profile, jobId, saved = null
   }
   const currentBranch = git(repository, ["branch", "--show-current"], "Current branch verification");
   const dirty = git(repository, ["status", "--porcelain", "--untracked-files=all"], "Shared worktree cleanliness check");
+  if (reviewedWorkspace) {
+    const current = reviewSharedWorktree(repository, profile);
+    if (!current || current.branch !== reviewedWorkspace.branch ||
+        current.fingerprint !== reviewedWorkspace.fingerprint) {
+      throw recoveryRequired(repository, profile, "The workspace changed since review. Review the current branch and diff again before approving reuse.");
+    }
+    if (saved && saved.branch !== current.branch) {
+      throw new Error("Reviewed reuse cannot replace this job's assigned branch.");
+    }
+    const baseCommit = git(repository, [
+      "merge-base", "HEAD", `refs/remotes/${config.remote}/${config.baseBranch}`
+    ], "Existing branch base verification");
+    return {
+      mode: "shared", branch: current.branch, baseCommit,
+      remote: config.remote, baseBranch: config.baseBranch,
+      reusedFromJobId: current.branch.slice(`${config.prefix}/fixlab-`.length)
+    };
+  }
   if (saved) {
     const branch = branchRef(repository, saved.branch, "Saved job branch");
     if (
       saved.mode !== "shared" ||
-      !branch.endsWith(`/fixlab-${jobId}`) ||
+      !(saved.reusedFromJobId
+        ? jobIdPattern.test(saved.reusedFromJobId) && branch === `${config.prefix}/fixlab-${saved.reusedFromJobId}`
+        : branch.endsWith(`/fixlab-${jobId}`)) ||
       !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(saved.baseCommit) ||
       typeof saved.remote !== "string" ||
       !/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(saved.remote)
@@ -109,13 +159,13 @@ export function prepareSharedWorktree({ repository, profile, jobId, saved = null
     return saved;
   }
   if (resume) {
-    throw new Error("This older job has no saved shared-worktree branch. Resume it with its original workspace policy; do not guess its branch");
+    throw recoveryRequired(repository, profile, "This older job has no saved shared-worktree branch. Resume it with its original workspace policy or explicitly review and reuse the current job branch; do not guess its branch");
   }
   if (resourcesRunning) {
-    throw new Error("Stop the shared checkout's owned React and authentication sessions before starting another job branch");
+    throw recoveryRequired(repository, profile, "Stop the shared checkout's owned React and authentication sessions before starting another job branch, or explicitly review reuse of the current branch");
   }
   if (dirty) {
-    throw new Error("The shared worktree has uncommitted or untracked files; preserve them before starting another job");
+    throw recoveryRequired(repository, profile, "The shared worktree has uncommitted or untracked files; preserve them before starting another job, or explicitly review reuse of the current branch");
   }
   const branch = branchRef(repository, `${config.prefix}/fixlab-${jobId}`, "New job branch");
   git(repository, [
@@ -143,6 +193,7 @@ export function sharedWorktreeGuidance(workspace) {
 - The dashboard has exclusively acquired this checkout on branch ${workspace.branch}, based on ${workspace.remote}/${workspace.baseBranch} at ${workspace.baseCommit}.
 - Work in this checkout and on this exact branch. Do not create another worktree, switch branches, reset, stash, clean, or merge/rebase the base branch.
 - Reuse this job's existing PR on resume. Another job can use the same folder only after owned execution stops and the checkout is clean.
+- When this branch was explicitly reused, continue its existing PR for this branch; do not create a duplicate PR or discard reviewed uncommitted changes.
 - Check dependency and configuration readiness for the selected branch; cached dependencies are not proof that changed manifests were restored.
 - Recheck frontend health and authenticated access after reacquisition. Browser/session state and build outputs are not evidence that a previous branch is still loaded.`;
 }

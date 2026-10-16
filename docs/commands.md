@@ -98,16 +98,74 @@ validation, and reports evidence for developer review.
 
 ## MCP server
 
-FixLab ships a repository-local, read-only MCP server:
+FixLab ships a repository-local stdio MCP server:
 
 ```shell
 fixlab-mcp
 ```
 
 The `.vscode/mcp.json` configuration starts it over standard input/output. It
-exposes tools to summarize FixLab profile readiness and discover repository
-validation commands. The server does not execute validation, modify files,
-read credentials, or make network requests.
+exposes read-only tools to summarize FixLab profile readiness and discover
+repository validation commands. These tools do not execute commands or make
+network requests.
+
+`fixlab_dashboard_status` and `fixlab_dashboard_reply` additionally connect an
+existing conversation to a running loopback dashboard using an explicit
+repository and port. Status returns a compact question and gate summary,
+without raw logs. Reply requires the user's explicit answer and matching
+instance/job IDs, and may queue a comment or resume that same job. It does not
+start a replacement job or grant runtime permissions. The dashboard retains
+execution, process ownership and validation authority. See
+[Copilot dashboard chat setup](installation.md#chat-with-an-existing-dashboard-from-copilot).
+
+### Copilot dashboard control
+
+`fixlab_dashboard_control` accepts `repository`, loopback `port`, current
+`instanceId`, current `jobId` (or `null` when none), `operation` and a
+`parameters` object containing the normal dashboard API payload.
+Mutations require `confirmed: true` representing actual user authorization.
+Read status again after a conflict or timeout; do not blindly replay an
+operation that may already have started.
+
+| Operations | Parameters / behavior |
+|---|---|
+| `sessions`, `onboarding-status`, `frontend-status`, `authentication-status` | `{}`; reads existing configuration/session status |
+| `metrics` | Optional `period`; reads aggregate metrics |
+| `job-start` | `request`, `mode`, optional `targetEnvironment`, model and existing job options; creates/queues a job |
+| `job-stop`, `job-dismiss` | `{}`; acts on the bound current job |
+| `job-hold`, `job-resume`, `job-restart`, `queue-cancel` | `jobId` identifies the existing current/held/queued job; restart explicitly creates a new job, unlike recovery reply |
+| `history-purge` | Existing dashboard purge payload and confirmation; never removes code or untracked source |
+| `frontend-start`, `frontend-stop` | `{}`; uses profile settings and tracked process ownership |
+| `authentication-start` | `{}`; opens configured human sign-in, never supplies credentials or completes MFA |
+| `session-control` | `ownerId`, `jobId`, `action`, `resource`, and `confirmed` where required by normal session controls |
+| `permission-review` | `jobId`, `requestId`, `directory`; reviews the exact existing folder request |
+| `permission-approve` | Reviewed `jobId`, fresh `requestId`, exact `directory`, `confirmed: true`; never grants tools or URLs |
+| `validation-run` | `jobId`, `gateId`, `repository`; runs only a configured required gate on the assigned checkout |
+| `onboarding-configure` | Existing Azure DevOps organization/project settings; preserves onboarding validation |
+| `work-items-load` | Existing Azure DevOps intake selection; preserves authenticated read-only loading |
+
+Control uses an explicit route allow-list, not arbitrary URLs or shell
+commands. The server checks instance/repository/job identity before dispatch
+and again after reading a request body. Responses contain only bounded
+operational metadata, not raw logs, credentials, screenshots or browser-state
+files; full evidence remains in the dashboard. A start/stop acceptance is not
+proof that a test passed. Ordinary operations have a ten-second deadline;
+configured validation gates retain the bounded gate execution deadline.
+
+For example, after status verifies the correct PR checkout, start browser-only
+testing with `operation: "job-start"` and:
+
+```json
+{
+  "request": "Test this PR using the configured Playwright settings; do not change code.",
+  "mode": "playwright-only",
+  "targetEnvironment": "dev"
+}
+```
+
+Use only an environment allowed by that repository's profile. An already
+running or blocked job can cause this request to queue; inspect the returned
+job/queue state rather than assuming immediate execution.
 
 ## Local dashboard command
 

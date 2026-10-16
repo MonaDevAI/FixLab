@@ -75,6 +75,15 @@ available for a direct Agency-like interactive agent session.
 
 Example UI request:
 
+To control an existing dashboard from the current Copilot conversation, connect
+the bundled MCP server using the
+[Copilot dashboard chat setup](docs/installation.md#chat-with-an-existing-dashboard-from-copilot).
+It supports status and recovery replies plus existing dashboard job, queue,
+validation, frontend, authentication, permission and intake operations.
+For example: "FixLab, test this PR using the configured Playwright settings;
+do not change code." The host verifies the PR checkout and uses browser-only
+mode rather than starting a full fix/regression job.
+
 ```text
 Reproduce this React UI bug, make the smallest fix, run focused tests and
 Playwright, capture evidence, and create or update the PR.

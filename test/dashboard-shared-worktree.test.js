@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { prepareSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "../dashboard/shared-worktree.js";
+import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "../dashboard/shared-worktree.js";
 
 function git(repository, ...args) {
   const result = spawnSync("git", args, { cwd: repository, encoding: "utf8", windowsHide: true });
@@ -180,6 +180,46 @@ test("shared configuration is explicit and invalid or legacy ownership fails clo
     const saved = prepare(f, { jobId: id });
     assert.throws(() => prepare(f, { jobId: randomUUID(), saved }), /ownership is invalid/);
     assert.throws(() => prepare(f, { jobId: id, saved, profile: {} }), /restore shared mode/);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("explicit reviewed reuse preserves a dirty existing PR branch without fetching or switching", () => {
+  const f = fixture();
+  try {
+    const originalId = randomUUID();
+    const original = prepare(f, { jobId: originalId });
+    writeFileSync(join(f.repository, "tracked.txt"), "reviewed work");
+    writeFileSync(join(f.repository, "untracked.txt"), "preserve too");
+    const review = reviewSharedWorktree(f.repository, f.profile);
+    assert.equal(review.branch, original.branch);
+    assert.equal(review.dirty, true);
+    git(f.repository, "remote", "set-url", "origin", join(f.root, "unavailable"));
+    const jobId = randomUUID();
+    const saved = prepare(f, { jobId, resume: true, reviewedWorkspace: review });
+    assert.equal(saved.branch, original.branch);
+    assert.equal(saved.reusedFromJobId, originalId);
+    assert.equal(readFileSync(join(f.repository, "tracked.txt"), "utf8"), "reviewed work");
+    assert.equal(readFileSync(join(f.repository, "untracked.txt"), "utf8"), "preserve too");
+    assert.deepEqual(prepare(f, { jobId, saved, resume: true, resourcesRunning: true }), saved);
+    assert.match(sharedWorktreeGuidance(saved), /existing PR for this branch/);
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("workspace reuse rejects stale reviews, protected branches and in-progress Git operations", () => {
+  const f = fixture();
+  try {
+    assert.equal(reviewSharedWorktree(f.repository, f.profile), null);
+    prepare(f);
+    const review = reviewSharedWorktree(f.repository, f.profile);
+    writeFileSync(join(f.repository, "tracked.txt"), "not reviewed");
+    assert.throws(() => prepare(f, { reviewedWorkspace: review }), /changed since review/);
+    const fresh = reviewSharedWorktree(f.repository, f.profile);
+    writeFileSync(join(f.repository, ".git", "MERGE_HEAD"), fresh.head);
+    assert.throws(() => prepare(f, { reviewedWorkspace: fresh }), /in-progress Git operation/);
   } finally {
     rmSync(f.root, { recursive: true, force: true });
   }

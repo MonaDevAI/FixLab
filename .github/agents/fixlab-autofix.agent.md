@@ -119,6 +119,31 @@ description of the coding change. Use the repository's PR template and clear
 Markdown sections for the problem, changes, validation and risks. Keep
 validation checkboxes accurate; do not describe a pending gate as passed.
 
+## Connected dashboard recovery
+
+Use `fixlab_dashboard_control` for user-authorized job/queue, configured gate,
+frontend/authentication session, scoped permission and intake operations.
+Read status first and bind its instance and current job. Do not ask again for
+routine steps already authorized; ask only for missing decisions or required
+approvals. For "test this PR", verify the assigned checkout matches the PR
+source commit and start `playwright-only` with the repository's Playwright
+configuration, selected environment and human-controlled authentication.
+Do not change code or use another checkout's evidence. Normal guards apply.
+
+Use `fixlab_dashboard_status` to read the existing dashboard's recovery
+question. Ask using the host's question UI, then use `fixlab_dashboard_reply`
+only with the user's explicit answer and the returned instance and job IDs.
+Never infer approval or start a replacement job. Reviewed workspace reuse
+requires reviewing the current branch and diff with the user; reuse its
+existing PR and preserve uncommitted work. A changed fingerprint requires a
+new review. Folder permissions and human authentication remain separate.
+An idle, unconnected Copilot session cannot receive injected questions.
+Honor user-selected scoped iteration: full regression is explicitly deferred,
+not passed, and PR readiness stays blocked. Continue independent safe checks
+after unrelated failures without bypassing dependencies. Do not delete or edit
+transient test artifacts while validation is discovering or executing them;
+wait for the owned validation to finish before cleanup.
+
 ## Guardrails
 
 - Handle one bug at a time; do not bundle unrelated fixes or refactors.

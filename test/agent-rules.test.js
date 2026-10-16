@@ -152,6 +152,30 @@ test("cross-runtime validation guidance stays aligned", () => {
   assert.match(browserRule, /event registration/);
 });
 
+test("connected recovery and scoped iteration guidance remain aligned across runtimes", () => {
+  const root = join(testDirectory, "..");
+  for (const entryPoint of [
+    "dashboard/server.js", "bin/fixlab.js", "agents/fixlab.md",
+    "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md"
+  ]) {
+    const content = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    for (const contract of [
+      /fixlab_dashboard_status/, /fixlab_dashboard_reply/,
+      /fixlab_dashboard_control/, /Do not ask again for routine steps/,
+      /checkout matches the PR source commit/,
+      /playwright-only/, /repository's Playwright configuration/,
+      /host's question UI/, /user's explicit answer/,
+      /full regression is explicitly deferred, not passed/,
+      /PR readiness stays blocked/, /Continue independent safe checks/,
+      /changed fingerprint requires a new review/,
+      /Do not delete or edit transient test artifacts while validation is discovering or executing them/
+    ]) {
+      assert.match(content, contract, entryPoint);
+    }
+  }
+});
+
 test("every runtime prepares worktrees with scoped approval and human authentication", () => {
   const root = join(testDirectory, "..");
   for (const entryPoint of [

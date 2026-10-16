@@ -193,10 +193,10 @@ export class ValidationSession {
       const after = JSON.stringify(repositoryState(repository));
       const gateStatus = controller.signal.aborted
         ? "cancelled"
-        : status !== 0
-          ? "failed"
-          : state !== after
-            ? "stale"
+        : state !== after
+          ? "stale"
+          : status !== 0
+            ? "failed"
             : "passed";
       this.results.set(id, {
         status: gateStatus,

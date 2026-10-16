@@ -67,6 +67,50 @@ to the same dashboard-owned runtime session. Exiting the terminal leaves the
 job running; an explicit stop request terminates only the executor owned by
 that job.
 
+The stdio MCP server also connects an existing host conversation to that
+dashboard. `fixlab_dashboard_status` reads a bounded `/api/conversation`
+projection containing instance/repository/job identity, stages, gate status
+and an actionable recovery question, without raw logs or private inputs.
+`fixlab_dashboard_reply` submits an explicit user answer to
+`/api/conversation/reply`. The server checks instance, repository and current
+job identity after reading the request body, before any state change. Stale
+answers conflict instead of targeting a replacement job. Permissions and
+authentication retain their separate approval flows. The host must invoke
+status and its question UI; MCP does not inject prompts into idle sessions.
+
+`fixlab_dashboard_control` covers existing job/queue, profile gate, frontend,
+authentication, scoped permission, session and intake operations through a
+fixed route allow-list. Each request carries the expected instance, canonical
+repository and current job; writes also carry explicit user authorization.
+The dashboard advertises the identity-bound control protocol; MCP refuses
+older dashboards rather than sending requests whose guards could be ignored.
+The server verifies these before dispatch and after asynchronous body reads,
+then runs the original handler and its existing safety checks. Forwarded
+responses use bounded operational metadata rather than raw logs, browser state
+or credentials. The bridge does not replace authentication, process ownership,
+permission nonces, environment approvals or executor-backed validation.
+Browser-only PR requests must verify the assigned source commit and use the
+repository's Playwright configuration instead of guessing commands or quietly
+expanding to full regression.
+
+Shared-checkout admission failures on an eligible configured-user FixLab
+branch expose a reviewed-reuse question instead of misleading incomplete
+stage markers. Explicit approval binds the branch, HEAD, profile branch
+configuration and tracked/untracked content fingerprint. Admission rechecks
+this under the executor lease, preserves the current branch and work, records
+the original branch-owner job ID, and does not fetch or switch. Saved ownership
+still verifies branch format and base ancestry on subsequent resumes.
+In-progress Git operations and unverified executor termination remain blocked.
+When admission never started a runtime session, reviewed recovery starts one
+with the same job ID rather than attempting to resume a nonexistent session.
+Dashboard-generated pending-gate review blockers do not count as agent progress
+for a zero-progress launch retry.
+
+User-selected scoped iteration is persisted separately from gate evidence.
+Full regression remains deferred and readiness blocked until the user
+selects full validation and the required gates pass. Independent safe checks
+can continue after unrelated failures; dependencies and approvals still apply.
+
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the
 packaged Agency plugin, and retains one active job plus a bounded 20-job
