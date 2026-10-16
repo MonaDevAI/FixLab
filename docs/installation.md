@@ -165,6 +165,52 @@ ask for status when you want progress or have Copilot check at workflow
 boundaries. A separate background dashboard cannot create native prompts in
 an unconnected conversation.
 
+### Change-only Copilot notifications
+
+For a Copilot CLI version supporting extensions and the `joinSession` SDK,
+FixLab can monitor one job without a scheduled Copilot polling loop:
+
+```powershell
+fixlab notifications C:\source\application
+fixlab notifications C:\source\application --yes
+```
+
+The first command only prints the installation plan. `--yes` installs trusted
+local extension code under the repository's `.github/extensions` directory.
+It does not start a dashboard, watcher or model turn. The loader references the
+current FixLab installation: keep it untracked, keep that installation present,
+and review any existing extension before replacing it. Nested repository paths
+resolve to the Git root; linked extension paths and overwrites are rejected.
+
+Reload Copilot extensions, then ask Copilot to read `fixlab_dashboard_status`
+and start `fixlab_watch_start` with its exact repository, port, `instanceId`
+and `jobId`. Explicitly consent to event-triggered Copilot turns; the tool's
+`confirmed: true` must represent that consent. The existing MCP bridge remains
+the path for answering blockers and controlling the job.
+
+The extension polls the compact loopback status every ten seconds using local
+Node.js code, with no AI call for unchanged status. A new actionable blocker,
+completion or stopped watch queues one Copilot message. These event-triggered
+turns still consume tokens. Repeated identical blockers do not create repeated
+turns; permission request nonces distinguish new permission reviews. Copilot
+reads fresh state and asks through the host's question UI, never treating an
+event as approval.
+
+Use `fixlab_watch_status` to refresh the exact watched job and
+`fixlab_watch_stop` to stop notifications without stopping the job. Monitoring
+ends after completion, hold/cancellation, a changed instance/current job, three
+consecutive status-read failures, or ambiguous host-delivery failure. It never
+automatically attaches another job or retries an ambiguously delivered prompt.
+Closing/replacing the Copilot session loses its in-memory watch; reconnect and
+consent again. Polling can miss short-lived states; a replacement-job event
+does not claim that the old job succeeded.
+
+This extension does not install a permanent operating-system service, run
+outside the connected Copilot session, read raw logs/browser state, or grant
+runtime, authentication, publication or deployment permissions. Older
+dashboards that mark scoped success blocked retain that limitation; a
+notification does not turn their deferred gates into passes.
+
 ### Intelligent Windows bootstrap
 
 An npm-based installer cannot recover when the shell resolves a damaged or

@@ -45,6 +45,7 @@ import {
   planWorktreeSetup
 } from "../dashboard/repository-setup.js";
 import { runValidationGate } from "./validation-gate-client.js";
+import { installNotifications } from "./notifications.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -90,6 +91,7 @@ Usage:
   fixlab <repository> [--runtime <agency|copilot>] [--model <model>]
   fixlab onboard [repository] [--from <source-checkout>] [--yes] [--authenticate] [--start-dashboard] [--runtime <agency|copilot>] [--model <model>]
   fixlab init [repository]
+  fixlab notifications [repository] [--yes]
   fixlab prepare [repository] [--yes]
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
@@ -108,6 +110,8 @@ Commands:
             Open an interactive FixLab shell for setup, fixes, and validation.
   onboard   Run the plan-first repository onboarding workflow.
   init      Add the FixLab repository profile template.
+  notifications
+            Plan or install change-only Copilot notifications (no AI polling).
   prepare   Plan or run repository-owned frontend and backend restore commands.
   doctor    Check required tools and repository configuration.
   setup-playwright
@@ -1666,6 +1670,16 @@ async function main(args) {
 
   if (command === "init") {
     return init(resolveRepository(rest[0]));
+  }
+
+  if (command === "notifications") {
+    if (rest.filter((value) => !value.startsWith("-")).length > 1 ||
+        rest.some((value) => value.startsWith("-") && value !== "--yes")) {
+      throw new Error("Usage: fixlab notifications [repository] [--yes]");
+    }
+    const repository = resolveRepository(rest.find((value) => !value.startsWith("-")));
+    console.log(JSON.stringify(installNotifications(repository, packageRoot, rest.includes("--yes")), null, 2));
+    return 0;
   }
 
   if (command === "doctor") {
