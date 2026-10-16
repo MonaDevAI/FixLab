@@ -167,6 +167,28 @@ Use only an environment allowed by that repository's profile. An already
 running or blocked job can cause this request to queue; inspect the returned
 job/queue state rather than assuming immediate execution.
 
+## Change-only Copilot notifications
+
+```text
+fixlab notifications [repository] [--yes]
+```
+
+Plan the installation first, then use `--yes` to add a project-local Copilot
+extension loader referencing this installation. Existing custom code is never
+overwritten. Reload extensions and explicitly start one job-bound monitor
+using `fixlab_watch_start`; installation alone starts nothing.
+
+| Extension tool | Behavior |
+| --- | --- |
+| `fixlab_watch_start` | Requires repository, port, instance/job IDs and explicit `confirmed: true` consent to event-triggered model turns |
+| `fixlab_watch_status` | Refreshes compact state for that same watched identity |
+| `fixlab_watch_stop` | Stops notifications, not the dashboard job |
+
+Unchanged status checks make no model calls. Only new blockers, completion or
+watch termination enqueue Copilot turns, which still consume tokens. No event
+approves an action or passes a validation gate. See
+[installation and lifecycle limits](installation.md#change-only-copilot-notifications).
+
 ## Local dashboard command
 
 ```text

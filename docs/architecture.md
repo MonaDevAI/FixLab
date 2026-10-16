@@ -78,6 +78,25 @@ answers conflict instead of targeting a replacement job. Permissions and
 authentication retain their separate approval flows. The host must invoke
 status and its question UI; MCP does not inject prompts into idle sessions.
 
+An optional Copilot notification extension supplies event-only delivery
+separately from that request/response MCP bridge. Its in-process Node.js
+monitor reads the same bounded loopback projection without model calls,
+bound to one canonical repository, dashboard instance and job. Unchanged
+states stay local. New blocker fingerprints, reviewed permission nonces,
+completion and monitor termination enqueue a host turn through
+`session.send({ mode: "enqueue" })`; those turns still consume tokens.
+Messages contain identity and event metadata, not raw blocker instructions,
+logs or request bodies. The host refreshes state before presenting a decision
+and retains all existing explicit-approval and mutation guards.
+
+Installation and starting a watch are separate opt-ins. The monitor does not
+persist configuration or job content, automatically follow replacement jobs,
+or continue beyond its Copilot session. Completion, hold/cancellation and
+identity replacement end the watch. Consecutive read failures are bounded,
+and ambiguous message-delivery failures stop rather than creating duplicate
+approval prompts. Private history, required gate evidence and executor process
+ownership are unchanged. This monitor observes state, not the runtime itself.
+
 `fixlab_dashboard_control` covers existing job/queue, profile gate, frontend,
 authentication, scoped permission, session and intake operations through a
 fixed route allow-list. Each request carries the expected instance, canonical

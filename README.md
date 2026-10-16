@@ -80,6 +80,10 @@ the bundled MCP server using the
 [Copilot dashboard chat setup](docs/installation.md#chat-with-an-existing-dashboard-from-copilot).
 It supports status and recovery replies plus existing dashboard job, queue,
 validation, frontend, authentication, permission and intake operations.
+For automatic change-only prompts without scheduled AI polling, opt into the
+[Copilot notification extension](docs/installation.md#change-only-copilot-notifications).
+Its local monitor makes no model calls while checking status; only new
+blockers, completion or an ended connection enqueue Copilot turns.
 For example: "FixLab, test this PR using the configured Playwright settings;
 do not change code." The host verifies the PR checkout and uses browser-only
 mode rather than starting a full fix/regression job.
