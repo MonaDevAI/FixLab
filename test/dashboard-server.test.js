@@ -5355,6 +5355,84 @@ test("dashboard gate execution rejects forged readiness and stale final-source e
   }
 });
 
+test("dashboard API-only policy preserves scope across recovery and explicit full validation", async () => {
+  const repository = createGitRepository();
+  const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+  const profile = validProfile({
+    validation: {
+      apiOnly: {
+        baseRef: "HEAD",
+        paths: ["api"],
+        fullValidationPaths: ["api/Contracts"],
+        gateIds: ["backend-tests"]
+      },
+      gates: [
+        { id: "backend-tests", command: process.execPath, args: ["-e", "process.exit(0)"], workingDirectory: ".", timeoutSeconds: 30 },
+        { id: "frontend-tests", command: process.execPath, args: ["-e", "process.exit(23)"], workingDirectory: ".", timeoutSeconds: 30 }
+      ]
+    }
+  });
+  mkdirSync(join(repository, "api"));
+  writeFileSync(profilePath, JSON.stringify(profile));
+  git(repository, ["add", "."]);
+  git(repository, ["commit", "--quiet", "-m", "Reviewed API validation policy"]);
+  let finish;
+  let emit;
+  let prompt;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    emit = input.onOutput;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); }
+    };
+  });
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", { request: "Validate the internal API correction.", mode: "validate-only" });
+    const jobId = started.body.job.id;
+    assert.equal(started.body.job.validationIntent, "affected");
+    assert.match(prompt, /dashboard, not the agent, determines applicability/);
+    writeFileSync(join(repository, "api", "service.cs"), "corrected");
+    const excluded = await post("/api/validation/run", { jobId, gateId: "frontend-tests", repository });
+    assert.equal(excluded.body.outcome, "not-applicable");
+    assert.equal((await post("/api/validation/run", { jobId, gateId: "backend-tests", repository })).body.status, 0);
+    emit("stdout", "FIXLAB_TEST|synthetic-intercepted|intercepted|Verify API-only validation policy.\n");
+    for (const stage of FIXLAB_STAGES) {
+      emit("stdout", `FIXLAB_STAGE|${stage}|passed|Verified applicable scope\n`);
+    }
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    let status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.job.status, "passed");
+    assert.equal(status.body.job.validation.scope, "api-only");
+    assert.equal(status.body.job.validation.gates[1].status, "not-applicable");
+    const conversation = await jsonRequest(url, "/api/conversation");
+    assert.equal(conversation.body.job.validation.scope, "api-only");
+    assert.equal(conversation.body.job.validation.gates[1].required, false);
+    assert.match(conversation.body.job.validation.gates[1].reason, /API-only/);
+    const resumed = await dashboardConversation({
+      repository, port: new URL(url).port * 1,
+      instanceId: conversation.body.instanceId, jobId,
+      confirmed: true, action: "continue", details: "Run all configured checks explicitly.",
+      validationIntent: "full"
+    }, true);
+    assert.equal(resumed.job.validationIntent, "full");
+    assert.equal(resumed.job.validation.scope, "all");
+    assert.equal((await post("/api/validation/run", { jobId, gateId: "frontend-tests", repository })).body.status, 23);
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.job.validation.status, "blocked");
+    assert.equal(status.body.job.pullRequestReadiness.ready, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("holding and held jobs cannot expose stale gate passes as PR readiness", async () => {
   const repository = createGitRepository();
   writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({

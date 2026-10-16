@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { mkdtempSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer as createPortProbe } from "node:net";
+import { spawnSync } from "node:child_process";
 
 const packageRoot = process.env.FIXLAB_TEST_PACKAGE_ROOT ??
   fileURLToPath(new URL("..", import.meta.url));
@@ -135,6 +136,95 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await dashboard.close();
   rmSync(repository, { recursive: true, force: true });
+});
+
+test("API-only gates display not applicable and explicit full coverage still executes frontend tests", async ({ page }) => {
+  const scopedRepository = mkdtempSync(join(tmpdir(), "fixlab-api-scope-e2e-"));
+  const directory = join(scopedRepository, ".github", "fixlab");
+  mkdirSync(directory, { recursive: true });
+  mkdirSync(join(scopedRepository, "api"));
+  const profile = JSON.parse(readFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), "utf8"));
+  profile.validation = {
+    apiOnly: {
+      baseRef: "HEAD",
+      paths: ["api"],
+      fullValidationPaths: ["api/Contracts"],
+      gateIds: ["backend-tests"]
+    },
+    gates: [
+      { id: "backend-tests", command: process.execPath, args: ["-e", "process.exit(0)"], workingDirectory: ".", timeoutSeconds: 30 },
+      { id: "frontend-tests", command: process.execPath, args: ["-e", "process.exit(23)"], workingDirectory: ".", timeoutSeconds: 30 }
+    ]
+  };
+  writeFileSync(join(directory, "repository-profile.json"), JSON.stringify(profile));
+  writeFileSync(join(scopedRepository, "api", "service.cs"), "initial");
+  const git = (args) => {
+    const result = spawnSync("git", args, { cwd: scopedRepository, encoding: "utf8", windowsHide: true });
+    expect(result.status, result.stderr).toBe(0);
+  };
+  git(["init", "--quiet"]);
+  git(["add", "."]);
+  git(["-c", "user.name=FixLab Test", "-c", "user.email=fixlab@example.test", "commit", "--quiet", "-m", "fixture"]);
+  let finish;
+  let emit;
+  const scopedDashboard = createDashboardServer({
+    repository: scopedRepository,
+    packageRoot,
+    executor(input) {
+      emit = input.onOutput;
+      writeFileSync(join(scopedRepository, "api", "service.cs"), "corrected");
+      return {
+        completion: new Promise((resolve) => { finish = resolve; }),
+        terminate() { finish({ code: 130 }); }
+      };
+    }
+  });
+  try {
+    const address = await scopedDashboard.listen({ port: await availablePort() });
+    await page.goto(address.url);
+    await page.getByRole("radio", { name: "Validate only", exact: true }).check();
+    const start = async (coverage) => {
+      await page.getByLabel("Bug or required enhancement").fill("Verify internal API validation.");
+      await page.getByLabel("Validation coverage").selectOption(coverage);
+      const response = page.waitForResponse((result) =>
+        result.url().endsWith("/api/jobs") && result.request().method() === "POST");
+      await page.getByRole("button", { name: "Start job", exact: true }).click();
+      const result = await response;
+      expect(result.status()).toBe(202);
+      return (await result.json()).job.id;
+    };
+    const gate = async (jobId, gateId) => {
+      const response = await page.request.post(`${address.url}/api/validation/run`, {
+        data: { jobId, gateId, repository: scopedRepository }
+      });
+      expect(response.status()).toBe(200);
+      return response.json();
+    };
+    const complete = () => {
+      emit("stdout", "FIXLAB_TEST|synthetic-intercepted|intercepted|Verify API-scope dashboard labels.\n");
+      for (const stage of ["intake", "diagnosis", "reproduce", "fix", "review", "local-stack", "live-test", "pr"]) {
+        emit("stdout", `FIXLAB_STAGE|${stage}|passed|Verified applicable evidence\n`);
+      }
+      finish({ code: 0 });
+    };
+    const jobId = await start("affected");
+    expect((await gate(jobId, "frontend-tests")).outcome).toBe("not-applicable");
+    expect((await gate(jobId, "backend-tests")).status).toBe(0);
+    complete();
+    await expect(page.locator("#validation-summary")).toContainText("API-scope validation passed");
+    const frontend = page.locator("#validation-gates article").filter({ hasText: "frontend-tests" });
+    await expect(frontend).toContainText("Not applicable");
+    await expect(frontend).not.toContainText("passed");
+    await expect(page.locator("#start-button")).toHaveText("Start job");
+    const fullJobId = await start("full");
+    expect((await gate(fullJobId, "frontend-tests")).status).toBe(23);
+    complete();
+    await expect(frontend).toContainText("failed");
+    await expect(page.locator("#validation-summary")).not.toContainText("API-scope validation passed");
+  } finally {
+    await scopedDashboard.close();
+    rmSync(scopedRepository, { recursive: true, force: true });
+  }
 });
 
 test("runtime folder approval is reviewed and confirmed in the browser without another terminal", async ({ page }) => {

@@ -28,19 +28,74 @@ function containedDirectory(repository, value) {
   return directory;
 }
 
+function scopeGit(repository, args) {
+  const result = spawnSync("git", args, {
+    cwd: repository,
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: 5000,
+    maxBuffer: 1024 * 1024
+  });
+  if (result.status !== 0) {
+    throw new Error("Could not verify the complete Git change set; all configured gates are required.");
+  }
+  return result.stdout;
+}
+
+function scopePaths(values) {
+  if (!Array.isArray(values) || values.length < 1 || values.length > 100) {
+    throw new Error("validation.apiOnly path lists need between 1 and 100 repository-relative paths.");
+  }
+  return values.map((value) => {
+    const path = typeof value === "string" ? value.replace(/\\/gu, "/").replace(/\/$/u, "") : "";
+    if (!path || path.length > 500 || /[:*?[\]\0\r\n]/u.test(path) ||
+        path.split("/").some((part) => !part || part === "." || part === "..")) {
+      throw new Error("validation.apiOnly paths must be literal repository-relative files or directories.");
+    }
+    return path;
+  });
+}
+
+function apiOnlyPolicy(profile, gates) {
+  const policy = profile.validation?.apiOnly;
+  if (policy === undefined) {
+    return null;
+  }
+  if (!policy || typeof policy !== "object" || Array.isArray(policy) ||
+      typeof policy.baseRef !== "string" || !policy.baseRef.trim() ||
+      policy.baseRef.length > 200 || /[\s\0]/u.test(policy.baseRef) ||
+      policy.baseRef.startsWith("-") ||
+      !Array.isArray(policy.gateIds) || policy.gateIds.length < 1 ||
+      new Set(policy.gateIds).size !== policy.gateIds.length ||
+      policy.gateIds.some((id) => !gates?.some((gate) => gate.id === id))) {
+    throw new Error("validation.apiOnly needs a baseRef and unique gateIds from validation.gates.");
+  }
+  return {
+    baseRef: policy.baseRef,
+    paths: scopePaths(policy.paths),
+    fullValidationPaths: scopePaths(policy.fullValidationPaths),
+    gateIds: [...policy.gateIds]
+  };
+}
+
+function matchesScopePath(path, roots) {
+  return roots.some((root) => path === root || path.startsWith(`${root}/`));
+}
+
 export function validationGates(profile, mode) {
   if (mode === "playwright-only") {
     return [];
   }
   const gates = profile.validation?.gates;
   if (gates === undefined) {
+    apiOnlyPolicy(profile, null);
     return null;
   }
   if (!Array.isArray(gates) || gates.length < 1 || gates.length > 20) {
     throw new Error("validation.gates must contain between 1 and 20 required gates.");
   }
   const ids = new Set();
-  return gates.map((gate) => {
+  const normalized = gates.map((gate) => {
     if (
       !gate ||
       typeof gate.id !== "string" ||
@@ -68,26 +123,90 @@ export function validationGates(profile, mode) {
       timeoutSeconds: gate.timeoutSeconds
     };
   });
+  apiOnlyPolicy(profile, normalized);
+  return normalized;
 }
 
 export class ValidationSession {
-  constructor(repository, profile, mode) {
+  constructor(repository, profile, mode, { validationIntent = "full", baseCommit } = {}) {
     this.repository = realpathSync(repository);
     this.gates = validationGates(profile, mode);
+    this.policy = mode === "playwright-only" ? null : apiOnlyPolicy(profile, this.gates);
+    this.validationIntent = validationIntent;
+    this.baseCommit = null;
+    this.scopeWarning = "";
+    if (this.policy) {
+      try {
+        if (baseCommit === undefined) {
+          const reference = scopeGit(this.repository, [
+            "rev-parse", "--verify", "--end-of-options", `${this.policy.baseRef}^{commit}`
+          ]).trim();
+          this.baseCommit = scopeGit(this.repository, ["merge-base", "HEAD", reference]).trim();
+        } else if (typeof baseCommit === "string" && /^[a-f0-9]{40,64}$/u.test(baseCommit)) {
+          this.baseCommit = baseCommit;
+        } else {
+          this.scopeWarning = "No verified saved validation baseline; all configured gates are required.";
+        }
+      } catch (error) {
+        this.scopeWarning = error.message;
+      }
+    }
     this.profile = JSON.stringify(profile);
     this.results = new Map();
     this.target = null;
     this.active = null;
     this.error = null;
+    this.scopeResult = this.changeScope();
+  }
+
+  changeScope() {
+    if (!this.policy || this.validationIntent !== "affected") {
+      return { scope: "all", reason: "All configured gates are required by the selected validation policy." };
+    }
+    if (!this.baseCommit) {
+      return { scope: "all", reason: this.scopeWarning };
+    }
+    const repository = this.target ?? this.repository;
+    try {
+      scopeGit(repository, ["merge-base", "--is-ancestor", this.baseCommit, "HEAD"]);
+      const changes = new Set([
+        scopeGit(repository, ["diff", "--name-only", "--no-renames", "-z", this.baseCommit, "HEAD", "--"]),
+        scopeGit(repository, ["diff", "--name-only", "--no-renames", "-z", this.baseCommit, "--"]),
+        scopeGit(repository, ["diff", "--cached", "--name-only", "--no-renames", "-z", this.baseCommit, "--"]),
+        scopeGit(repository, ["ls-files", "--others", "--exclude-standard", "-z"])
+      ].flatMap((output) => output.split("\0").filter(Boolean)));
+      if (changes.size === 0) {
+        return { scope: "all", reason: "No changed files establish an API-only scope; all configured gates are required." };
+      }
+      for (const path of changes) {
+        if (matchesScopePath(path, this.policy.fullValidationPaths) ||
+            !matchesScopePath(path, this.policy.paths)) {
+          return { scope: "all", reason: "Changes include contract, shared, frontend, or unclassified paths; all configured gates are required." };
+        }
+      }
+      return { scope: "api-only", reason: "API-only changes match the reviewed repository policy; frontend checks are not applicable." };
+    } catch (error) {
+      return { scope: "all", reason: error.message };
+    }
+  }
+
+  required(gate, scope) {
+    return scope !== "api-only" || this.policy.gateIds.includes(gate.id) || this.results.has(gate.id);
   }
 
   summary() {
+    // Refresh scope at validation checkpoints, not on every dashboard poll.
+    const { scope, reason } = this.validationIntent === "affected"
+      ? this.scopeResult
+      : { scope: "all", reason: "All configured gates are required by the selected validation policy." };
     let status = "pending";
     if (this.error) {
       status = "blocked";
     } else if (this.gates === null) {
       status = "unconfigured";
-    } else if (this.gates.every((gate) => this.results.get(gate.id)?.status === "passed")) {
+    } else if (this.gates.every((gate) =>
+      !this.required(gate, scope) || this.results.get(gate.id)?.status === "passed"
+    )) {
       status = "passed";
     } else if (this.active) {
       status = "running";
@@ -98,13 +217,20 @@ export class ValidationSession {
     }
     return {
       status,
+      scope,
+      reason,
       message: this.error ?? (this.gates === null
         ? "Configure validation.gates for executor-backed readiness."
-        : "Required gates use dashboard-owned execution; agent markers are not evidence."),
+        : scope === "api-only"
+          ? `${status === "passed" ? "API-scope validation passed." : "API-scope validation."} ${reason}`
+          : `Required gates use dashboard-owned execution; agent markers are not evidence. ${reason}`),
       gates: (this.gates ?? []).map((gate) => ({
         id: gate.id,
+        required: this.required(gate, scope),
         ...Object.fromEntries(Object.entries(
-          this.results.get(gate.id) ?? { status: "pending" }
+          this.results.get(gate.id) ?? (this.required(gate, scope)
+            ? { status: "pending" }
+            : { status: "not-applicable", reason })
         ).filter(([key]) => key !== "state"))
       }))
     };
@@ -115,6 +241,7 @@ export class ValidationSession {
   }
 
   verify() {
+    this.scopeResult = this.changeScope();
     if (!this.gates?.length || !this.target) {
       return this.summary();
     }
@@ -160,6 +287,15 @@ export class ValidationSession {
       throw new Error("All gates in a job must validate the same worktree.");
     }
     this.target = repository;
+    this.scopeResult = this.changeScope();
+    const { scope, reason } = this.scopeResult;
+    if (!this.required(gate, scope)) {
+      return {
+        status: 0,
+        outcome: "not-applicable",
+        summary: `NOT APPLICABLE ${id}: ${reason}\n`
+      };
+    }
     const cwd = containedDirectory(repository, gate.workingDirectory);
     const inputs = repositoryState(repository);
     const state = JSON.stringify(inputs);

@@ -124,6 +124,14 @@
             <label><input type="radio" name="mode" value="validate-only"> Validate only</label>
             <label><input type="radio" name="mode" value="playwright-only"> Playwright validation only</label>
           </fieldset>
+          <label for="validation-intent">Validation coverage</label>
+          <select id="validation-intent" name="validationIntent">
+            <option value="">Profile default</option>
+            <option value="affected">Change-aware checks</option>
+            <option value="full">All configured checks</option>
+            <option value="scoped">Focused iteration (not PR-ready)</option>
+          </select>
+          <p class="guidance">Change-aware checks can exclude frontend gates only when a reviewed repository policy establishes API-only changes. Contracts, shared files, unknown impact, or All configured checks require every gate.</p>
           <label for="target-environment">Validation environment</label>
           <select id="target-environment" name="targetEnvironment">
             <option value="">Profile default</option>
@@ -162,6 +170,11 @@
           </div>
         </div>
         <div id="stages" class="stages"></div>
+        <section id="validation-panel" hidden aria-labelledby="validation-heading">
+          <h3 id="validation-heading">Validation gates</h3>
+          <p id="validation-summary" class="guidance"></p>
+          <div id="validation-gates" class="stages"></div>
+        </section>
         <div id="queue-panel" class="queue-panel" hidden>
           <div class="section-heading">
             <h3>Running queue</h3>
