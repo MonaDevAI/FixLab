@@ -490,6 +490,7 @@ function dashboardSnapshot(job) {
     workspaceReview: job.workspaceReview ?? null,
     validationIntent: job.validationIntent ?? "full",
     validationBaseline: job.validationBaseline ?? null,
+    validationHistory: job.validationSession?.executedGates() ?? job.validationHistory ?? null,
     intakeSource: job.intakeSource,
     workItem: persistedWorkItem(job.workItem),
     workItems: job.workItems.map(persistedWorkItem),
@@ -538,6 +539,7 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    validationRecovered: true,
     permissionRequest: snapshot.permissionBlocked
       ? newPermissionRequest()
       : permissionRequest(snapshot.stages),
@@ -3143,6 +3145,7 @@ export function createDashboardServer({
       heldAt: null,
       sharedWorkspace: null,
       validationBaseline: null,
+      validationHistory: { complete: true, gates: [] },
       finishedAt: null,
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
@@ -3167,6 +3170,7 @@ export function createDashboardServer({
       }))
     };
     const restarted = restoreDashboardJob(snapshot, resolvedRepository);
+    restarted.validationRecovered = false;
     restarted.pendingPrompt = restarted.initialPrompt;
     return restarted;
   }
@@ -3312,7 +3316,9 @@ export function createDashboardServer({
         job.mode,
         {
           validationIntent: job.validationIntent,
-          baseCommit: job.validationBaseline ?? job.sharedWorkspace?.baseCommit ?? (resume ? null : undefined)
+          baseCommit: job.validationBaseline ?? job.sharedWorkspace?.baseCommit ??
+            (job.validationRecovered ? null : undefined),
+          history: job.validationHistory ?? (job.validationRecovered ? null : undefined)
         }
       );
       job.validationSession.validationIntent =

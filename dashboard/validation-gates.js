@@ -82,6 +82,34 @@ function matchesScopePath(path, roots) {
   return roots.some((root) => path === root || path.startsWith(`${root}/`));
 }
 
+function restoredValidationHistory(gates, history) {
+  const results = new Map();
+  if (history === null) {
+    return { complete: false, results };
+  }
+  if (!history || typeof history.complete !== "boolean" ||
+      !Array.isArray(history.gates) || history.gates.length > 20) {
+    throw new Error("Saved validation history is invalid; start a new reviewed job.");
+  }
+  for (const entry of history.gates) {
+    if (!entry || !gates?.some((gate) => gate.id === entry.id) ||
+        results.has(entry.id) ||
+        !["passed", "failed", "stale", "cancelled", "running"].includes(entry.status) ||
+        (entry.exitCode !== undefined && !Number.isSafeInteger(entry.exitCode))) {
+      throw new Error("Saved validation history is invalid; start a new reviewed job.");
+    }
+    const status = ["failed", "cancelled"].includes(entry.status) ? entry.status : "stale";
+    results.set(entry.id, {
+      status,
+      ...(entry.exitCode === undefined ? {} : { exitCode: entry.exitCode }),
+      reason: status === "stale"
+        ? "Saved execution is not fresh evidence; rerun this required gate after recovery."
+        : "Previous execution did not pass; this gate remains required after recovery."
+    });
+  }
+  return { complete: history.complete, results };
+}
+
 export function validationGates(profile, mode) {
   if (mode === "playwright-only") {
     return [];
@@ -128,7 +156,9 @@ export function validationGates(profile, mode) {
 }
 
 export class ValidationSession {
-  constructor(repository, profile, mode, { validationIntent = "full", baseCommit } = {}) {
+  constructor(repository, profile, mode, {
+    validationIntent = "full", baseCommit, history = { complete: true, gates: [] }
+  } = {}) {
     this.repository = realpathSync(repository);
     this.gates = validationGates(profile, mode);
     this.policy = mode === "playwright-only" ? null : apiOnlyPolicy(profile, this.gates);
@@ -152,7 +182,9 @@ export class ValidationSession {
       }
     }
     this.profile = JSON.stringify(profile);
-    this.results = new Map();
+    const restored = restoredValidationHistory(this.gates, history);
+    this.results = restored.results;
+    this.historyComplete = restored.complete;
     this.target = null;
     this.active = null;
     this.error = null;
@@ -162,6 +194,9 @@ export class ValidationSession {
   changeScope() {
     if (!this.policy || this.validationIntent !== "affected") {
       return { scope: "all", reason: "All configured gates are required by the selected validation policy." };
+    }
+    if (!this.historyComplete) {
+      return { scope: "all", reason: "Saved executed-gate history is unavailable; all configured gates are required." };
     }
     if (!this.baseCommit) {
       return { scope: "all", reason: this.scopeWarning };
@@ -184,7 +219,7 @@ export class ValidationSession {
           return { scope: "all", reason: "Changes include contract, shared, frontend, or unclassified paths; all configured gates are required." };
         }
       }
-      return { scope: "api-only", reason: "API-only changes match the reviewed repository policy; frontend checks are not applicable." };
+      return { scope: "api-only", reason: "API-only changes match the reviewed repository policy; unexecuted gates outside the API gate set are not applicable. Previously executed gates remain required." };
     } catch (error) {
       return { scope: "all", reason: error.message };
     }
@@ -192,6 +227,17 @@ export class ValidationSession {
 
   required(gate, scope) {
     return scope !== "api-only" || this.policy.gateIds.includes(gate.id) || this.results.has(gate.id);
+  }
+
+  executedGates() {
+    return {
+      complete: this.historyComplete,
+      gates: [...this.results].map(([id, result]) => ({
+        id,
+        status: result.status,
+        ...(result.exitCode === undefined ? {} : { exitCode: result.exitCode })
+      }))
+    };
   }
 
   summary() {

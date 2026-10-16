@@ -122,6 +122,11 @@ other jobs pin the merge base with `baseRef`. Saved jobs retain that baseline.
 Empty, unclassifiable, contract, shared, frontend, or unreadable change sets
 require all configured gates. Older saved jobs without a verified baseline
 cannot acquire API-only scope on resume.
+This also applies when recovery starts a fresh runtime instead of reusing its
+old session. Executed-gate history survives dashboard restarts: failed and
+cancelled gates stay required, while saved passes become stale and must run
+again. Missing legacy history retains full coverage; invalid history requires
+a new reviewed job.
 
 For a verified API-only change, `gate` reports excluded entries as
 **NOT APPLICABLE**, without executing their commands or creating pass evidence.

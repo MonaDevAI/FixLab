@@ -248,6 +248,42 @@ test("API-only policy rejects ambiguous configuration instead of silently weaken
   }
 });
 
+test("API-only recovery keeps executed gate outcomes but never trusts saved passes", async () => {
+  const { repository, profile } = apiFixture();
+  try {
+    writeFileSync(join(repository, "api", "service.cs"), "corrected");
+    for (const status of ["passed", "failed", "cancelled", "stale", "running"]) {
+      const session = new ValidationSession(repository, profile, "validate-only", {
+        validationIntent: "affected",
+        history: { complete: true, gates: [{ id: "frontend-tests", status, exitCode: 23 }] }
+      });
+      const restored = session.summary().gates[1];
+      assert.equal(restored.required, true);
+      assert.equal(restored.status, ["failed", "cancelled"].includes(status) ? status : "stale");
+      assert.equal(restored.exitCode, 23);
+      assert.equal((await session.run("tests", repository, profile)).status, 0);
+      assert.equal(session.summary().status, "blocked");
+      assert.equal(session.executedGates().gates.length, 2);
+    }
+    const unknown = new ValidationSession(repository, profile, "validate-only", {
+      validationIntent: "affected", history: null
+    });
+    assert.equal(unknown.summary().scope, "all");
+    assert.match(unknown.summary().reason, /history is unavailable/);
+    assert.equal(unknown.executedGates().complete, false);
+    for (const history of [
+      {}, { complete: true, gates: [{ id: "unknown", status: "passed" }] },
+      { complete: true, gates: [{ id: "tests", status: "invented" }] },
+      { complete: true, gates: [{ id: "tests", status: "passed", exitCode: "0" }] },
+      { complete: true, gates: [{ id: "tests", status: "failed" }, { id: "tests", status: "passed" }] }
+    ]) {
+      assert.throws(() => new ValidationSession(repository, profile, "validate-only", { history }), /Saved validation history is invalid/);
+    }
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("validation gate configuration is explicit and bounded", () => {
   assert.equal(validationGates({}, "validate-only"), null);
   assert.deepEqual(validationGates({}, "playwright-only"), []);
