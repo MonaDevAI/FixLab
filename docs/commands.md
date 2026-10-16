@@ -74,7 +74,7 @@ Configure each gate in the repository profile:
 }
 ```
 
-Use focused, repository-owned commands and finite timeouts. Every configured
+Use focused, repository-owned commands and finite timeouts. By default every configured
 gate is required; agent markers and ordinary `fixlab exec` runs cannot replace
 its evidence. A profile may explicitly set `reuse: true` on eligible
 deterministic local gates; reuse is off by default and must never be enabled
@@ -82,6 +82,61 @@ for live/browser checks or mutations. Source edits require revalidation.
 Legacy profiles without gates
 remain runnable but cannot establish executor-backed PR readiness. These
 checks do not intercept all agent tools or enforce external PR permissions.
+
+### API-only validation
+
+To avoid running unrelated frontend checks for internal API changes, add an
+opt-in policy alongside the existing `validation.gates`:
+
+```json
+{
+  "apiOnly": {
+    "baseRef": "origin/main",
+    "paths": ["backend/src", "backend/tests"],
+    "fullValidationPaths": ["backend/src/Contracts", "backend/src/Controllers"],
+    "gateIds": ["backend-build", "backend-tests"]
+  }
+}
+```
+
+This object belongs at `validation.apiOnly`. Adapt every path, the target
+reference, and gate ID to the repository. All listed gates must already exist.
+Paths are literal repository-relative files or directory prefixes, not globs;
+include every API contract or consumer-impacting surface in
+`fullValidationPaths`. A path policy cannot prove semantic compatibility.
+Request full validation whenever public behavior or frontend impact is uncertain.
+Keep the policy absent until it has been reviewed; the template does not
+automatically enable exclusions.
+
+New jobs use `validationIntent: "affected"` by default only when this policy
+exists. The dashboard's **Validation coverage** selector can explicitly choose
+change-aware checks or **All configured checks**. API/MCP callers can select
+`"affected"`, `"full"`, or `"scoped"` at job creation or on an authorized resume.
+`"full"` always requires all configured gates; `"scoped"` still defers readiness.
+Explicit all-UI or manual localhost requests also retain full coverage.
+
+Change-aware validation compares committed changes, index changes, worktree
+changes, deletions, both sides of renames, and new non-ignored files against a
+pinned Git baseline. Shared checkout jobs use their assigned base commit;
+other jobs pin the merge base with `baseRef`. Saved jobs retain that baseline.
+Empty, unclassifiable, contract, shared, frontend, or unreadable change sets
+require all configured gates. Older saved jobs without a verified baseline
+cannot acquire API-only scope on resume.
+This also applies when recovery starts a fresh runtime instead of reusing its
+old session. Executed-gate history survives dashboard restarts: failed and
+cancelled gates stay required, while saved passes become stale and must run
+again. Missing legacy history retains full coverage; invalid history requires
+a new reviewed job.
+
+For a verified API-only change, `gate` reports excluded entries as
+**NOT APPLICABLE**, without executing their commands or creating pass evidence.
+The dashboard and conversation status show their reasons and label completion
+**API-scope validation passed**, not full validation. Previously executed failures
+are never rewritten as exclusions. Later edits can expand required coverage,
+and final source verification still invalidates stale results.
+
+Changing a policy requires a new reviewed job. Installing this feature does
+not waive failures, change profiles, or upgrade a running dashboard in place.
 
 ## Visual Studio Code bugfix agent
 

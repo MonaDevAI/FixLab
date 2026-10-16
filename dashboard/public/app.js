@@ -17,6 +17,9 @@ const modelControl = document.querySelector("#model-control");
 const modelSelect = document.querySelector("#model");
 let modelConfigured = false;
 const stagesElement = document.querySelector("#stages");
+const validationPanel = document.querySelector("#validation-panel");
+const validationSummary = document.querySelector("#validation-summary");
+const validationGatesElement = document.querySelector("#validation-gates");
 const jobStatusElement = document.querySelector("#job-status");
 const testEvidenceElement = document.querySelector("#test-evidence");
 const testEvidenceScenario = document.querySelector(
@@ -496,6 +499,25 @@ function renderJob(job, currentActiveJob = job) {
     message.textContent = escapeText(stage.message) || "Waiting";
     card.append(heading, message);
     stagesElement.append(card);
+  }
+
+  const validation = job?.validation;
+  validationPanel.hidden = !validation;
+  validationSummary.textContent = validation?.message ?? "";
+  validationGatesElement.replaceChildren();
+  for (const gate of validation?.gates ?? []) {
+    const card = document.createElement("article");
+    card.className = `stage ${gate.status === "not-applicable" ? "skipped" : gate.status}`;
+    const heading = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = gate.id;
+    const status = document.createElement("span");
+    status.textContent = gate.status === "not-applicable" ? "Not applicable" : gate.status;
+    heading.append(title, status);
+    const reason = document.createElement("p");
+    reason.textContent = gate.reason ?? (gate.required === false ? "Not required by the reviewed policy." : "Required validation gate.");
+    card.append(heading, reason);
+    validationGatesElement.append(card);
   }
 
   bugResultsElement.replaceChildren();
@@ -1477,6 +1499,7 @@ form.addEventListener("submit", async (event) => {
         requestType: data.get("requestType"),
         model: data.get("model") ?? "",
         mode: data.get("mode"),
+        validationIntent: data.get("validationIntent") || undefined,
         pullRequestStrategy: data.get("separatePullRequests") === "on"
           ? "per-bug"
           : "common",

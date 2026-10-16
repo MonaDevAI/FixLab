@@ -87,6 +87,11 @@ blockers, completion or an ended connection enqueue Copilot turns.
 For example: "FixLab, test this PR using the configured Playwright settings;
 do not change code." The host verifies the PR checkout and uses browser-only
 mode rather than starting a full fix/regression job.
+Repositories can also opt into
+[change-aware API-only validation](docs/commands.md#api-only-validation):
+internal API changes run the reviewed backend gates, while excluded frontend
+checks remain explicitly not applicable. Full validation still runs every
+configured gate, and uncertain or cross-component changes retain full coverage.
 
 ```text
 Reproduce this React UI bug, make the smallest fix, run focused tests and

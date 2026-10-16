@@ -872,6 +872,31 @@ function createGitRepository() {
   return repository;
 }
 
+function createApiValidationRepository(baseRef = "HEAD") {
+  const repository = createGitRepository();
+  mkdirSync(join(repository, "api"));
+  mkdirSync(join(repository, "web"));
+  writeFileSync(join(repository, "api", "service.cs"), "initial");
+  writeFileSync(join(repository, "web", "view.ts"), "initial");
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(validProfile({
+    validation: {
+      apiOnly: {
+        baseRef,
+        paths: ["api"],
+        fullValidationPaths: ["api/Contracts"],
+        gateIds: ["backend-tests"]
+      },
+      gates: [
+        { id: "backend-tests", command: process.execPath, args: ["-e", "process.exit(0)"], workingDirectory: ".", timeoutSeconds: 30 },
+        { id: "frontend-tests", command: process.execPath, args: ["-e", "process.exit(23)"], workingDirectory: ".", timeoutSeconds: 30 }
+      ]
+    }
+  })));
+  git(repository, ["add", "."]);
+  git(repository, ["commit", "--quiet", "-m", "Reviewed API scope"]);
+  return repository;
+}
+
 async function startDashboard(
   repository,
   executor,
@@ -5351,6 +5376,192 @@ test("dashboard gate execution rejects forged readiness and stale final-source e
     assert.equal(status.body.job.pullRequestReadiness.ready, false);
   } finally {
     await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard API-only policy preserves scope across recovery and explicit full validation", async () => {
+  const repository = createGitRepository();
+  const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+  const profile = validProfile({
+    validation: {
+      apiOnly: {
+        baseRef: "HEAD",
+        paths: ["api"],
+        fullValidationPaths: ["api/Contracts"],
+        gateIds: ["backend-tests"]
+      },
+      gates: [
+        { id: "backend-tests", command: process.execPath, args: ["-e", "process.exit(0)"], workingDirectory: ".", timeoutSeconds: 30 },
+        { id: "frontend-tests", command: process.execPath, args: ["-e", "process.exit(23)"], workingDirectory: ".", timeoutSeconds: 30 }
+      ]
+    }
+  });
+  mkdirSync(join(repository, "api"));
+  writeFileSync(profilePath, JSON.stringify(profile));
+  git(repository, ["add", "."]);
+  git(repository, ["commit", "--quiet", "-m", "Reviewed API validation policy"]);
+  let finish;
+  let emit;
+  let prompt;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    emit = input.onOutput;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); }
+    };
+  });
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", { request: "Validate the internal API correction.", mode: "validate-only" });
+    const jobId = started.body.job.id;
+    assert.equal(started.body.job.validationIntent, "affected");
+    assert.match(prompt, /dashboard, not the agent, determines applicability/);
+    writeFileSync(join(repository, "api", "service.cs"), "corrected");
+    const excluded = await post("/api/validation/run", { jobId, gateId: "frontend-tests", repository });
+    assert.equal(excluded.body.outcome, "not-applicable");
+    assert.equal((await post("/api/validation/run", { jobId, gateId: "backend-tests", repository })).body.status, 0);
+    emit("stdout", "FIXLAB_TEST|synthetic-intercepted|intercepted|Verify API-only validation policy.\n");
+    for (const stage of FIXLAB_STAGES) {
+      emit("stdout", `FIXLAB_STAGE|${stage}|passed|Verified applicable scope\n`);
+    }
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    let status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.job.status, "passed");
+    assert.equal(status.body.job.validation.scope, "api-only");
+    assert.equal(status.body.job.validation.gates[1].status, "not-applicable");
+    const conversation = await jsonRequest(url, "/api/conversation");
+    assert.equal(conversation.body.job.validation.scope, "api-only");
+    assert.equal(conversation.body.job.validation.gates[1].required, false);
+    assert.match(conversation.body.job.validation.gates[1].reason, /API-only/);
+    const resumed = await dashboardConversation({
+      repository, port: new URL(url).port * 1,
+      instanceId: conversation.body.instanceId, jobId,
+      confirmed: true, action: "continue", details: "Run all configured checks explicitly.",
+      validationIntent: "full"
+    }, true);
+    assert.equal(resumed.job.validationIntent, "full");
+    assert.equal(resumed.job.validation.scope, "all");
+    assert.equal((await post("/api/validation/run", { jobId, gateId: "frontend-tests", repository })).body.status, 23);
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    status = await jsonRequest(url, "/api/job");
+    assert.equal(status.body.job.validation.status, "blocked");
+    assert.equal(status.body.job.pullRequestReadiness.ready, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("API-only recovery retains failed frontend gates across an actual dashboard restart", async () => {
+  const repository = createApiValidationRepository();
+  let finish;
+  let emit;
+  const executor = (input) => {
+    emit = input.onOutput;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); }
+    };
+  };
+  let current = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", { request: "Preserve failed validation on recovery.", mode: "validate-only" });
+    const jobId = started.body.job.id;
+    const gate = (gateId) => post("/api/validation/run", { jobId, gateId, repository });
+    writeFileSync(join(repository, "api", "service.cs"), "corrected");
+    writeFileSync(join(repository, "web", "view.ts"), "frontend change");
+    assert.equal((await gate("frontend-tests")).body.status, 23);
+    writeFileSync(join(repository, "web", "view.ts"), "initial");
+    assert.equal((await gate("backend-tests")).body.status, 0);
+    for (const stage of FIXLAB_STAGES) {
+      emit("stdout", `FIXLAB_STAGE|${stage}|passed|Retain actual gate evidence\n`);
+    }
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal((await jsonRequest(current.url, "/api/job")).body.job.validation.status, "blocked");
+    await current.dashboard.close();
+    current = await startDashboard(repository, executor);
+    const resumed = await post("/api/job/input", {
+      action: "continue", details: "Continue the same job without discarding failed checks."
+    });
+    assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
+    const frontend = resumed.body.job.validation.gates.find((gate) => gate.id === "frontend-tests");
+    assert.equal(frontend.status, "failed");
+    assert.equal(frontend.required, true);
+    assert.equal(frontend.exitCode, 23);
+    assert.equal((await gate("backend-tests")).body.status, 0);
+    assert.equal((await jsonRequest(current.url, "/api/job")).body.job.validation.status, "blocked");
+    assert.equal((await gate("frontend-tests")).body.status, 23);
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    const restarted = await post("/api/jobs/restart", { jobId });
+    assert.equal(restarted.response.status, 202, JSON.stringify(restarted.body));
+    assert.notEqual(restarted.body.job.id, jobId);
+    assert.equal(restarted.body.job.validation.scope, "api-only");
+    const newFrontend = restarted.body.job.validation.gates.find((gate) => gate.id === "frontend-tests");
+    assert.equal(newFrontend.required, false);
+    assert.equal(newFrontend.status, "not-applicable");
+  } finally {
+    await current.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("API-only fresh-runtime retry cannot recapture a missing baseline after dashboard recovery", async () => {
+  const repository = createApiValidationRepository("validation-base");
+  git(repository, ["branch", "validation-base"]);
+  writeFileSync(join(repository, "web", "view.ts"), "earlier frontend change");
+  git(repository, ["add", "."]);
+  git(repository, ["commit", "--quiet", "-m", "Earlier frontend change"]);
+  writeFileSync(join(repository, "api", "service.cs"), "corrected");
+  let finish;
+  const executions = [];
+  const executor = (input) => {
+    executions.push(input);
+    return executions.length === 1
+      ? { completion: Promise.resolve({ code: 1 }), terminate() {} }
+      : {
+          completion: new Promise((resolve) => { finish = resolve; }),
+          terminate() { finish({ code: 130 }); }
+        };
+  };
+  let current = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", { request: "Recover a legacy launch failure.", mode: "validate-only" });
+    const jobId = started.body.job.id;
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal((await jsonRequest(current.url, "/api/job")).body.job.status, "failed");
+    await current.dashboard.close();
+    const historyPath = join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json");
+    const saved = JSON.parse(readFileSync(historyPath, "utf8"));
+    delete saved.jobs.find((job) => job.id === jobId).validationBaseline;
+    writeFileSync(historyPath, JSON.stringify(saved));
+    git(repository, ["branch", "-f", "validation-base", "HEAD"]);
+    current = await startDashboard(repository, executor);
+    const resumed = await post("/api/job/input", {
+      action: "retry", details: "Retry with a new runtime, preserving original coverage."
+    });
+    assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
+    assert.equal(executions.length, 2);
+    assert.equal(executions[1].resume, false, "exercise requiresFreshRetry after recovery");
+    assert.equal(resumed.body.job.validation.scope, "all");
+    assert.match(resumed.body.job.validation.reason, /No verified saved validation baseline/);
+    assert.equal(resumed.body.job.validation.gates.find((gate) => gate.id === "frontend-tests").required, true);
+    assert.equal((await post("/api/validation/run", { jobId, gateId: "frontend-tests", repository })).body.status, 23);
+  } finally {
+    await current.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });

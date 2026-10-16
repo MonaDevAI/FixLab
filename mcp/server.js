@@ -64,7 +64,7 @@ const tools = [
         confirmed: { type: "boolean", const: true },
         action: { type: "string", enum: ["comment", "continue", "retry", "skip", "manual-pass", "manual-fail"] },
         details: { type: "string", minLength: 1, maxLength: 10000 },
-        validationIntent: { type: "string", enum: ["scoped", "full"] },
+        validationIntent: { type: "string", enum: ["scoped", "full", "affected"] },
         reviewedWorkspace: {
           type: "object",
           properties: { branch: { type: "string" }, fingerprint: { type: "string" } },

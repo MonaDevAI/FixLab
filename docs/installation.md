@@ -153,6 +153,11 @@ iteration. Full regression stays explicitly deferred and PR readiness blocked.
 Choose `"full"` later to run the required gates; this does not mark any gate
 passed by itself. Independent safe checks can proceed after unrelated
 failures, without bypassing their own prerequisites.
+For repositories with a reviewed
+[API-only validation policy](commands.md#api-only-validation), choose
+`"affected"` for change-aware required gates. `"full"` still runs all configured
+checks; installing a newer CLI does not enable exclusions in an old profile or
+retroactively waive an existing job's failed frontend checks.
 
 The bridge uses loopback HTTP only, bounded responses and a ten-second
 deadline. It does not expose raw logs or browser state, grant blanket folder/tool

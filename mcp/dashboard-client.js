@@ -113,8 +113,8 @@ export async function dashboardConversation(args, reply = false) {
   }
   if (!["comment", "continue", "retry", "skip", "manual-pass", "manual-fail"].includes(args.action) ||
       typeof args.details !== "string" || !args.details.trim() || args.details.length > 10000 ||
-      (args.validationIntent !== undefined && !["scoped", "full"].includes(args.validationIntent))) {
-    throw new Error("Provide a valid action, explicit answer (1-10000 characters), and scoped or full validation intent.");
+      (args.validationIntent !== undefined && !["scoped", "full", "affected"].includes(args.validationIntent))) {
+    throw new Error("Provide a valid action, explicit answer (1-10000 characters), and scoped, full, or affected validation intent.");
   }
   const result = validateConversation(await dashboardRequest(args.port, "/api/conversation/reply", {
     instanceId: args.instanceId, jobId: args.jobId, repository,

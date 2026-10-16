@@ -489,6 +489,8 @@ function dashboardSnapshot(job) {
     sharedWorkspace: job.sharedWorkspace ?? null,
     workspaceReview: job.workspaceReview ?? null,
     validationIntent: job.validationIntent ?? "full",
+    validationBaseline: job.validationBaseline ?? null,
+    validationHistory: job.validationSession?.executedGates() ?? job.validationHistory ?? null,
     intakeSource: job.intakeSource,
     workItem: persistedWorkItem(job.workItem),
     workItems: job.workItems.map(persistedWorkItem),
@@ -537,6 +539,7 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    validationRecovered: true,
     permissionRequest: snapshot.permissionBlocked
       ? newPermissionRequest()
       : permissionRequest(snapshot.stages),
@@ -753,7 +756,9 @@ function getPullRequestReadiness(job) {
   return {
     status: "ready",
     ready: true,
-    message: "Required validation gates are complete; the pull request can be created."
+    message: validation.scope === "api-only"
+      ? "API-scope validation passed; frontend checks are not applicable. The pull request can be created."
+      : "Required validation gates are complete; the pull request can be created."
   };
 }
 
@@ -3139,6 +3144,8 @@ export function createDashboardServer({
       startedAt: status === "running" ? createdAt : null,
       heldAt: null,
       sharedWorkspace: null,
+      validationBaseline: null,
+      validationHistory: { complete: true, gates: [] },
       finishedAt: null,
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
@@ -3163,6 +3170,7 @@ export function createDashboardServer({
       }))
     };
     const restarted = restoreDashboardJob(snapshot, resolvedRepository);
+    restarted.validationRecovered = false;
     restarted.pendingPrompt = restarted.initialPrompt;
     return restarted;
   }
@@ -3209,29 +3217,10 @@ export function createDashboardServer({
     if (closing) {
       throw new Error("the dashboard is shutting down");
     }
-    job.validationSession ??= new ValidationSession(
-      resolvedRepository,
-      loadRepositoryProfile(resolvedRepository),
-      job.mode
-    );
-    const validation = job.validationSession.summary();
     if (job.validationIntent === "scoped") {
       prompt += "\nUser-selected scoped iteration: run only tests covering changed behavior for now. Full regression is explicitly deferred, not passed. Keep required broad gates pending and PR readiness blocked. Continue independent safe checks after an unrelated failure; never bypass dependencies, authentication, runtime permissions or data-safety approvals.";
     }
     job.acceptsValidation = true;
-    const address = server.address();
-    if (validation.status !== "unconfigured" && validation.gates.length > 0) {
-      prompt += `\nDashboard-owned required validation:
-- Required gates and code changes must use this job's assigned dashboard checkout. Do not validate a sibling checkout or move gated changes elsewhere.
-- For separate isolation, onboard the worktree and start its dashboard before creating a gated job.
-- Run each gate using:
-  node "${join(packageRoot, "bin", "fixlab.js")}" gate --port ${address.port} --job ${job.id} --gate <id> --repository "${resolvedRepository}"
-- Required gate IDs: ${validation.gates.map((gate) => gate.id).join(", ")}.
-- These operations return compact structured evidence. Do not run the same required commands separately.
-- Run required gates before reporting readiness. Stage markers cannot pass these gates.
-- Rerun affected gates after source edits. Matching job-local evidence is reused only when the profile opts in for deterministic local validation and inputs are unchanged.
-- Unconfigured or stale validation cannot establish pull-request readiness. Never mark a pull request ready outside these checks.`;
-    }
     const profileIdleTimeoutMinutes = Number(
       loadRepositoryProfile(resolvedRepository).validation
         ?.agentIdleTimeoutMinutes
@@ -3320,6 +3309,38 @@ export function createDashboardServer({
             message: `Acquired shared checkout on ${job.sharedWorkspace.branch}; base ${job.sharedWorkspace.remote}/${job.sharedWorkspace.baseBranch} at ${job.sharedWorkspace.baseCommit}.`
           });
         }
+      }
+      job.validationSession ??= new ValidationSession(
+        resolvedRepository,
+        loadRepositoryProfile(resolvedRepository),
+        job.mode,
+        {
+          validationIntent: job.validationIntent,
+          baseCommit: job.validationBaseline ?? job.sharedWorkspace?.baseCommit ??
+            (job.validationRecovered ? null : undefined),
+          history: job.validationHistory ?? (job.validationRecovered ? null : undefined)
+        }
+      );
+      job.validationSession.validationIntent =
+        job.runAllUiScenarios || job.manualLocalhostTest ? "full" : job.validationIntent;
+      job.validationBaseline = job.validationSession.baseCommit;
+      const validation = job.validationSession.summary();
+      if (validation.status !== "unconfigured" && validation.gates.length > 0) {
+        prompt += `\nDashboard-owned required validation:
+- Required gates and code changes must use this job's assigned dashboard checkout. Do not validate a sibling checkout or move gated changes elsewhere.
+- For separate isolation, onboard the worktree and start its dashboard before creating a gated job.
+- Run each gate using:
+  node "${join(packageRoot, "bin", "fixlab.js")}" gate --port ${server.address().port} --job ${job.id} --gate <id> --repository "${resolvedRepository}"
+- Required gate IDs: ${validation.gates.map((gate) => gate.id).join(", ")}.
+- These operations return compact structured evidence. Do not run the same required commands separately.
+- Validation intent: ${job.validationSession.validationIntent ?? "full"}. Full runs every configured gate. Affected uses only the reviewed profile's change-aware policy; the dashboard, not the agent, determines applicability from the complete Git diff.
+- Invoke the configured gates after changes. An excluded gate returns NOT APPLICABLE, never PASS. Do not run its command separately or claim that it passed.
+- Report API-scope validation separately from full validation. Recheck scope after edits; frontend, contract, shared or unknown paths require every gate.
+- Do not infer that an API path guarantees unchanged public behavior. If requests, responses or frontend consumers may change beyond the policy's declared contract paths, require full validation instead of claiming API-only scope.
+- API-only scope does not require frontend startup or browser validation unless the user explicitly requests it or the profile declares applicable browser evidence. Record unnecessary stages skipped with the reason, not passed. Playwright-only mode, manual localhost checks and explicit all-UI requests retain their existing requirements.
+- Run required gates before reporting readiness. Stage markers cannot pass these gates.
+- Rerun affected gates after source edits. Matching job-local evidence is reused only when the profile opts in for deterministic local validation and inputs are unchanged.
+- Unconfigured or stale validation cannot establish pull-request readiness. Never mark a pull request ready outside these checks.`;
       }
     } catch (error) {
       lease.release();
@@ -3697,7 +3718,9 @@ export function createDashboardServer({
         ])),
         validation: job.validation ? {
           status: job.validation.status,
-          gates: job.validation.gates.map(({ id, status }) => ({ id, status }))
+          scope: job.validation.scope,
+          reason: job.validation.reason,
+          gates: job.validation.gates.map(({ id, status, required, reason }) => ({ id, status, required, reason }))
         } : null,
         pullRequestReadiness: job.pullRequestReadiness
       } : null,
@@ -4444,8 +4467,8 @@ export function createDashboardServer({
         });
         return;
       }
-      if (body.validationIntent !== undefined && !["scoped", "full"].includes(body.validationIntent)) {
-        sendJson(response, 400, { error: "validationIntent must be scoped or full." });
+      if (body.validationIntent !== undefined && !["scoped", "full", "affected"].includes(body.validationIntent)) {
+        sendJson(response, 400, { error: "validationIntent must be scoped, full, or affected." });
         return;
       }
       if (body.reviewedWorkspace && (running || !currentJob.workspaceReview ||
@@ -5020,9 +5043,10 @@ export function createDashboardServer({
         });
         return;
       }
-      const validationIntent = body.validationIntent ?? "full";
-      if (!["scoped", "full"].includes(validationIntent)) {
-        sendJson(response, 400, { error: "validationIntent must be scoped or full." });
+      const validationIntent = body.validationIntent ??
+        (loadRepositoryProfile(resolvedRepository).validation?.apiOnly ? "affected" : "full");
+      if (!["scoped", "full", "affected"].includes(validationIntent)) {
+        sendJson(response, 400, { error: "validationIntent must be scoped, full, or affected." });
         return;
       }
       const requestType = body.requestType ?? "bug-fix";

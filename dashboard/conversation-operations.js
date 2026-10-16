@@ -31,7 +31,7 @@ const resultKeys = new Set([
   "dismissedJob", "queue", "held", "history", "sessions", "frontend",
   "authentication", "permissionRequest", "kind", "scope", "directory",
   "repositoryReady", "profileReady", "profileName", "checks", "ok", "detail",
-  "name", "exists", "stages", "validation", "gates", "pullRequestReadiness",
+  "name", "exists", "stages", "validation", "gates", "reason", "required", "outcome", "pullRequestReadiness",
   "intake", "diagnosis", "reproduce", "fix", "review", "local-stack", "live-test",
   "pr", "mode", "createdAt", "finishedAt", "lastActivityAt", "warning",
   "workItems", "workItem", "title", "state", "workItemType", "commentCount",

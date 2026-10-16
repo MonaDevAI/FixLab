@@ -548,6 +548,35 @@ Choose the smallest commands that cover the repository contract; gates are
 not inferred from restore, startup, authentication, or deployment commands.
 The template contains examples and must be adapted during onboarding.
 
+An optional `validation.apiOnly` policy supplies a reviewed base reference,
+literal internal-API paths, mandatory full-validation paths, and a subset of
+configured gate IDs. It applies only to `validationIntent: "affected"`; profiles
+without the policy preserve the existing default, and explicit `"full"` never
+excludes a gate. A policy-enabled new job defaults to affected validation.
+The dashboard captures the shared checkout's assigned base or the merge base
+with the configured reference after checkout admission, then persists that
+commit across recovery. Recovery is tracked independently of runtime-session
+reuse, so a fresh-runtime retry cannot recapture an unavailable baseline.
+Missing saved baselines and Git inspection failures
+fall back visibly to all configured gates, never to fewer checks.
+
+The classifier unions committed, staged, unstaged and untracked paths, disables
+rename collapsing, and requires every changed path to be in the API allowlist
+and outside the declared contract/consumer-impact paths. Unknown, empty or
+cross-component changes require all gates. This is reviewed path-based policy,
+not semantic proof: uncertain API compatibility requires explicit full coverage.
+Applicability is recomputed before execution and at completion; status polling
+reuses that checkpoint instead of repeatedly spawning Git. Previously run
+gates remain required even if a later edit narrows the path set, retaining their
+failure evidence. Excluded gates have `status: "not-applicable"` and a reason,
+not a synthetic command result or a passed status. API-scope completion and
+full validation remain distinct in dashboard and MCP projections.
+Private snapshots retain a bounded executed-gate history with IDs, statuses,
+and exit codes, not logs or command contents. Recovery preserves failures and
+cancellations, makes saved passes or interrupted executions stale, and keeps
+all previously executed gates required. Missing legacy history retains full
+coverage for that job; malformed or incompatible history blocks recovery.
+
 Dashboard jobs receive `fixlab gate --port <port> --job <id> --gate <id>
 --repository <worktree>` instructions. The loopback endpoint resolves the
 executable from the job's reviewed profile, not from request-supplied commands.
