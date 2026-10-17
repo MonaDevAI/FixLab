@@ -138,7 +138,9 @@ test.afterAll(async () => {
   rmSync(repository, { recursive: true, force: true });
 });
 
-test("API-only gates display not applicable and explicit full coverage still executes frontend tests", async ({ page }) => {
+for (const componentPolicy of [false, true]) {
+test(`${componentPolicy ? "Component" : "API-only"} gates display not applicable and explicit full coverage still executes frontend tests`, async ({ page }) => {
+  test.setTimeout(90_000);
   const scopedRepository = mkdtempSync(join(tmpdir(), "fixlab-api-scope-e2e-"));
   const directory = join(scopedRepository, ".github", "fixlab");
   mkdirSync(directory, { recursive: true });
@@ -156,6 +158,14 @@ test("API-only gates display not applicable and explicit full coverage still exe
       { id: "frontend-tests", command: process.execPath, args: ["-e", "process.exit(23)"], workingDirectory: ".", timeoutSeconds: 30 }
     ]
   };
+  if (componentPolicy) {
+    profile.validation.changeAware = {
+      baseRef: "HEAD",
+      fullValidationPaths: ["api/Contracts"],
+      scopes: [{ paths: ["api"], gateIds: ["backend-tests"] }]
+    };
+    delete profile.validation.apiOnly;
+  }
   writeFileSync(join(directory, "repository-profile.json"), JSON.stringify(profile));
   writeFileSync(join(scopedRepository, "api", "service.cs"), "initial");
   const git = (args) => {
@@ -207,11 +217,12 @@ test("API-only gates display not applicable and explicit full coverage still exe
       }
       finish({ code: 0 });
     };
-    const jobId = await start("affected");
+    const jobId = await start(componentPolicy ? "" : "affected");
     expect((await gate(jobId, "frontend-tests")).outcome).toBe("not-applicable");
     expect((await gate(jobId, "backend-tests")).status).toBe(0);
     complete();
-    await expect(page.locator("#validation-summary")).toContainText("API-scope validation passed");
+    await expect(page.locator("#validation-summary")).toContainText(
+      componentPolicy ? "Component-scope validation passed" : "API-scope validation passed");
     const frontend = page.locator("#validation-gates article").filter({ hasText: "frontend-tests" });
     await expect(frontend).toContainText("Not applicable");
     await expect(frontend).not.toContainText("passed");
@@ -224,6 +235,53 @@ test("API-only gates display not applicable and explicit full coverage still exe
   } finally {
     await scopedDashboard.close();
     rmSync(scopedRepository, { recursive: true, force: true });
+  }
+});
+}
+
+test("pre-launch folder review starts no executor until the user explicitly approves", async ({ page }) => {
+  const preflightRepository = mkdtempSync(join(tmpdir(), "fixlab-preflight-e2e-"));
+  const external = mkdtempSync(join(tmpdir(), "fixlab-preflight-folder-e2e-"));
+  const directory = join(preflightRepository, ".github", "fixlab");
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(join(directory, "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
+  const calls = [];
+  const preflightDashboard = createDashboardServer({
+    repository: preflightRepository, packageRoot, runtime: "copilot",
+    executor(input) {
+      calls.push(input);
+      let finish;
+      return {
+        completion: new Promise((resolve) => { finish = resolve; }),
+        terminate() { finish({ code: 130 }); }
+      };
+    }
+  });
+  try {
+    const address = await preflightDashboard.listen({ port: await availablePort() });
+    await page.goto(address.url);
+    await page.getByRole("radio", { name: "Validate only", exact: true }).check();
+    await page.getByLabel("Warm React in parallel when a local job starts").uncheck();
+    await page.getByLabel("Review required external-folder access before starting the executor").check();
+    await page.getByLabel("Bug or required enhancement").fill("Review the required helper folder.");
+    await page.getByRole("button", { name: "Start job", exact: true }).click();
+    await expect(page.locator("#permission-review")).toBeEnabled();
+    await expect(page.locator("#permission-helper")).toContainText("Pre-launch review");
+    expect(calls).toHaveLength(0);
+    await page.getByLabel("Exact folder to review").fill(external);
+    await page.getByRole("button", { name: "Review folder access" }).click();
+    await expect(page.locator("#permission-scope")).toContainText(realpathSync(external));
+    expect(calls).toHaveLength(0);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Grant this folder and start" }).click();
+    await expect.poll(() => calls.length).toBe(1);
+    expect(calls[0].resume).toBe(false);
+    expect(calls[0].runtimeDirectories).toEqual([realpathSync(external)]);
+  } finally {
+    await preflightDashboard.close();
+    rmSync(preflightRepository, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
   }
 });
 

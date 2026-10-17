@@ -86,6 +86,10 @@
             <input name="prestartFrontend" type="checkbox" checked>
             Warm React in parallel when a local job starts
           </label>
+          <label class="checkbox-row">
+            <input name="permissionPreflight" type="checkbox">
+            Review required external-folder access before starting the executor
+          </label>
           <fieldset>
             <legend>Intake</legend>
             <label><input type="radio" name="intakeSource" value="manual" checked> Enter manually</label>
@@ -131,7 +135,7 @@
             <option value="full">All configured checks</option>
             <option value="scoped">Focused iteration (not PR-ready)</option>
           </select>
-          <p class="guidance">Change-aware checks can exclude frontend gates only when a reviewed repository policy establishes API-only changes. Contracts, shared files, unknown impact, or All configured checks require every gate.</p>
+          <p class="guidance">Change-aware checks use reviewed API-only or component path-to-gate policies. Contracts, shared files, unknown impact, or All configured checks require every gate. Previously executed gates stay required.</p>
           <label for="target-environment">Validation environment</label>
           <select id="target-environment" name="targetEnvironment">
             <option value="">Profile default</option>

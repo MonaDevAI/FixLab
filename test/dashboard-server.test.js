@@ -963,6 +963,69 @@ async function jsonRequest(url, path, options) {
   return { response, body: await response.json() };
 }
 
+for (const recoverPreflight of [false, true]) {
+test(`permission preflight reviews a job-bound folder before the first executor starts${recoverPreflight ? " after recovery" : ""}`, async () => {
+  const repository = createGitRepository();
+  const external = mkdtempSync(join(tmpdir(), "fixlab-preflight-scope-"));
+  const calls = [];
+  const execute = (input) => {
+    calls.push(input);
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  let { dashboard, url } = await startDashboard(repository, execute);
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    assert.equal((await post("/api/jobs", {
+      request: "Review helper access.", mode: "validate-only", permissionPreflight: "yes"
+    })).response.status, 400);
+    const started = await post("/api/jobs", {
+      request: "Review helper access.", mode: "validate-only", permissionPreflight: true
+    });
+    let job = started.body.job;
+    assert.equal(started.response.status, 202);
+    assert.equal(job.status, "blocked");
+    assert.equal(job.permissionRequest.preflight, true);
+    assert.equal(calls.length, 0);
+    assert.equal(job.canReviewPermissions, true);
+    if (recoverPreflight) {
+      const previousRequest = job.permissionRequest.id;
+      await dashboard.close();
+      ({ dashboard, url } = await startDashboard(repository, execute));
+      job = (await jsonRequest(url, "/api/job")).body.job;
+      assert.equal(job.status, "blocked");
+      assert.equal(job.permissionRequest.preflight, true);
+      assert.notEqual(job.permissionRequest.id, previousRequest);
+      assert.deepEqual(job.runtimeDirectoryGrants, []);
+      assert.equal(calls.length, 0);
+    }
+    assert.equal((await post("/api/job/input", { action: "continue" })).response.status, 409);
+    const reviewed = await post("/api/job/permissions", {
+      action: "review-directory", jobId: job.id, requestId: job.permissionRequest.id, directory: external
+    });
+    job = reviewed.body.job;
+    assert.equal(job.permissionRequest.preflight, true);
+    assert.equal(calls.length, 0);
+    const approval = {
+      action: "approve-directory", jobId: job.id, requestId: job.permissionRequest.id,
+      directory: job.permissionRequest.scope.directory, confirmed: true
+    };
+    assert.equal((await post("/api/job/permissions", { ...approval, confirmed: false })).response.status, 400);
+    assert.equal((await post("/api/job/permissions", approval)).response.status, 202);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].resume, false, "No runtime session exists before preflight approval.");
+    assert.deepEqual(calls[0].runtimeDirectories, [realpathSync(external)]);
+    assert.match(calls[0].prompt, /Review helper access/);
+    assert.equal((await post("/api/job/permissions", approval)).response.status, 409);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+}
+
 test("permission denial stops the executor and requires a confirmed job-bound folder review before one scoped resume", async () => {
   const repository = createRepository();
   const external = mkdtempSync(join(tmpdir(), "fixlab-approved-scope-"));

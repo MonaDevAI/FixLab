@@ -92,6 +92,11 @@ Repositories can also opt into
 internal API changes run the reviewed backend gates, while excluded frontend
 checks remain explicitly not applicable. Full validation still runs every
 configured gate, and uncertain or cross-component changes retain full coverage.
+Reviewed [component path-to-gate policies](docs/commands.md#component-validation)
+can also select the combined required checks for other known change surfaces.
+An optional [pre-launch permission review](docs/commands.md#pre-launch-permission-handoff)
+collects an exact job-bound folder approval before executor startup; it does
+not grant tools, URLs, or organization-policy exceptions.
 
 ```text
 Reproduce this React UI bug, make the smallest fix, run focused tests and

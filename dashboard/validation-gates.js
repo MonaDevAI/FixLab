@@ -42,21 +42,47 @@ function scopeGit(repository, args) {
   return result.stdout;
 }
 
-function scopePaths(values) {
+function scopePaths(values, label = "validation.apiOnly") {
   if (!Array.isArray(values) || values.length < 1 || values.length > 100) {
-    throw new Error("validation.apiOnly path lists need between 1 and 100 repository-relative paths.");
+    throw new Error(`${label} path lists need between 1 and 100 repository-relative paths.`);
   }
   return values.map((value) => {
     const path = typeof value === "string" ? value.replace(/\\/gu, "/").replace(/\/$/u, "") : "";
     if (!path || path.length > 500 || /[:*?[\]\0\r\n]/u.test(path) ||
         path.split("/").some((part) => !part || part === "." || part === "..")) {
-      throw new Error("validation.apiOnly paths must be literal repository-relative files or directories.");
+      throw new Error(`${label} paths must be literal repository-relative files or directories.`);
     }
     return path;
   });
 }
 
-function apiOnlyPolicy(profile, gates) {
+function validationScopePolicy(profile, gates) {
+  if (profile.validation?.changeAware !== undefined) {
+    if (profile.validation.apiOnly !== undefined) {
+      throw new Error("validation.changeAware cannot combine with validation.apiOnly.");
+    }
+    const policy = profile.validation.changeAware;
+    const label = "validation.changeAware";
+    if (!policy || typeof policy !== "object" || Array.isArray(policy) ||
+        typeof policy.baseRef !== "string" || !policy.baseRef.trim() ||
+        policy.baseRef.length > 200 || /[\s\0]/u.test(policy.baseRef) ||
+        policy.baseRef.startsWith("-") ||
+        !Array.isArray(policy.scopes) || policy.scopes.length < 1 || policy.scopes.length > 100) {
+      throw new Error(`${label} needs a baseRef and between 1 and 100 scopes.`);
+    }
+    return {
+      baseRef: policy.baseRef,
+      fullValidationPaths: scopePaths(policy.fullValidationPaths, label),
+      scopes: policy.scopes.map((scope) => {
+        if (!scope || !Array.isArray(scope.gateIds) || scope.gateIds.length < 1 ||
+            new Set(scope.gateIds).size !== scope.gateIds.length ||
+            scope.gateIds.some((id) => !gates?.some((gate) => gate.id === id))) {
+          throw new Error(`${label} scopes need unique gateIds from validation.gates.`);
+        }
+        return { paths: scopePaths(scope.paths, label), gateIds: [...scope.gateIds] };
+      })
+    };
+  }
   const policy = profile.validation?.apiOnly;
   if (policy === undefined) {
     return null;
@@ -116,7 +142,7 @@ export function validationGates(profile, mode) {
   }
   const gates = profile.validation?.gates;
   if (gates === undefined) {
-    apiOnlyPolicy(profile, null);
+    validationScopePolicy(profile, null);
     return null;
   }
   if (!Array.isArray(gates) || gates.length < 1 || gates.length > 20) {
@@ -151,7 +177,7 @@ export function validationGates(profile, mode) {
       timeoutSeconds: gate.timeoutSeconds
     };
   });
-  apiOnlyPolicy(profile, normalized);
+  validationScopePolicy(profile, normalized);
   return normalized;
 }
 
@@ -161,7 +187,7 @@ export class ValidationSession {
   } = {}) {
     this.repository = realpathSync(repository);
     this.gates = validationGates(profile, mode);
-    this.policy = mode === "playwright-only" ? null : apiOnlyPolicy(profile, this.gates);
+    this.policy = mode === "playwright-only" ? null : validationScopePolicy(profile, this.gates);
     this.validationIntent = validationIntent;
     this.baseCommit = null;
     this.scopeWarning = "";
@@ -211,13 +237,24 @@ export class ValidationSession {
         scopeGit(repository, ["ls-files", "--others", "--exclude-standard", "-z"])
       ].flatMap((output) => output.split("\0").filter(Boolean)));
       if (changes.size === 0) {
-        return { scope: "all", reason: "No changed files establish an API-only scope; all configured gates are required." };
+        return { scope: "all", reason: "No changed files establish a reviewed change scope; all configured gates are required." };
       }
+      const scopes = this.policy.scopes ?? [{ paths: this.policy.paths, gateIds: this.policy.gateIds }];
+      const gateIds = new Set();
       for (const path of changes) {
-        if (matchesScopePath(path, this.policy.fullValidationPaths) ||
-            !matchesScopePath(path, this.policy.paths)) {
+        const matching = scopes.filter((scope) => matchesScopePath(path, scope.paths));
+        if (matchesScopePath(path, this.policy.fullValidationPaths) || matching.length === 0) {
           return { scope: "all", reason: "Changes include contract, shared, frontend, or unclassified paths; all configured gates are required." };
         }
+        for (const scope of matching) {
+          scope.gateIds.forEach((id) => gateIds.add(id));
+        }
+      }
+      if (this.policy.scopes) {
+        return {
+          scope: "affected", gateIds: [...gateIds],
+          reason: "Changed paths match reviewed component scopes; their combined gate sets are required. Previously executed gates remain required."
+        };
       }
       return { scope: "api-only", reason: "API-only changes match the reviewed repository policy; unexecuted gates outside the API gate set are not applicable. Previously executed gates remain required." };
     } catch (error) {
@@ -226,7 +263,11 @@ export class ValidationSession {
   }
 
   required(gate, scope) {
-    return scope !== "api-only" || this.policy.gateIds.includes(gate.id) || this.results.has(gate.id);
+    if (scope === "all" || this.results.has(gate.id)) {
+      return true;
+    }
+    const gateIds = scope === "api-only" ? this.policy.gateIds : this.scopeResult.gateIds;
+    return gateIds.includes(gate.id);
   }
 
   executedGates() {
@@ -269,7 +310,9 @@ export class ValidationSession {
         ? "Configure validation.gates for executor-backed readiness."
         : scope === "api-only"
           ? `${status === "passed" ? "API-scope validation passed." : "API-scope validation."} ${reason}`
-          : `Required gates use dashboard-owned execution; agent markers are not evidence. ${reason}`),
+          : scope === "affected"
+            ? `Component-scope validation ${status}. ${reason}`
+            : `Required gates use dashboard-owned execution; agent markers are not evidence. ${reason}`),
       gates: (this.gates ?? []).map((gate) => ({
         id: gate.id,
         required: this.required(gate, scope),

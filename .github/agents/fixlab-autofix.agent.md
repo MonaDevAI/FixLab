@@ -83,6 +83,12 @@ prerequisites as blocked.
    skipped or blocked checks, and remaining risk. Do not commit, push, deploy,
    or create a pull request unless the developer explicitly requests it.
 
+For known external-folder prerequisites, offer `permissionPreflight` before
+executor launch; it only opens review, never grants access. Use reviewed
+component path-to-gate policies for change-aware validation. Unknown paths,
+full-validation paths, explicit full coverage, and previously executed gates
+retain their required checks.
+
 Run verbose repository-owned tests, builds, linters, type checks, and package
 validation through `fixlab exec --stage <stage> -- <command> [args...]`. In
 Windows PowerShell write the separator quoted (`'--'`) because an unquoted `--`

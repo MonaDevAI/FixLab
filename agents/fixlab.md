@@ -116,6 +116,12 @@ behavior only rather than validation of the selected backend or its data.
 
 ## Safety boundaries
 
+For known external-folder prerequisites, offer `permissionPreflight` before
+executor launch; it only opens review, never grants access. Use reviewed
+component path-to-gate policies for change-aware validation. Unknown paths,
+full-validation paths, explicit full coverage, and previously executed gates
+retain their required checks.
+
 Keep execution economical without weakening evidence: reuse verified session
 context instead of rediscovering unchanged repository facts, batch independent
 reads, and keep command output compact. Handle bounded work directly; delegate

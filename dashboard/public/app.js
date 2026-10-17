@@ -98,13 +98,14 @@ function renderPermission(job, isActive) {
   }
   permissionSelection = { key, jobId: job.id, requestId: pending.id, scope: pending.scope };
   permissionHelper.textContent = runtimeHelperDirectory
-    ? `If the denied command needs the installed FixLab helper, its folder is ${runtimeHelperDirectory}. This is a candidate, not a verified cause of the denial. Already granted for this job: ${(job.runtimeDirectoryGrants ?? []).join(", ") || "none"}.`
+    ? `${pending.preflight ? "Pre-launch review: approve only a folder this job actually needs." : "The runtime supplied no structured denial scope; do not infer folder access is the cause."} FixLab helper: ${runtimeHelperDirectory}. Already granted for this job: ${(job.runtimeDirectoryGrants ?? []).join(", ") || "none"}. Repeating a grant cannot approve tools, URLs, or organization policy.`
     : "";
   permissionScope.hidden = !pending.scope || permissionEdited;
   permissionScope.textContent = pending.scope
     ? `Review: read/write access to ${pending.scope.directory} and its descendants for this job only. This approval is not retained after a dashboard restart.`
     : "";
   permissionApprove.hidden = !pending.scope || permissionEdited;
+  permissionApprove.textContent = pending.preflight ? "Grant this folder and start" : "Grant this folder and resume";
   const stopped = job.canReviewPermissions && job.status === "blocked";
   permissionDirectory.disabled = permissionBusy || !stopped;
   permissionReview.disabled = permissionBusy || !stopped;
@@ -151,7 +152,7 @@ async function submitPermission(action) {
     renderJob(body.job, activeJob);
     permissionMessage.textContent = action === "review-directory"
       ? "Review the resolved folder above. Nothing has been authorized yet."
-      : "The scoped executor restart was requested. A successful grant is not proof that the blocked command passed.";
+      : "The scoped executor launch was requested. A successful grant is not proof that a command or validation passed.";
   } catch (error) {
     permissionMessage.textContent = error.message;
   } finally {
@@ -1500,6 +1501,7 @@ form.addEventListener("submit", async (event) => {
         model: data.get("model") ?? "",
         mode: data.get("mode"),
         validationIntent: data.get("validationIntent") || undefined,
+        permissionPreflight: data.get("permissionPreflight") === "on",
         pullRequestStrategy: data.get("separatePullRequests") === "on"
           ? "per-bug"
           : "common",

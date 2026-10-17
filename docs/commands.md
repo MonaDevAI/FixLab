@@ -138,6 +138,64 @@ and final source verification still invalidates stale results.
 Changing a policy requires a new reviewed job. Installing this feature does
 not waive failures, change profiles, or upgrade a running dashboard in place.
 
+## Reviewed component validation and permission preflight
+
+### Component validation
+
+For changes beyond the API-only case, a repository can instead configure
+`validation.changeAware`. Do not combine it with `validation.apiOnly`.
+
+```json
+{
+  "changeAware": {
+    "baseRef": "origin/main",
+    "fullValidationPaths": ["shared", "backend/Contracts", "package.json"],
+    "scopes": [
+      {
+        "paths": ["backend/src", "backend/tests"],
+        "gateIds": ["backend-build", "backend-tests"]
+      },
+      {
+        "paths": ["web/src", "web/e2e"],
+        "gateIds": ["web-types", "web-tests", "web-build", "web-browser"]
+      }
+    ]
+  }
+}
+```
+
+Every gate ID must already exist in `validation.gates`. A path can match more
+than one scope: the union of all matching gate sets is required. Include shared
+mandatory checks in each applicable gate set. Policies support 1-100 scopes,
+each with 1-100 literal path prefixes, and require full-validation paths.
+This policy uses the same pinned baseline, complete Git change discovery,
+recovery safeguards, evidence invalidation and explicit full/scoped behavior
+as API-only validation. Unknown paths, an empty change set or any matching
+full-validation path require all gates. Previously executed gates remain
+required, including failures. Exclusions mean **not applicable**, never passed.
+
+The dashboard defaults a new policy-enabled job to affected validation.
+Component-scope completion is labelled separately from full validation; it is
+not permission to omit repository-mandated browser, build, or other checks.
+Do not enable the policy in a consuming repository until its mapping has been
+reviewed.
+
+### Pre-launch permission handoff
+
+Select **Review required external-folder access before starting the executor**
+or pass `permissionPreflight: true` to the existing job-start API/control.
+The job pauses before any executor launch, workspace acquisition, or frontend
+warmup. Review an exact required folder, then separately confirm its resolved
+scope through the existing job/request-bound approval flow. Review is not
+approval. The first launch is fresh, not a resume of a nonexistent session.
+The normal folder restrictions, nonce/origin checks and job-local grant expiry
+still apply; restarts do not inherit authorization.
+
+This is opt-in and does not preapprove a tool, URL, authentication step, or
+organization-policy restriction. It cannot eliminate all noninteractive
+permission denials. Status reports grants already present so an unclassified
+denial does not trigger repeated grants or speculative widening.
+
 ## Visual Studio Code bugfix agent
 
 `fixlab init` also installs `.github/agents/fixlab-autofix.agent.md`. Open the
