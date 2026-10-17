@@ -1030,10 +1030,14 @@ test("completed preflight resumes after recovery but a restarted job requires fr
   }
 });
 
-test("preflight workspace recovery retains the approved grant for the first fresh launch", async () => {
+for (const invalidateFolder of [false, true]) {
+test(`preflight workspace recovery retains the approved grant for the first fresh launch${invalidateFolder ? " after replacing an invalidated folder" : ""}`, async () => {
   const source = createGitRepository();
   const repository = mkdtempSync(join(tmpdir(), "fixlab-preflight-workspace-"));
   const external = mkdtempSync(join(tmpdir(), "fixlab-preflight-workspace-folder-"));
+  const replacement = invalidateFolder
+    ? mkdtempSync(join(tmpdir(), "fixlab-preflight-replacement-folder-"))
+    : external;
   const profile = validProfile({ worktreeSetup: { mode: "shared", baseBranch: "develop" } });
   writeFileSync(join(source, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
   git(source, ["branch", "-m", "develop"]);
@@ -1063,14 +1067,30 @@ test("preflight workspace recovery retains the approved grant for the first fres
     const status = (await jsonRequest(url, "/api/conversation")).body;
     assert.equal(status.question.kind, "workspace");
     assert.equal(calls.length, 0);
+    if (invalidateFolder) {
+      rmSync(external, { recursive: true, force: true });
+    }
     const resumed = await post("/api/job/input", {
       action: "continue", details: "Reuse this reviewed branch.", reviewedWorkspace: status.workspaceReview
     });
     assert.equal(resumed.response.status, 202);
-    assert.equal(resumed.body.job.status, "running");
+    if (invalidateFolder) {
+      assert.equal(resumed.body.job.status, "blocked");
+      assert.equal(resumed.body.job.permissionRequest.preflight, true);
+      assert.deepEqual(resumed.body.job.runtimeDirectoryGrants, []);
+      assert.equal(calls.length, 0);
+      const replaced = await approvePreflightDirectory(url, resumed.body.job, replacement);
+      assert.equal(replaced.response.status, 202, replaced.body.error);
+      assert.equal(replaced.body.job.status, "running");
+    } else {
+      assert.equal(resumed.body.job.status, "running");
+    }
     assert.equal(calls.length, 1);
     assert.equal(calls[0].resume, false);
-    assert.deepEqual(calls[0].runtimeDirectories, [realpathSync(external)]);
+    assert.equal(calls[0].sessionId, created.body.job.id);
+    assert.match(calls[0].prompt, /Continue existing work\./);
+    assert.doesNotMatch(calls[0].prompt, /Resume the existing FixLab dashboard session/);
+    assert.deepEqual(calls[0].runtimeDirectories, [realpathSync(replacement)]);
     assert.equal(git(repository, ["branch", "--show-current"]), branch);
     assert.equal(readFileSync(join(repository, "tracked.txt"), "utf8"), "Preserve existing work.");
   } finally {
@@ -1078,8 +1098,12 @@ test("preflight workspace recovery retains the approved grant for the first fres
     rmSync(source, { recursive: true, force: true });
     rmSync(repository, { recursive: true, force: true });
     rmSync(external, { recursive: true, force: true });
+    if (invalidateFolder) {
+      rmSync(replacement, { recursive: true, force: true });
+    }
   }
 });
+}
 
 for (const recoverPreflight of [false, true]) {
 test(`permission preflight reviews a job-bound folder before the first executor starts${recoverPreflight ? " after recovery" : ""}`, async () => {

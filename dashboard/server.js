@@ -3224,7 +3224,7 @@ export function createDashboardServer({
         })
       );
     } catch (error) {
-      job.permissionRequest = newPermissionRequest();
+      job.permissionRequest = newPermissionRequest({ preflight: !resume });
       job.runtimeDirectoryGrants = [];
       throw new Error(`A previously approved folder changed; review permissions again: ${error.message}`);
     }

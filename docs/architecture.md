@@ -143,6 +143,8 @@ misclassified as an unstarted one; restarting as a new job resets that state.
 A pre-executor workspace blocker retains the approved job-local folder grant
 and surfaces workspace review instead of restoring a conflicting permission
 request. The reviewed-workspace retry then starts the first executor fresh.
+If a grant becomes invalid before that launch, its replacement review retains
+the fresh-launch state; approval never resumes a nonexistent runtime session.
 
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the

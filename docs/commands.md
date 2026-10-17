@@ -198,6 +198,9 @@ resets preflight and requires fresh approval. If the first approved launch is
 blocked by workspace admission, the job keeps its already approved folder and
 exposes a separate workspace review. Explicit workspace approval preserves
 the reviewed work and starts the first runtime session fresh.
+If the approved folder changes before that first launch, FixLab clears the
+invalid grant and requires a replacement review and approval while preserving
+the fresh initial prompt and non-resume launch.
 
 This is opt-in and does not preapprove a tool, URL, authentication step, or
 organization-policy restriction. It cannot eliminate all noninteractive
