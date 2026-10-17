@@ -17,4 +17,4 @@ if ($LASTEXITCODE -ne 0) {
     throw "npm ci failed."
 }
 
-Write-Output "FixLab dependencies are installed. Run 'npm run validate'."
+Write-Output "FixLab dependencies are installed. Run 'pwsh -File scripts\validate.ps1'."

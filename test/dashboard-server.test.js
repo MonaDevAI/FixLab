@@ -963,6 +963,124 @@ async function jsonRequest(url, path, options) {
   return { response, body: await response.json() };
 }
 
+async function approvePreflightDirectory(url, job, directory) {
+  const post = (body) => jsonRequest(url, "/api/job/permissions", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  const reviewed = await post({
+    action: "review-directory", jobId: job.id, requestId: job.permissionRequest.id, directory
+  });
+  assert.equal(reviewed.response.status, 200, reviewed.body.error);
+  return post({
+    action: "approve-directory", jobId: job.id, requestId: reviewed.body.job.permissionRequest.id,
+    directory: reviewed.body.job.permissionRequest.scope.directory, confirmed: true
+  });
+}
+
+test("completed preflight resumes after recovery but a restarted job requires fresh approval", async () => {
+  const repository = createGitRepository();
+  const external = mkdtempSync(join(tmpdir(), "fixlab-preflight-recovery-"));
+  const calls = [];
+  const execute = (input) => {
+    calls.push(input);
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  let current = await startDashboard(repository, execute);
+  const post = (path, body) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const created = await post("/api/jobs", {
+      request: "Preserve the approved session.", mode: "validate-only", permissionPreflight: true
+    });
+    assert.equal((await approvePreflightDirectory(current.url, created.body.job, external)).response.status, 202);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].resume, false);
+    await current.dashboard.close();
+    current = await startDashboard(repository, execute);
+    const restored = (await jsonRequest(current.url, "/api/job")).body.job;
+    assert.equal(restored.permissionRequest, null);
+    assert.deepEqual(restored.runtimeDirectoryGrants, []);
+    const resumed = await post("/api/job/input", {
+      action: "continue", details: "Continue the approved session with this new instruction."
+    });
+    assert.equal(resumed.response.status, 202);
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1].resume, true);
+    assert.equal(calls[1].sessionId, created.body.job.id);
+    assert.match(calls[1].prompt, /Continue the approved session with this new instruction/);
+    assert.deepEqual(calls[1].runtimeDirectories, []);
+    await current.dashboard.close();
+    current = await startDashboard(repository, execute);
+    const restarted = await post("/api/jobs/restart", { jobId: created.body.job.id });
+    assert.equal(restarted.response.status, 202);
+    assert.notEqual(restarted.body.job.id, created.body.job.id);
+    assert.equal(restarted.body.job.permissionRequest.preflight, true);
+    assert.deepEqual(restarted.body.job.runtimeDirectoryGrants, []);
+    assert.equal(calls.length, 2);
+    assert.equal((await approvePreflightDirectory(current.url, restarted.body.job, external)).response.status, 202);
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].resume, false);
+    assert.equal(calls[2].sessionId, restarted.body.job.id);
+    assert.deepEqual(calls[2].runtimeDirectories, [realpathSync(external)]);
+  } finally {
+    await current.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("preflight workspace recovery retains the approved grant for the first fresh launch", async () => {
+  const source = createGitRepository();
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-preflight-workspace-"));
+  const external = mkdtempSync(join(tmpdir(), "fixlab-preflight-workspace-folder-"));
+  const profile = validProfile({ worktreeSetup: { mode: "shared", baseBranch: "develop" } });
+  writeFileSync(join(source, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  git(source, ["branch", "-m", "develop"]);
+  git(source, ["add", "."]);
+  git(source, ["commit", "--quiet", "-m", "Shared preflight profile"]);
+  git(source, ["clone", "--quiet", source, repository]);
+  const branch = `users/fixlab-test/fixlab-${randomUUID()}`;
+  git(repository, ["switch", "--quiet", "-c", branch]);
+  writeFileSync(join(repository, "tracked.txt"), "Preserve existing work.");
+  const calls = [];
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    calls.push(input);
+    return { completion: new Promise(() => {}), terminate() {} };
+  });
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const created = await post("/api/jobs", {
+      request: "Continue existing work.", mode: "fix-and-validate", permissionPreflight: true
+    });
+    const approved = await approvePreflightDirectory(url, created.body.job, external);
+    assert.equal(approved.response.status, 409);
+    assert.equal(approved.body.job.status, "blocked");
+    assert.equal(approved.body.job.permissionRequest, null);
+    assert.deepEqual(approved.body.job.runtimeDirectoryGrants, [realpathSync(external)]);
+    const status = (await jsonRequest(url, "/api/conversation")).body;
+    assert.equal(status.question.kind, "workspace");
+    assert.equal(calls.length, 0);
+    const resumed = await post("/api/job/input", {
+      action: "continue", details: "Reuse this reviewed branch.", reviewedWorkspace: status.workspaceReview
+    });
+    assert.equal(resumed.response.status, 202);
+    assert.equal(resumed.body.job.status, "running");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].resume, false);
+    assert.deepEqual(calls[0].runtimeDirectories, [realpathSync(external)]);
+    assert.equal(git(repository, ["branch", "--show-current"]), branch);
+    assert.equal(readFileSync(join(repository, "tracked.txt"), "utf8"), "Preserve existing work.");
+  } finally {
+    await dashboard.close();
+    rmSync(source, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
 for (const recoverPreflight of [false, true]) {
 test(`permission preflight reviews a job-bound folder before the first executor starts${recoverPreflight ? " after recovery" : ""}`, async () => {
   const repository = createGitRepository();

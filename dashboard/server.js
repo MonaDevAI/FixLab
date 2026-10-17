@@ -504,6 +504,7 @@ function dashboardSnapshot(job) {
     error: job.error ? safePersistedSummary(job.error) : null,
     permissionBlocked: Boolean(job.permissionRequest),
     permissionPreflight: job.permissionPreflight === true,
+    permissionPreflightReviewed: job.permissionPreflightReviewed === true,
     permissionPreflightPending: job.permissionRequest?.preflight === true,
     stages: Object.fromEntries(
       FIXLAB_STAGES.map((stage) => [
@@ -3157,6 +3158,8 @@ export function createDashboardServer({
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
       permissionBlocked: false,
+      permissionPreflightReviewed: false,
+      permissionPreflightPending: false,
       manualLocalhostOpenedAt: null,
       manualLocalhostPending: false,
       manualLocalhostResult: null,
@@ -4321,12 +4324,16 @@ export function createDashboardServer({
         try {
           startJob(job, prompt, !pending.preflight);
         } catch (error) {
-          if (!job.permissionRequest) {
-            job.runtimeDirectoryGrants = previousGrants;
-            job.permissionRequest = pending;
+          if (pending.preflight && error.workspaceReview) {
+            finishJob(job, { code: null, error });
+          } else {
+            if (!job.permissionRequest) {
+              job.runtimeDirectoryGrants = previousGrants;
+              job.permissionRequest = pending;
+            }
+            job.status = "blocked";
+            job.error = `Scoped resume could not start: ${error.message}`;
           }
-          job.status = "blocked";
-          job.error = `Scoped resume could not start: ${error.message}`;
           recordJobMetric(job);
           sendJson(response, 409, { error: job.error, job: publicJob(job) });
           return;

@@ -33,6 +33,10 @@ FixLab runs through **Agency Copilot** or directly through
 
 ## Get started
 
+Already inside Copilot? Follow the
+[Copilot installation steps](docs/installation.md#starting-from-an-existing-copilot-session)
+without opening a separate terminal.
+
 ### 1. Install a supported runtime
 
 Agency is the default compatibility runtime:
@@ -324,8 +328,14 @@ On Windows:
 
 ```powershell
 pwsh -File scripts/setup.ps1
-npm run validate
+pwsh -File scripts\validate.ps1
 ```
+
+The Windows runner executes the same complete `npm run validate` gate while
+temporarily preventing idle system/display sleep. It restores the previous
+execution state on success or failure and preserves the gate's exit code.
+It does not change power plans, override manual sleep, increase test deadlines,
+skip checks, or turn a successful retry into a passing aggregate.
 
 Local and CI unit suites run at most two test files concurrently. This bounds
 overlapping process-tree, PowerShell compiler, and browser fixtures on shared

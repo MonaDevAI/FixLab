@@ -191,6 +191,14 @@ approval. The first launch is fresh, not a resume of a nonexistent session.
 The normal folder restrictions, nonce/origin checks and job-local grant expiry
 still apply; restarts do not inherit authorization.
 
+Dashboard recovery remembers that preflight completed so an existing runtime
+session resumes with the new user instruction rather than restarting its
+initial request. Folder grants are still cleared. Restarting as a new job ID
+resets preflight and requires fresh approval. If the first approved launch is
+blocked by workspace admission, the job keeps its already approved folder and
+exposes a separate workspace review. Explicit workspace approval preserves
+the reviewed work and starts the first runtime session fresh.
+
 This is opt-in and does not preapprove a tool, URL, authentication step, or
 organization-policy restriction. It cannot eliminate all noninteractive
 permission denials. Status reports grants already present so an unclassified

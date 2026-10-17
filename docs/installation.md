@@ -82,32 +82,86 @@ fixlab --help
 
 ### Starting from an existing Copilot session
 
-The agent plugin and executable CLI are separate installations:
+No separate terminal is required: Copilot can run installation/setup shell
+commands after you approve them. Do not paste shell commands as though they
+were Copilot slash commands; ask Copilot to execute them.
+
+1. Open Copilot in the application checkout. Use `/login` if prompted to sign
+   in, and `/cwd` to verify the selected repository. For long local validation,
+   use `/keep-alive` when offered by your Copilot version; otherwise keep the
+   machine awake until validation finishes. Manual sleep or closing the lid can
+   still interrupt a run.
+2. Ask Copilot to check Git, Node.js, npm, PowerShell, the repository's .NET SDK,
+   and `copilot --help`. Review the findings before installing missing tools.
+   Then ask it to run the following installation commands, approving each
+   requested operation:
 
 ```powershell
-copilot plugin install MonaDevAI/FixLab
 npm install --global github:MonaDevAI/FixLab
+copilot plugin install MonaDevAI/FixLab
+fixlab --help
 ```
 
-The plugin command installs the agent definition; it does not run npm, add
-`fixlab` to `PATH`, restore application dependencies, or authenticate the
-application. Installing the CLI does not start the dashboard.
+The agent plugin and executable CLI are separate installations. Plugin
+installation does not run npm, add `fixlab` to `PATH`, restore application
+dependencies, or authenticate the application. CLI installation does not start
+the dashboard. Direct GitHub plugin installation currently emits a deprecation
+warning; use the marketplace form only after FixLab is actually available
+there, as described below.
 
-Open Copilot in the target repository and select `/agent fixlab:fixlab`.
-If working entirely through an existing Copilot session, ask it:
+3. Restart Copilot after plugin installation and select `/agent fixlab:fixlab`.
+   If `fixlab` is not recognized, reopen Copilot so it receives the updated
+   environment and follow [PATH troubleshooting](troubleshooting.md#fixlab-is-not-recognized).
+4. Ask the agent to onboard this checkout with the prompt below. Review and
+   approve proposed profile edits before allowing setup:
 
 ```text
-Check whether the FixLab CLI is installed. Ask before installing it from
-github:MonaDevAI/FixLab. Inspect this repository and configure its FixLab
-profile, show the onboarding plan, and ask before dependency setup or browser
-authentication. Run Doctor and start the dashboard only after readiness passes.
-Preserve existing changes and do not grant blanket runtime permissions.
+Set up FixLab for this checkout using --runtime copilot. Inspect the existing
+profile and the repository's real frontend/backend folders and scripts.
+Propose profile corrections for my approval; do not assume the example
+frontend or backend paths exist. Preserve my branch, edits, and running apps.
+Show the onboarding plan, then ask before dependency restoration, browser
+installation, private-feed access, or application authentication.
+Run fixlab doctor --runtime copilot and report every remaining blocker.
+Start the dashboard only after readiness and required approvals pass.
+Do not change application code, grant blanket permissions, or run a bug job.
 ```
 
-For a background permission blocker, use the dashboard's scoped folder review
-when a specific external folder is needed. A workflow approval is not runtime
-authorization. Unknown tool or organization-policy denials remain blocked;
+Generated profiles are examples, not automatic repository detection. Configure
+the actual component paths, validation working directories and commands,
+frontend startup, browser configuration and required authentication in
+`.github\fixlab\repository-profile.json`. If Doctor points at a nonexistent
+`frontend` directory, correct the profile; reinstalling FixLab will not fix it.
+An existing application's HTTP 200 is not evidence that its UI/API flows or the
+repository's required validation gates passed.
+
+5. Complete sign-in/MFA yourself when the approved authentication flow opens.
+   Return to Copilot to verify Doctor and ask it to start the dashboard for
+   the same checkout. Plugin installation, profile approval, runtime tool
+   authorization and application sign-in are separate steps.
+
+For a background permission blocker, review an exact external folder only when
+that is the confirmed missing access. A workflow approval does not transfer the
+host session's permissions to a background executor. The adapter currently
+uses `--allow-all-tools`; folder approval does not make that flag acceptable to
+a policy that forbids blanket tool authorization. Keep background jobs blocked
+in that case rather than widening permissions or bypassing the policy.
+Unknown tool or organization-policy denials also remain blocked;
 see [permission troubleshooting](troubleshooting.md#a-validation-command-is-denied-before-execution).
+
+Existing users normally update without uninstalling. Ask Copilot to run:
+
+```powershell
+npm install --global github:MonaDevAI/FixLab
+copilot plugin update fixlab
+```
+
+Restart Copilot afterward. A running dashboard still uses its loaded code:
+review its active jobs and request a controlled restart separately. Do not
+stop an existing app or dashboard merely because installation completed.
+An unmerged PR is not included in a default-branch install; test its reviewed
+CLI commit with `npm install --global "github:MonaDevAI/FixLab#<reviewed-commit>"`.
+The package version alone may not distinguish GitHub commits.
 
 ### Chat with an existing dashboard from Copilot
 
