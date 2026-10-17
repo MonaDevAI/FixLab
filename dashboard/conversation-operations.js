@@ -29,7 +29,7 @@ const resultKeys = new Set([
   "configured", "enabled", "available", "healthy", "owned", "lastResult", "pid", "canResume", "canComment",
   "canReviewPermissions", "job", "queuedJob", "resumedJob", "heldJob",
   "dismissedJob", "queue", "held", "history", "sessions", "frontend",
-  "authentication", "permissionRequest", "kind", "scope", "directory",
+  "authentication", "permissionRequest", "kind", "scope", "directory", "preflight", "runtimeDirectoryGrants",
   "repositoryReady", "profileReady", "profileName", "checks", "ok", "detail",
   "name", "exists", "stages", "validation", "gates", "reason", "required", "outcome", "pullRequestReadiness",
   "intake", "diagnosis", "reproduce", "fix", "review", "local-stack", "live-test",

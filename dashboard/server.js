@@ -503,6 +503,9 @@ function dashboardSnapshot(job) {
     lastActivityAt: job.lastActivityAt,
     error: job.error ? safePersistedSummary(job.error) : null,
     permissionBlocked: Boolean(job.permissionRequest),
+    permissionPreflight: job.permissionPreflight === true,
+    permissionPreflightReviewed: job.permissionPreflightReviewed === true,
+    permissionPreflightPending: job.permissionRequest?.preflight === true,
     stages: Object.fromEntries(
       FIXLAB_STAGES.map((stage) => [
         stage,
@@ -541,7 +544,7 @@ function restoreDashboardJob(snapshot, repository) {
     ...snapshot,
     validationRecovered: true,
     permissionRequest: snapshot.permissionBlocked
-      ? newPermissionRequest()
+      ? newPermissionRequest({ preflight: snapshot.permissionPreflightPending === true })
       : permissionRequest(snapshot.stages),
     runtimeDirectoryGrants: [],
     model: snapshot.model ?? "",
@@ -690,7 +693,9 @@ export function recoverInterruptedDashboardJob(
 
 function getPullRequestReadiness(job) {
   if (job.permissionRequest) {
-    return { status: "blocked", ready: false, message: PERMISSION_BLOCKED_MESSAGE };
+    return { status: "blocked", ready: false, message: job.permissionRequest.preflight
+      ? "External-folder review is pending before executor launch. No permission has been granted."
+      : PERMISSION_BLOCKED_MESSAGE };
   }
   if (job.validationIntent === "scoped") {
     return { status: "blocked", ready: false, message: "Full regression is explicitly deferred during scoped iteration, not passed." };
@@ -758,6 +763,8 @@ function getPullRequestReadiness(job) {
     ready: true,
     message: validation.scope === "api-only"
       ? "API-scope validation passed; frontend checks are not applicable. The pull request can be created."
+      : validation.scope === "affected"
+        ? "Reviewed component-scope validation passed; excluded checks are not applicable. The pull request can be created."
       : "Required validation gates are complete; the pull request can be created."
   };
 }
@@ -996,6 +1003,7 @@ ${branchNamingGuidance}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
 - Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For "test this PR", verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.
 - For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed, and PR readiness stays blocked. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.
+- For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.
 - Do not delete or edit transient test artifacts while validation is discovering or executing them; wait for owned validation to finish before cleanup.
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
 - ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
@@ -3150,6 +3158,8 @@ export function createDashboardServer({
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
       permissionBlocked: false,
+      permissionPreflightReviewed: false,
+      permissionPreflightPending: false,
       manualLocalhostOpenedAt: null,
       manualLocalhostPending: false,
       manualLocalhostResult: null,
@@ -3194,6 +3204,14 @@ export function createDashboardServer({
   }
 
   function startJob(job, prompt, resume = false) {
+    if (job.permissionPreflight && !job.permissionPreflightReviewed && !job.permissionRequest) {
+      job.permissionRequest = newPermissionRequest({ preflight: true });
+      job.status = "blocked";
+      job.error = "Review and explicitly approve the required external folder before the first executor starts. No runtime permission has been granted.";
+      job.stages.intake = { status: "blocked", message: job.error };
+      recordJobMetric(job);
+      return;
+    }
     if (job.permissionRequest) {
       throw new Error("Runtime permission is unresolved; review its scope in the dashboard before resuming.");
     }
@@ -3206,7 +3224,7 @@ export function createDashboardServer({
         })
       );
     } catch (error) {
-      job.permissionRequest = newPermissionRequest();
+      job.permissionRequest = newPermissionRequest({ preflight: !resume });
       job.runtimeDirectoryGrants = [];
       throw new Error(`A previously approved folder changed; review permissions again: ${error.message}`);
     }
@@ -3336,6 +3354,7 @@ export function createDashboardServer({
 - Validation intent: ${job.validationSession.validationIntent ?? "full"}. Full runs every configured gate. Affected uses only the reviewed profile's change-aware policy; the dashboard, not the agent, determines applicability from the complete Git diff.
 - Invoke the configured gates after changes. An excluded gate returns NOT APPLICABLE, never PASS. Do not run its command separately or claim that it passed.
 - Report API-scope validation separately from full validation. Recheck scope after edits; frontend, contract, shared or unknown paths require every gate.
+- A validation.changeAware component policy combines every gate set matching the changed paths. Frontend paths require their mapped browser/type-check/build gates; unclassified or fullValidationPaths require every gate. Do not guess exclusions or weaken repository-required checks.
 - Do not infer that an API path guarantees unchanged public behavior. If requests, responses or frontend consumers may change beyond the policy's declared contract paths, require full validation instead of claiming API-only scope.
 - API-only scope does not require frontend startup or browser validation unless the user explicitly requests it or the profile declares applicable browser evidence. Record unnecessary stages skipped with the reason, not passed. Playwright-only mode, manual localhost checks and explicit all-UI requests retain their existing requirements.
 - Run required gates before reporting readiness. Stage markers cannot pass these gates.
@@ -3683,7 +3702,9 @@ export function createDashboardServer({
     let question = null;
     let workspaceReview = null;
     if (job?.permissionRequest) {
-      question = { kind: "permission", message: PERMISSION_BLOCKED_MESSAGE, actions: [] };
+      question = { kind: "permission", message: job.permissionRequest.preflight
+        ? "Pre-launch folder review is pending. Ask the user for the exact required external folder, then use permission-review and a separate explicit permission-approve bound to this job and request. Review alone grants nothing."
+        : PERMISSION_BLOCKED_MESSAGE, actions: [] };
     } else if (job?.manualLocalhostPending) {
       question = { kind: "manual-test", message: "Report the actual manual localhost result.", actions: ["manual-pass", "manual-fail"] };
     } else if (job?.workspaceReview) {
@@ -3707,9 +3728,11 @@ export function createDashboardServer({
       job: job ? {
         id: job.id, status: job.status, canResume: job.canResume, canComment: job.canComment,
         canReviewPermissions: job.canReviewPermissions,
+        runtimeDirectoryGrants: job.runtimeDirectoryGrants,
         permissionRequest: job.permissionRequest ? {
           id: job.permissionRequest.id,
           kind: job.permissionRequest.kind,
+          preflight: job.permissionRequest.preflight === true,
           scope: job.permissionRequest.scope ? { directory: job.permissionRequest.scope.directory } : null
         } : null,
         validationIntent: job.validationIntent,
@@ -4264,7 +4287,7 @@ export function createDashboardServer({
             throw new Error("This folder is already granted for this job. Repeating the same grant cannot resolve the remaining runtime denial.");
           }
           job.permissionRequest = {
-            ...newPermissionRequest(),
+            ...newPermissionRequest({ preflight: pending.preflight === true }),
             scope
           };
           sendJson(response, 200, { job: publicJob(job) });
@@ -4292,20 +4315,25 @@ export function createDashboardServer({
         });
         job.permissionRequest = null;
         job.permissionStopRequested = false;
-        const prompt = buildResumePrompt(job, {
+        job.permissionPreflightReviewed = true;
+        const prompt = pending.preflight ? job.initialPrompt : buildResumePrompt(job, {
           action: "retry",
           details: `The user explicitly approved access to this folder for this job only: ${pending.scope.directory}. The new executor receives that exact --add-dir grant. This does not authorize a denied tool, URL, production data change, or any other folder. Retry only the blocked prerequisite once. If still denied, stop and report the unresolved permission; do not loop or request blanket access.`
         });
         resetJobForResume(job);
         try {
-          startJob(job, prompt, true);
+          startJob(job, prompt, !pending.preflight);
         } catch (error) {
-          if (!job.permissionRequest) {
-            job.runtimeDirectoryGrants = previousGrants;
-            job.permissionRequest = pending;
+          if (pending.preflight && error.workspaceReview) {
+            finishJob(job, { code: null, error });
+          } else {
+            if (!job.permissionRequest) {
+              job.runtimeDirectoryGrants = previousGrants;
+              job.permissionRequest = pending;
+            }
+            job.status = "blocked";
+            job.error = `Scoped resume could not start: ${error.message}`;
           }
-          job.status = "blocked";
-          job.error = `Scoped resume could not start: ${error.message}`;
           recordJobMetric(job);
           sendJson(response, 409, { error: job.error, job: publicJob(job) });
           return;
@@ -5044,9 +5072,14 @@ export function createDashboardServer({
         return;
       }
       const validationIntent = body.validationIntent ??
-        (loadRepositoryProfile(resolvedRepository).validation?.apiOnly ? "affected" : "full");
+        ((loadRepositoryProfile(resolvedRepository).validation?.apiOnly ||
+          loadRepositoryProfile(resolvedRepository).validation?.changeAware) ? "affected" : "full");
       if (!["scoped", "full", "affected"].includes(validationIntent)) {
         sendJson(response, 400, { error: "validationIntent must be scoped, full, or affected." });
+        return;
+      }
+      if (body.permissionPreflight !== undefined && typeof body.permissionPreflight !== "boolean") {
+        sendJson(response, 400, { error: "permissionPreflight must be a boolean." });
         return;
       }
       const requestType = body.requestType ?? "bug-fix";
@@ -5245,6 +5278,7 @@ export function createDashboardServer({
         request: requestText,
         requestType,
         validationIntent,
+        permissionPreflight: body.permissionPreflight === true,
         model: selectedModel,
         runtime,
         pullRequestStrategy,

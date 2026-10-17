@@ -64,6 +64,85 @@ function apiFixture() {
   return { repository, profile };
 }
 
+    test("reviewed component scopes select the union of applicable gates and retain executed failures", async () => {
+      const { repository, profile } = apiFixture();
+      try {
+        delete profile.validation.apiOnly;
+        profile.validation.changeAware = {
+          baseRef: "validation-base",
+          fullValidationPaths: ["api/Contracts"],
+          scopes: [
+            { paths: ["api"], gateIds: ["tests"] },
+            { paths: ["web"], gateIds: ["frontend-tests"] }
+          ]
+        };
+        writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+        git(repository, ["add", "."]);
+        git(repository, ["-c", "user.name=FixLab Test", "-c", "user.email=fixlab@example.test", "commit", "--quiet", "-m", "Component policy"]);
+        git(repository, ["branch", "-f", "validation-base", "HEAD"]);
+        writeFileSync(join(repository, "api", "service.cs"), "changed");
+        const session = new ValidationSession(repository, profile, "validate-only", { validationIntent: "affected" });
+        assert.equal(session.summary().scope, "affected");
+        assert.deepEqual(session.summary().gates.map((gate) => gate.required), [true, false]);
+        assert.equal((await session.run("frontend-tests", repository, profile)).outcome, "not-applicable");
+        assert.equal((await session.run("tests", repository, profile)).status, 0);
+        assert.equal(session.verify().status, "passed");
+        writeFileSync(join(repository, "web", "view.ts"), "changed");
+        assert.deepEqual(session.verify().gates.map((gate) => gate.required), [true, true]);
+        assert.equal((await session.run("frontend-tests", repository, profile)).status, 23);
+        writeFileSync(join(repository, "web", "view.ts"), "initial");
+        assert.equal(session.verify().gates[1].required, true);
+        assert.equal(session.summary().gates[1].status, "failed");
+        writeFileSync(join(repository, "api", "service.cs"), "initial");
+        writeFileSync(join(repository, "web", "view.ts"), "frontend only");
+        const frontend = new ValidationSession(repository, profile, "validate-only", { validationIntent: "affected" });
+        assert.deepEqual(frontend.summary().gates.map((gate) => gate.required), [false, true]);
+        assert.equal((await frontend.run("tests", repository, profile)).outcome, "not-applicable");
+        const recovered = new ValidationSession(repository, profile, "validate-only", {
+          validationIntent: "affected", baseCommit: session.baseCommit, history: session.executedGates()
+        });
+        assert.deepEqual(recovered.summary().gates.map((gate) => gate.required), [true, true]);
+        assert.equal(recovered.summary().gates[1].status, "failed");
+        const legacy = new ValidationSession(repository, profile, "validate-only", {
+          validationIntent: "affected", baseCommit: null
+        });
+        assert.equal(legacy.summary().scope, "all");
+        for (const path of ["api/Contracts/response.cs", "unknown.txt"]) {
+          writeFileSync(join(repository, path), "changed");
+          assert.equal(session.verify().scope, "all");
+        }
+        const full = new ValidationSession(repository, profile, "validate-only", { validationIntent: "full" });
+        assert.equal(full.summary().scope, "all");
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+      }
+    });
+
+    test("component policies reject ambiguous, unbounded, and unknown gate mappings", () => {
+      const { repository, profile } = apiFixture();
+      try {
+        const policy = {
+          baseRef: "validation-base",
+          fullValidationPaths: ["api/Contracts"],
+          scopes: [{ paths: ["api"], gateIds: ["tests"] }]
+        };
+        assert.throws(() => validationGates({
+          validation: { ...profile.validation, changeAware: policy }
+        }, "validate-only"), /cannot combine/);
+        delete profile.validation.apiOnly;
+        for (const changed of [
+          null, {}, { ...policy, baseRef: "--all" }, { ...policy, scopes: [] },
+          { ...policy, scopes: [{ paths: ["../api"], gateIds: ["tests"] }] },
+          { ...policy, scopes: [{ paths: ["api"], gateIds: ["unknown"] }] },
+          { ...policy, scopes: [{ paths: ["api"], gateIds: ["tests", "tests"] }] }
+        ]) {
+          profile.validation.changeAware = changed;
+          assert.throws(() => validationGates(profile, "validate-only"), /validation.changeAware/);
+        }
+      } finally {
+        rmSync(repository, { recursive: true, force: true });
+      }
+    });
 test("API-only validation excludes frontend execution without reporting it passed", async () => {
   const { repository, profile } = apiFixture();
   try {

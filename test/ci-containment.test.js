@@ -3,8 +3,29 @@ import childProcess from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import test, { mock } from "node:test";
+import { fileURLToPath } from "node:url";
 import { classifyAttempts, runTests } from "../scripts/ci/run-tests-with-containment.mjs";
 import { verifySelfHealing } from "../scripts/ci/verify-self-healing.mjs";
+
+for (const outcome of ["success", "failure", "exception"]) {
+  test(`Windows validation restores idle-sleep prevention after ${outcome}`, {
+    skip: process.platform !== "win32",
+    timeout: 30000
+  }, () => {
+    const runner = fileURLToPath(new URL("../scripts/validate.ps1", import.meta.url)).replaceAll("'", "''");
+    const command = outcome === "exception"
+      ? "throw 'Synthetic validation failure'"
+      : `if (($args -join ' ') -ne 'run validate') { throw 'Unexpected validation command' }; $global:LASTEXITCODE = ${outcome === "success" ? 0 : 7}`;
+    const result = childProcess.spawnSync("pwsh", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      `function global:npm { ${command} }; & '${runner}'; exit $LASTEXITCODE`
+    ], { encoding: "utf8", windowsHide: true, timeout: 20000 });
+    assert.ifError(result.error);
+    assert.equal(result.status, outcome === "success" ? 0 : outcome === "failure" ? 7 : 1, result.stderr);
+    assert.match(result.stdout, /Temporarily keeping Windows and its display awake/);
+    assert.match(result.stdout, /Temporary idle-sleep prevention released/);
+  });
+}
 
 test("local and CI unit suites bound file workers without changing failure containment", async () => {
   const { scripts } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));

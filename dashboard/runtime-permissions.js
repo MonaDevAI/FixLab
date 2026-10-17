@@ -4,7 +4,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 
 export const PERMISSION_BLOCKED_MESSAGE =
-  "Copilot requires runtime permission. This background job cannot display an interactive approval prompt. Review permissions in the dashboard before resuming.";
+  "Copilot requires runtime permission. This background job cannot display an interactive approval prompt, and the denial supplies no structured scope. Review the denied action with the user. Review folder access only for a confirmed folder restriction; it cannot approve tools, URLs, or organization policy.";
 
 export function runtimePermissionDenied(text) {
   return /permission denied because no interactive user response was available|denied, no one to approve|execution remains denied|runtime execution remains blocked by runtime permissions/iu.test(text);
@@ -25,12 +25,13 @@ export function permissionRequest(stages) {
   return newPermissionRequest();
 }
 
-export function newPermissionRequest() {
+export function newPermissionRequest({ preflight = false } = {}) {
   return {
     id: randomUUID(),
     kind: "unclassified",
     message: PERMISSION_BLOCKED_MESSAGE,
-    scope: null
+    scope: null,
+    ...(preflight ? { preflight: true } : {})
   };
 }
 

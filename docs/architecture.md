@@ -130,6 +130,22 @@ Full regression remains deferred and readiness blocked until the user
 selects full validation and the required gates pass. Independent safe checks
 can continue after unrelated failures; dependencies and approvals still apply.
 
+An opt-in `validation.changeAware` policy generalizes API-only selection to
+reviewed component path-to-gate mappings. All matching scope gate sets are
+combined, with pinned-baseline and executed-history safeguards unchanged.
+Unknown, empty, unreadable and full-validation-path changes retain all gates.
+An optional job `permissionPreflight` pauses before executor admission and
+uses the existing exact-folder review/approval flow. It grants nothing by
+itself, and the first approved invocation starts a new runtime session rather
+than resuming one that never ran. No grants persist across dashboard restart.
+Completed preflight lifecycle state does persist so a recovered session is not
+misclassified as an unstarted one; restarting as a new job resets that state.
+A pre-executor workspace blocker retains the approved job-local folder grant
+and surfaces workspace review instead of restoring a conflicting permission
+request. The reviewed-workspace retry then starts the first executor fresh.
+If a grant becomes invalid before that launch, its replacement review retains
+the fresh-launch state; approval never resumes a nonexistent runtime session.
+
 The packaged dashboard is a dependency-free, single-user local implementation.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the
 packaged Agency plugin, and retains one active job plus a bounded 20-job

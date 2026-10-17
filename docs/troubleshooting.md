@@ -265,6 +265,35 @@ npm run type-check
 Record the original command as blocked and report the direct command's actual
 result. Do not describe a permission denial as a passing or failing test.
 
+## Local validation times out after Windows becomes idle
+
+Windows can enter Modern Standby while local Git, Node.js or browser work is
+still running. After waking, a probe can report `ETIMEDOUT`, a job can be
+failed before its executor starts, or a browser expectation can miss a short
+intermediate state. A successful focused retry does not make the original
+full validation pass.
+
+For FixLab contributors running from its source checkout, use:
+
+```powershell
+pwsh -File scripts\validate.ps1
+```
+
+This runs the unchanged full `npm run validate` gate with a temporary system
+and display idle-sleep request. The previous Windows execution state is
+restored in `finally`, including when validation exits nonzero or throws.
+It does not change the machine's power plan, disable manual sleep, alter
+timeouts, skip checks, or hide failed attempts. Keep the lid open during a run.
+On other platforms, use `npm run validate` directly.
+
+When operating through Copilot, `/keep-alive` is another option if available in
+that version. Verify the machine remained awake rather than assuming a tool
+process prevented sleep. Windows System events from
+`Microsoft-Windows-Kernel-Power` with IDs 506/507 show Modern Standby entry/exit;
+read their timestamps and reasons to distinguish idle sleep from an actual
+Git or application defect. If a failure persists while awake, investigate it
+instead of repeatedly retrying or increasing deadlines.
+
 ## Doctor still reports blockers
 
 Doctor is intentionally strict. Resolve every `FAIL` before starting the

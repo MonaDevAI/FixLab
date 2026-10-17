@@ -57,6 +57,8 @@ test("cross-runtime validation guidance stays aligned", () => {
 
   for (const entryPoint of entryPoints) {
     const content = readFileSync(join(root, entryPoint), "utf8");
+    assert.match(content, /permissionPreflight/, `${entryPoint} must describe opt-in permission preflight`);
+    assert.match(content, /component path-to-gate policies/, `${entryPoint} must preserve reviewed component validation`);
     assert.match(
       content,
       /primary\s+business-data\s+source/,
