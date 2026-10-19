@@ -98,7 +98,27 @@ operations. Treat every runner as privileged engineering infrastructure.
 ## Background permission review
 
 The dashboard's workflow and PR approvals are not runtime permission grants.
-A reported non-interactive denial pauses the owned executor without automatic
+Direct Copilot jobs use the official SDK's permission and user-input callbacks.
+Human responses are scoped to the current live instance, job and one-use request.
+The endpoint requires the exact loopback Host and browser Origin, JSON and
+explicit confirmation. It is not exposed as an agent/MCP self-approval operation.
+No session-wide or permanent grant is offered, and managed organization policies
+are not overridden. Native creation and resume enable the SDK's managed-policy
+enforcement using the runtime's signed-in authentication. Before sending the
+job prompt, the host checks the session's resolved policy and blocks execution
+if policy is unresolved or the runtime cannot report it. Policy-loading errors
+are not retried without enforcement. Credentials and policy documents are not
+forwarded through the dashboard.
+Sandbox bypass/permissive requests are explicitly displayed
+for review. Sensitive, oversized and unsupported request details disable approval.
+Passwords, tokens and MFA must stay in the normal authentication browser.
+Pending prompts and answers are memory-only, are omitted from dashboard history,
+and are invalidated by stop, hold, shutdown or runtime disconnect. A job retains
+its executor lease while a human is answering. This local interface, like other
+dashboard controls, is not an authorization boundary against another process
+running as the same OS user.
+
+A reported text-only non-interactive denial pauses the owned executor without automatic
 retries; approval remains unavailable until its termination is verified.
 
 Folder review requires the exact loopback Host, a matching browser Origin when
@@ -112,5 +132,5 @@ Users must not select folders containing secrets or browser state.
 Grants are not persisted or copied to restarted jobs. Tool, URL, sandbox and
 organization-policy restrictions are not overridden by folder approval. Text
 denials without a structured scope remain explicitly unclassified; this panel
-is not a general-purpose interactive runtime permission bridge or an
+is not a native runtime permission bridge or an
 authorization boundary against other processes running as the same user.

@@ -325,10 +325,49 @@ in chat, or explicitly supply `--open`. `--no-open` remains supported.
 Onboarding and reconnecting do not automatically open browser tabs.
 The dashboard does not run during installation or `fixlab init`.
 
+### Per-run request interception
+
+The new-job form's **Request interception for this run** selector supports
+**Profile default**, **Intercept mutating requests**, and **Live read-only
+(no added interception)**. The API equivalent is `testMutationMode` with an
+empty value, `intercepted`, or `none`. Selecting a mode does not edit the profile
+or affect other jobs. The selection is retained for that job's recovery/restart.
+
+Intercepted validation can retain real permitted backend reads, including
+semantically read-only POST searches. It is not validation of persisted backend
+mutations. Live read-only requires a profile permitting non-production reads,
+prohibits actual mutations and automatic draft persistence, and never disables
+repository-required guards. If the journey cannot safely run without writes,
+it remains blocked instead of sending them. An optional profile
+`browserAutomation.testSynthesis.allowedMutationModes` array can further limit
+per-run choices. Synthetic-only profiles cannot silently switch to live reads.
+
+Neither choice authorizes Save, Submit, Approve or real writes. Those require a
+separate reviewed repository workflow and explicit authorization. Conflicting
+reported browser evidence fails validation; it cannot silently broaden the
+selected mode. Interception is implemented by repository-owned browser automation,
+not a blanket network proxy installed by the dashboard.
+
 ### Background runtime permissions
 
-A background Copilot job cannot show an interactive terminal permission prompt.
-When it reports a non-interactive permission denial, FixLab stops the owned
+Direct `--runtime copilot` dashboard jobs display structured runtime requests
+in **Copilot needs your response**. Review the command, paths, diff, URL or tool
+arguments and any sandbox escalation, then choose **Allow once** or **Deny**.
+For agent questions, choose an offered option or send a non-sensitive answer if
+freeform input is enabled. Complete sign-in in the normal browser; never paste
+passwords, tokens or MFA codes into FixLab.
+
+The same executor waits for your response, retains its repository lease, and
+suspends its idle timer. No restart or generic Resume is needed. Multiple requests
+are shown one at a time. Stop/hold/shutdown cancels unanswered requests. Responses
+are live-only and are not saved in dashboard history or copied to another job.
+Unknown, sensitive or oversized permission details offer **Deny**, not approval.
+Organization policy remains authoritative; an approval is not a passed test or
+permission for unrelated production operations. The dashboard does not offer
+blanket, session-wide or permanent approvals.
+
+Agency and older text-only jobs cannot forward native prompts. When one reports
+a non-interactive permission denial, FixLab stops the owned
 executor and shows **Copilot permission required** in the browser. Do not use
 ordinary Resume or PR approval to grant runtime access.
 

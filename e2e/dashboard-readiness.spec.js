@@ -6,11 +6,15 @@ import { mkdtempSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createServer as createPortProbe } from "node:net";
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 
 const packageRoot = process.env.FIXLAB_TEST_PACKAGE_ROOT ??
   fileURLToPath(new URL("..", import.meta.url));
 const { createDashboardServer } = await import(
   pathToFileURL(join(packageRoot, "dashboard", "server.js")).href
+);
+const { createRuntimeRequestBridge, runtimePermissionPrompt, runtimeQuestionPrompt } = await import(
+  pathToFileURL(join(packageRoot, "dashboard", "runtime-requests.js")).href
 );
 let repository;
 let dashboard;
@@ -136,6 +140,111 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await dashboard.close();
   rmSync(repository, { recursive: true, force: true });
+});
+
+test("dashboard submits interception as a per-run option rather than a shared default", async ({ page }) => {
+  let submitted;
+  await page.route("**/api/jobs", async (route) => {
+    submitted = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: "application/json", status: 202,
+      body: JSON.stringify({
+        job: {
+          id: "per-run-interception-job", requestType: "bug-fix",
+          request: "Synthetic per-run interception scenario.", mode: "playwright-only",
+          status: "running", stages: {}, bugs: [], logs: [],
+          canComment: true, inputCount: 0, pendingInputCount: 0,
+          testEvidence: { source: "synthetic-intercepted", mutationMode: "intercepted" }
+        },
+        queue: [], history: []
+      })
+    });
+  });
+  await page.goto(baseUrl);
+  await page.locator("#request").fill("Synthetic per-run interception scenario.");
+  await page.locator("input[name=mode][value=playwright-only]").check();
+  await page.locator("#job-test-mutation-mode").selectOption("intercepted");
+  await page.locator("#start-button").click();
+  await expect.poll(() => submitted?.testMutationMode).toBe("intercepted");
+  expect(submitted.mode).toBe("playwright-only");
+  await page.locator("#job-test-mutation-mode").selectOption("none");
+  await expect(page.locator("#job-test-mutation-mode")).toHaveValue("none");
+});
+
+test("native Copilot prompts allow once, deny and answer choices in the same live job", async ({ page }) => {
+  const directory = mkdtempSync(join(tmpdir(), "fixlab-native-ui-"));
+  mkdirSync(join(directory, ".github", "fixlab"), { recursive: true });
+  writeFileSync(join(directory, ".github", "fixlab", "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
+  let bridge;
+  let launches = 0;
+  const sent = [];
+  const instance = createDashboardServer({
+    repository: directory, packageRoot, runtime: "copilot", browserOpener() {},
+    executor({ onRuntimeRequests }) {
+      launches++;
+      bridge = createRuntimeRequestBridge({
+        send: (message) => sent.push(message), onChange: onRuntimeRequests
+      });
+      let finish;
+      return {
+        completion: new Promise((resolve) => { finish = resolve; }),
+        respondToRuntimeRequest: (id, decision) => bridge.respond(id, decision),
+        terminate() { bridge.cancel(); finish({ code: 130 }); },
+        hasStopped: () => true
+      };
+    }
+  });
+  try {
+    const address = await instance.listen({ port: await availablePort() });
+    const created = await page.request.post(`${address.url}/api/jobs`, {
+      data: { request: "Synthetic native prompt UI scenario.", mode: "validate-only" }
+    });
+    expect(created.status()).toBe(202);
+    const permission = () => ({
+      ...runtimePermissionPrompt({ kind: "shell", fullCommandText: "npm test" }), id: randomUUID()
+    });
+    bridge.receive(permission());
+    await page.goto(address.url);
+    await expect(page.locator("#job-status")).toContainText("waiting for your response");
+    await expect(page.locator("#runtime-request-details")).toContainText("npm test");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Allow once", exact: true }).click();
+    await expect.poll(() => sent[0]?.action).toBe("allow");
+    await expect(page.locator("#runtime-request-panel")).toBeHidden();
+
+    bridge.receive(permission());
+    await page.getByRole("button", { name: "Deny", exact: true }).click();
+    await expect.poll(() => sent[1]?.action).toBe("deny");
+    bridge.receive({
+      ...runtimeQuestionPrompt({
+        question: "Complete authentication in the normal browser, then select an option.",
+        choices: ["Authentication complete", "Keep waiting"], allowFreeform: false
+      }),
+      id: randomUUID()
+    });
+    await page.getByRole("button", { name: "Authentication complete", exact: true }).click();
+    await expect.poll(() => sent[2]?.answer).toBe("Authentication complete");
+    expect(sent[2].wasFreeform).toBe(false);
+    bridge.receive({
+      ...runtimeQuestionPrompt({ question: "Which synthetic scenario should run?" }), id: randomUUID()
+    });
+    await page.locator("#runtime-request-answer").fill("Selected synthetic scenario");
+    await page.getByRole("button", { name: "Send answer", exact: true }).click();
+    await expect.poll(() => sent[3]?.answer).toBe("Selected synthetic scenario");
+    expect(sent[3].wasFreeform).toBe(true);
+    bridge.receive({
+      ...runtimePermissionPrompt({ kind: "unsupported-native-kind" }), id: randomUUID()
+    });
+    await expect(page.locator("#runtime-request-details")).toContainText("Approval is unavailable");
+    await expect(page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
+    await page.getByRole("button", { name: "Deny", exact: true }).click();
+    await expect.poll(() => sent[4]?.action).toBe("deny");
+    expect(launches).toBe(1);
+  } finally {
+    await instance.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
 });
 
 for (const componentPolicy of [false, true]) {

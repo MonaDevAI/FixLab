@@ -33,7 +33,7 @@ The machine running FixLab needs:
 
 - Agency with GitHub Copilot CLI support, or GitHub Copilot CLI directly
 - Git
-- Node.js 20 or later (the selected Copilot runtime may require a newer version)
+- Node.js 20.19+ in the 20.x line, or 22.12+ (required by the bundled Copilot SDK)
 - PowerShell 7
 - The .NET SDK required by the target repository
 - A repository-local `@playwright/test` or `playwright` package

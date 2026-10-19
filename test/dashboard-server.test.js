@@ -28,6 +28,7 @@ import {
   buildJobPrompt,
   createCacheContext,
   createDashboardServer,
+  configuredTestSynthesis,
   createProcessCompletion,
   FIXLAB_STAGES,
   inspectRepository,
@@ -40,6 +41,7 @@ import {
   validateCopilotModel
 } from "../dashboard/server.js";
 import { createExecutorLease } from "../dashboard/executor-lease.js";
+import { createRuntimeRequestBridge, runtimePermissionPrompt, runtimeQuestionPrompt } from "../dashboard/runtime-requests.js";
 import { runValidationGate } from "../bin/validation-gate-client.js";
 import { dashboardControl, dashboardConversation } from "../mcp/dashboard-client.js";
 import { compactControlResult, conversationOperations } from "../dashboard/conversation-operations.js";
@@ -974,6 +976,196 @@ async function approvePreflightDirectory(url, job, directory) {
   return post({
     action: "approve-directory", jobId: job.id, requestId: reviewed.body.job.permissionRequest.id,
     directory: reviewed.body.job.permissionRequest.scope.directory, confirmed: true
+  });
+}
+
+test("per-run interception keeps defaults unchanged and never grants live writes", () => {
+  const profile = validProfile();
+  profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+  const original = JSON.stringify(profile);
+  assert.equal(configuredTestSynthesis(profile).mutationMode, "intercepted");
+  assert.equal(configuredTestSynthesis(profile, "none").mutationMode, "none");
+  assert.equal(configuredTestSynthesis(profile, "intercepted").mutationMode, "intercepted");
+  assert.equal(JSON.stringify(profile), original);
+  for (const value of ["approved-write", "disabled", true, [], null]) {
+    assert.throws(() => configuredTestSynthesis(profile, value), /never authorizes real writes/);
+  }
+  profile.browserAutomation.testSynthesis.allowedMutationModes = ["intercepted"];
+  assert.throws(() => configuredTestSynthesis(profile, "none"), /does not allow/);
+  delete profile.browserAutomation.testSynthesis.allowedMutationModes;
+  profile.browserAutomation.testSynthesis.defaultDataSource = "synthetic-intercepted";
+  assert.throws(() => configuredTestSynthesis(profile, "none"), /permits non-production backend reads/);
+});
+
+for (const selection of ["intercepted", "none"]) {
+  test(`per-run ${selection} selection reaches only its job and rejects conflicting evidence`, async () => {
+    const repository = createGitRepository();
+    const path = join(repository, ".github", "fixlab", "repository-profile.json");
+    const profile = validProfile();
+    profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+    writeFileSync(path, JSON.stringify(profile));
+    const original = readFileSync(path, "utf8");
+    let input;
+    let complete;
+    const { dashboard, url } = await startDashboard(repository, (value) => {
+      input = value;
+      return { completion: new Promise((resolve) => { complete = resolve; }) };
+    }, undefined, { autoTestEvidence: false });
+    try {
+      const created = await jsonRequest(url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          request: "Synthetic per-run interception scenario.", mode: "playwright-only",
+          testMutationMode: selection
+        })
+      });
+      assert.equal(created.response.status, 202, created.body.error);
+      assert.equal(created.body.job.testEvidence.mutationMode, selection);
+      assert.equal(created.body.job.testEvidence.selectedMutationMode, selection);
+      assert.match(input.prompt, selection === "none" ? /explicitly selected live non-production read-only/ : /explicitly selected intercepted validation/);
+      input.onOutput("stdout", "FIXLAB_TEST|non-production-approved|approved-write|Invalid broadened evidence.\n");
+      for (const stage of FIXLAB_STAGES) {
+        input.onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|Synthetic stage.\n`);
+      }
+      complete({ code: 0 });
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const finished = (await jsonRequest(url, "/api/job")).body.job;
+      assert.equal(finished.status, "failed");
+      assert.match(finished.error, /per-run mutation mode/);
+      assert.equal(readFileSync(path, "utf8"), original);
+      const restarted = await jsonRequest(url, "/api/jobs/restart", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: finished.id })
+      });
+      assert.equal(restarted.response.status, 202, restarted.body.error);
+      assert.equal(restarted.body.job.testEvidence.selectedMutationMode, selection);
+      assert.equal(restarted.body.job.testEvidence.mutationMode, selection);
+      assert.notEqual(restarted.body.job.id, finished.id);
+    } finally {
+      await dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
+
+test("live native prompts require current instance/job/request, exact browser origin and confirmation", async () => {
+  const repository = createGitRepository();
+  let bridge;
+  let launches = 0;
+  const sent = [];
+  const { dashboard, url } = await startDashboard(repository, ({ onRuntimeRequests, prompt }) => {
+    launches++;
+    assert.match(prompt, /Native dashboard interaction replaces the exit-and-resume instruction/);
+    assert.match(prompt, /use ask_user with clear safe choices/);
+    bridge = createRuntimeRequestBridge({
+      send: (message) => sent.push(message),
+      onChange: onRuntimeRequests
+    });
+
+    return {
+      completion: new Promise(() => {}),
+      respondToRuntimeRequest: (id, decision) => bridge.respond(id, decision),
+      terminate: () => bridge.cancel()
+    };
+  }, undefined, { runtime: "copilot", executionIdleTimeoutMs: 60 });
+  try {
+    const created = await jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Synthetic native approval scenario.", mode: "validate-only" })
+    });
+    const id = randomUUID();
+    bridge.receive({ ...runtimePermissionPrompt({ kind: "shell", fullCommandText: "npm test" }), id });
+    const state = (await jsonRequest(url, "/api/status")).body;
+    assert.equal(state.job.runtimeRequests[0].id, id);
+    assert.equal(state.job.status, "running");
+    const conversation = (await jsonRequest(url, "/api/conversation")).body;
+    assert.equal(conversation.question.kind, "runtime-input");
+    assert.deepEqual(conversation.question.actions, []);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal((await jsonRequest(url, "/api/job")).body.job.status, "running", "human wait suspends idle timeout");
+    const valid = {
+      instanceId: state.instanceId, jobId: created.body.job.id, requestId: id,
+      action: "allow", confirmed: true
+    };
+    const post = (body, origin = url) => jsonRequest(url, "/api/job/runtime-response", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) },
+      body: JSON.stringify(body)
+    });
+    for (const change of [
+      { instanceId: randomUUID() }, { jobId: randomUUID() }, { requestId: randomUUID() }
+    ]) {
+      assert.equal((await post({ ...valid, ...change })).response.status, 409);
+    }
+    assert.equal((await post(valid, "https://example.invalid")).response.status, 403);
+    assert.equal((await post(valid, "")).response.status, 403);
+    assert.equal((await post({ ...valid, confirmed: false })).response.status, 400);
+    assert.equal((await jsonRequest(url, "/api/job/input", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "continue", details: "Do not use as approval." })
+    })).response.status, 409);
+    assert.equal(sent.length, 0);
+    assert.equal((await post(valid)).response.status, 200);
+    assert.equal(sent[0].action, "allow");
+    assert.equal((await post(valid)).response.status, 409);
+    assert.equal(launches, 1, "responding continues the same live executor");
+    const questionId = randomUUID();
+    bridge.receive({
+      ...runtimeQuestionPrompt({ question: "Ephemeral native question marker", choices: ["Continue", "Cancel"] }),
+      id: questionId
+    });
+    await jsonRequest(url, "/api/status");
+    const statusText = readFileSync(join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json"), "utf8");
+    assert.doesNotMatch(statusText, /Ephemeral native question marker|fullCommandText|runtimeRequests/);
+    await dashboard.close();
+    assert.equal(sent.at(-1).action, "cancel");
+    assert.throws(() => bridge.respond(questionId, { action: "answer", choice: 0 }), /stale/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+for (const action of ["stop", "hold"]) {
+  test(`native runtime requests cannot be answered after job ${action}`, async () => {
+    const repository = createGitRepository();
+    const sent = [];
+    let bridge;
+    const { dashboard, url } = await startDashboard(repository, ({ onRuntimeRequests }) => {
+      bridge = createRuntimeRequestBridge({ send: (value) => sent.push(value), onChange: onRuntimeRequests });
+      return {
+        completion: new Promise(() => {}),
+        respondToRuntimeRequest: (id, decision) => bridge.respond(id, decision),
+        terminate: () => bridge.cancel()
+      };
+    }, undefined, { runtime: "copilot" });
+    try {
+      const created = await jsonRequest(url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Synthetic cancellation scenario.", mode: "validate-only" })
+      });
+      const id = randomUUID();
+      bridge.receive({ ...runtimePermissionPrompt({ kind: "shell", fullCommandText: "npm test" }), id });
+      const state = (await jsonRequest(url, "/api/status")).body;
+      const stopped = await jsonRequest(url, action === "hold" ? "/api/jobs/hold" : "/api/job/stop", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: created.body.job.id })
+      });
+      assert.equal(stopped.response.status, 202);
+      assert.equal(sent[0].action, "cancel");
+      const late = await jsonRequest(url, "/api/job/runtime-response", {
+        method: "POST", headers: { "Content-Type": "application/json", Origin: url },
+        body: JSON.stringify({
+          instanceId: state.instanceId, jobId: created.body.job.id, requestId: id,
+          action: "allow", confirmed: true
+        })
+      });
+      assert.equal(late.response.status, 409);
+      assert.equal(sent.length, 1);
+    } finally {
+      await dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
   });
 }
 

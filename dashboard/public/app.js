@@ -82,6 +82,101 @@ let permissionSelection = null;
 let runtimeHelperDirectory = "";
 let permissionBusy = false;
 let permissionEdited = false;
+let dashboardInstanceId = null;
+let runtimeSelection = null;
+let runtimeBusy = false;
+const runtimePanel = document.querySelector("#runtime-request-panel");
+const runtimeDetails = document.querySelector("#runtime-request-details");
+const runtimeChoices = document.querySelector("#runtime-request-choices");
+const runtimeAnswer = document.querySelector("#runtime-request-answer");
+const runtimeAnswerLabel = document.querySelector("#runtime-request-answer-label");
+const runtimeActions = document.querySelector("#runtime-request-actions");
+const runtimeMessage = document.querySelector("#runtime-request-message");
+
+async function respondToRuntime(action, choice) {
+  const selection = runtimeSelection;
+  if (!selection || runtimeBusy) {
+    return;
+  }
+  if (action === "allow" && !window.confirm(
+    "Allow only this exact Copilot permission request once? Review its command, files, URLs and any sandbox escalation above. This does not override organization policy."
+  )) {
+    return;
+  }
+  runtimeBusy = true;
+  runtimePanel.querySelectorAll("button, textarea").forEach((element) => {
+    element.disabled = true;
+  });
+  try {
+    const body = await fetchJson("/api/job/runtime-response", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        instanceId: dashboardInstanceId,
+        jobId: selection.jobId,
+        requestId: selection.requestId,
+        confirmed: true,
+        action,
+        ...(choice === undefined ? { answer: runtimeAnswer.value } : { choice })
+      })
+    });
+    activeJob = body.job;
+    observedJobs.set(body.job.id, body.job);
+    runtimeAnswer.value = "";
+    renderJob(body.job, body.job);
+  } catch (error) {
+    runtimeMessage.textContent = error.message;
+  } finally {
+    runtimeBusy = false;
+    runtimePanel.querySelectorAll("button, textarea").forEach((element) => {
+      element.disabled = false;
+    });
+  }
+}
+
+function renderRuntimeRequest(job, isActive) {
+  const pending = isActive ? job?.runtimeRequests?.[0] : null;
+  runtimePanel.hidden = !pending;
+  if (!pending) {
+    runtimeSelection = null;
+    runtimeAnswer.value = "";
+    return;
+  }
+  const key = `${job.id}:${pending.id}`;
+  if (runtimeSelection?.key === key) {
+    return;
+  }
+  runtimeSelection = { key, jobId: job.id, requestId: pending.id };
+  runtimeAnswer.value = "";
+  runtimeMessage.textContent = "";
+  document.querySelector("#runtime-request-heading").textContent = pending.title;
+  runtimeDetails.textContent = pending.details;
+  runtimeChoices.replaceChildren();
+  runtimeActions.replaceChildren();
+  runtimeAnswer.hidden = pending.kind !== "question" || !pending.allowFreeform;
+  runtimeAnswerLabel.hidden = runtimeAnswer.hidden;
+  const button = (parent, label, action, choice) => {
+    const element = document.createElement("button");
+    element.type = "button";
+    element.textContent = label;
+    element.addEventListener("click", () => void respondToRuntime(action, choice));
+    parent.append(element);
+  };
+  if (pending.kind === "permission") {
+    if (pending.canApprove) {
+      button(runtimeActions, "Allow once", "allow");
+    }
+    button(runtimeActions, "Deny", "deny");
+  } else {
+    pending.choices.forEach((choice, index) => {
+      button(runtimeChoices, choice, "answer", index);
+    });
+    if (pending.allowFreeform) {
+      button(runtimeActions, "Send answer", "answer");
+    }
+    button(runtimeActions, "Cancel question", "cancel");
+  }
+}
 
 function renderPermission(job, isActive) {
   const pending = isActive ? job?.permissionRequest : null;
@@ -420,7 +515,7 @@ function renderJob(job, currentActiveJob = job) {
       ? Date.now() - Date.parse(job.lastActivityAt)
       : null;
   jobStatusElement.textContent = job
-    ? `${job.status} · ${job.requestType}${job.model ? ` · ${job.model}` : ""} · ${
+    ? `${job.runtimeRequests?.length ? "waiting for your response" : job.status} · ${job.requestType}${job.model ? ` · ${job.model}` : ""} · ${
         job.targetEnvironment || "profile default"
       }${job.sharedWorkspace ? ` · shared: ${job.sharedWorkspace.branch}` : ""} · ${formatDuration(job.durationMs)}${
         lastActivityAge === null
@@ -589,6 +684,7 @@ function renderJob(job, currentActiveJob = job) {
   formError.textContent = job?.error ?? "";
 
   renderPermission(job, isActive);
+  renderRuntimeRequest(job, isActive);
   const canResume = isActive && Boolean(job?.canResume) && !job?.permissionRequest;
   const canComment = isActive && Boolean(job?.canComment) && !job?.permissionRequest;
   const canRetryLiveTest =
@@ -1439,6 +1535,7 @@ document.addEventListener("paste", async (event) => {
 async function refresh() {
   try {
     const body = await fetchJson("/api/status");
+    dashboardInstanceId = body.instanceId;
     activeJob = body.job;
     rememberJob(activeJob);
     for (const queuedJob of body.queue) {
@@ -1507,6 +1604,7 @@ form.addEventListener("submit", async (event) => {
           : "common",
         runAllUiScenarios: data.get("runAllUiScenarios") === "on",
         targetEnvironment: data.get("targetEnvironment"),
+        testMutationMode: data.get("testMutationMode") ?? "",
         prestartFrontend: data.get("prestartFrontend") === "on",
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",
