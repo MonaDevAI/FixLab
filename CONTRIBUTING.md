@@ -13,7 +13,7 @@ workflows, or secret handling require security review.
 
 ## Local completion gate
 
-Use Node.js 20, install from the committed lock file, and run the same
+Use Node.js 20.19+ in the 20.x line or 22.12+, install from the committed lock file, and run the same
 deterministic checks used by pull-request validation:
 
 ```shell

@@ -241,7 +241,16 @@ A runtime permission denial is not a test failure. Compound shell commands,
 cross-directory dependency reuse, or an unapproved executable can be blocked
 before Jest, TypeScript, or another validator starts.
 
-For a dashboard job that reports "no interactive user response was available"
+For a new direct Copilot job, use **Copilot needs your response** to approve the
+specific runtime request once, deny it, or answer the agent's question. The live
+session waits without an idle timeout; it does not need Resume. Sign in only in
+the normal browser, then choose the agent's readiness option if offered.
+Stop/hold/shutdown invalidates outstanding prompts. A dashboard/runtime restart
+cannot replay an approval, and a historical unclassified denial has no live
+request to approve. This feature does not make failed tests or organization
+restrictions automatically approvable.
+
+For an Agency or older dashboard job that reports "no interactive user response was available"
 or "Denied, no one to approve", use the browser's **Copilot permission required**
 panel. Inspect the logs, then review and explicitly confirm a specific external
 folder only when the failure is a path restriction. Ordinary workflow or PR

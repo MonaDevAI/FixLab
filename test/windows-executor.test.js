@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
-import { spawn, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { createCopilotExecutor } from "../dashboard/server.js";
 import { createExecutorLease } from "../dashboard/executor-lease.js";
 import { quoteWindowsArgument, spawnWindowsExecutor } from "../dashboard/windows-executor.js";
@@ -363,42 +362,35 @@ test("Windows containment supports the repository-owned Microsoft Edge browser",
 
 test("real Windows Copilot executor retains its lease until the contained tree exits", windowsOnly, async () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-windows-lease-test-"));
-  const bin = join(repository, "bin");
-  mkdirSync(bin);
-  const executable = join(bin, "copilot.exe");
+  const hostDirectory = join(repository, "dashboard");
+  mkdirSync(hostDirectory);
   const pidPath = join(repository, "descendant.txt");
-  const childArgs = ["-e", "setInterval(() => {}, 1000)"].map(quoteWindowsArgument).join(" ");
-  const source = `
-    using System;
-    using System.Diagnostics;
-    using System.IO;
-    using System.Threading;
-    public class FakeCopilot {
-      public static void Main() {
-        Console.In.ReadToEnd();
-        var start = new ProcessStartInfo(${JSON.stringify(process.execPath)}, ${JSON.stringify(childArgs)});
-        start.UseShellExecute = false;
-        var child = Process.Start(start);
-        File.WriteAllText(${JSON.stringify(pidPath)}, child.Id.ToString());
-        Console.WriteLine("FIXLAB_STAGE|intake|blocked|Synthetic prerequisite.");
-        Thread.Sleep(150);
-      }
-    }
-  `;
-  const encoded = Buffer.from(source).toString("base64");
-  const script = `$source = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}')); Add-Type -TypeDefinition $source -OutputAssembly '${executable.replaceAll("'", "''")}' -OutputType ConsoleApplication`;
-  const compiled = spawnSync(join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-    ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { encoding: "utf8", timeout: 15000, windowsHide: true });
-  const originalPath = process.env.PATH;
+  writeFileSync(join(repository, "package.json"), '{"type":"module"}');
+  writeFileSync(join(hostDirectory, "copilot-session.js"), `
+    import { spawn } from "node:child_process";
+    import { writeFileSync } from "node:fs";
+    import { createInterface } from "node:readline";
+    const input = createInterface({ input: process.stdin });
+    input.once("line", (line) => {
+      if (JSON.parse(line).type !== "start") throw new Error("Missing start frame");
+      const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true, stdio: "ignore"
+      });
+      child.unref();
+      writeFileSync(${JSON.stringify(pidPath)}, String(child.pid));
+      process.stdout.write(JSON.stringify({
+        type: "output", stream: "stdout",
+        text: "FIXLAB_STAGE|intake|blocked|Synthetic prerequisite.\\n"
+      }) + "\\n");
+      setTimeout(() => { input.close(); process.stdin.destroy(); }, 150);
+    });
+  `);
   let handle;
   let lease;
   try {
-    assert.equal(compiled.status, 0, compiled.stderr);
-    process.env.PATH = `${bin};${originalPath}`;
     const peer = createExecutorLease(repository, "peer");
     lease = createExecutorLease(repository, "owner").acquire("native-job");
-    const executor = createCopilotExecutor({ packageRoot: fileURLToPath(new URL("..", import.meta.url)) });
+    const executor = createCopilotExecutor({ packageRoot: repository });
     let output = "";
     handle = executor({
       repository,
@@ -418,7 +410,6 @@ test("real Windows Copilot executor retains its lease until the contained tree e
     peer.acquire("successor").release();
     assert.match(output, /FIXLAB_STAGE\|intake\|blocked/);
   } finally {
-    process.env.PATH = originalPath;
     handle?.terminate();
     if (handle) {
       await handle.completion;

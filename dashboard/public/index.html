@@ -141,6 +141,13 @@
             <option value="">Profile default</option>
           </select>
           <p class="guidance">Choose an allowed non-production environment from the repository profile. FixLab will use the selected environment for profile-defined startup and Playwright live testing, and will block instead of silently falling back.</p>
+          <label for="job-test-mutation-mode">Request interception for this run</label>
+          <select id="job-test-mutation-mode" name="testMutationMode">
+            <option value="">Profile default</option>
+            <option value="intercepted">Intercept mutating requests</option>
+            <option value="none">Live read-only (no added interception)</option>
+          </select>
+          <p class="guidance">This choice applies only to this job, not shared defaults. Intercepted mode can keep permitted backend reads real. Live read-only prohibits writes and requires a profile allowing non-production reads; repository-required guards remain authoritative. Neither option authorizes Save, Submit, Approve or other real writes.</p>
           <fieldset>
             <legend>Batch completion</legend>
             <label><input type="checkbox" name="separatePullRequests"> Create a separate PR per bug</label>
@@ -248,6 +255,18 @@
             <tbody id="bug-results"></tbody>
           </table>
         </div>
+      </section>
+
+      <section id="runtime-request-panel" class="panel intervention" aria-labelledby="runtime-request-heading" hidden>
+        <h2 id="runtime-request-heading">Copilot needs your response</h2>
+        <p class="guidance">The live session is waiting, not restarting. Permission applies to this request once, never to all tools or future jobs. Organization policy still applies.</p>
+        <pre id="runtime-request-details"></pre>
+        <div id="runtime-request-choices"></div>
+        <label id="runtime-request-answer-label" for="runtime-request-answer">Answer (never enter passwords, tokens or MFA codes)</label>
+        <textarea id="runtime-request-answer" rows="3" maxlength="4000" autocomplete="off"></textarea>
+        <div id="runtime-request-actions"></div>
+        <p class="guidance">For authentication, complete sign-in in the normal browser, then answer the agent's readiness question here. A failed check is not automatically safe to approve.</p>
+        <p id="runtime-request-message" class="guidance" role="status" aria-live="polite"></p>
       </section>
 
       <section id="permission-panel" class="panel intervention" aria-labelledby="permission-heading" hidden>

@@ -38,6 +38,7 @@ import { formatPreflightFailure } from "./preflight.js";
 import { createSessionRegistry } from "./sessions.js";
 import { createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
+import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES } from "./runtime-requests.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "./shared-worktree.js";
 import { compactControlResult, conversationOperations } from "./conversation-operations.js";
@@ -339,9 +340,9 @@ export function validateLiveTestProfile(profile, repository) {
   };
 }
 
-function configuredTestSynthesis(profile) {
+export function configuredTestSynthesis(profile, selectedMutationMode = "") {
   const configuration = profile?.browserAutomation?.testSynthesis;
-  return {
+  const result = {
     enabled: configuration?.enabled !== false,
     source: testDataSources.has(configuration?.defaultDataSource)
       ? configuration.defaultDataSource
@@ -352,8 +353,28 @@ function configuredTestSynthesis(profile) {
     requireScenarioEvidence:
       configuration?.requireScenarioEvidence !== false,
     reported: false,
-    scenario: ""
+    scenario: "",
+    ...(selectedMutationMode ? { selectedMutationMode } : {})
   };
+  if (!["", "intercepted", "none"].includes(selectedMutationMode)) {
+    throw new Error("testMutationMode must be empty, intercepted or none. This selector never authorizes real writes.");
+  }
+  if (selectedMutationMode) {
+    const allowed = configuration?.allowedMutationModes;
+    if (allowed !== undefined &&
+        (!Array.isArray(allowed) || !allowed.includes(selectedMutationMode))) {
+      throw new Error("The repository profile does not allow the selected per-run mutation mode.");
+    }
+    if (selectedMutationMode === "none" &&
+        !["non-production-read-only", "non-production-approved"].includes(result.source)) {
+      throw new Error("Live read-only mode requires a profile that permits non-production backend reads.");
+    }
+    result.mutationMode = selectedMutationMode;
+    if (result.source === "non-production-approved") {
+      result.source = "non-production-read-only";
+    }
+  }
+  return result;
 }
 
 export function configuredValidationEnvironments(profile) {
@@ -481,6 +502,9 @@ function dashboardSnapshot(job) {
       enabled: job.testEvidence.enabled,
       source: job.testEvidence.source,
       mutationMode: job.testEvidence.mutationMode,
+      ...(job.testEvidence.selectedMutationMode
+        ? { selectedMutationMode: job.testEvidence.selectedMutationMode }
+        : {}),
       requireScenarioEvidence: job.testEvidence.requireScenarioEvidence,
       reported: job.testEvidence.reported,
       scenario: safePersistedSummary(job.testEvidence.scenario)
@@ -1675,7 +1699,7 @@ function findDirectExecutable(command) {
     : candidates?.[0];
 }
 
-function createExecutor({ command, packageRoot, buildInvocation, defaultModel = "" }) {
+function createExecutor({ command, packageRoot, buildInvocation, defaultModel = "", native = false }) {
   return ({
     repository,
     artifactDirectories = [],
@@ -1684,9 +1708,11 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
     sessionId,
     resume,
     model,
-    onOutput
+    usage,
+    onOutput,
+    onRuntimeRequests = () => {}
   }) => {
-    const executable = findDirectExecutable(command);
+    const executable = native ? process.execPath : findDirectExecutable(command);
     if (!executable) {
       const error = new Error(
         `${command} executable is unavailable or is not a directly executable binary`
@@ -1712,6 +1738,18 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
       error.executorNotStarted = true;
       throw error;
     }
+    if (native) {
+      invocation = {
+        args: [join(packageRoot, "dashboard", "copilot-session.js")],
+        input: JSON.stringify({
+          type: "start", packageRoot, repository, prompt, sessionId, resume, usage,
+          model: model ?? defaultModel,
+          additionalDirs: [
+            ...linkedDependencyDirectories(repository), ...artifactDirectories, ...runtimeDirectories
+          ]
+        }) + "\n"
+      };
+    }
     const containment = process.platform === "win32"
       ? spawnWindowsExecutor({ executable, args: invocation.args, repository })
       : null;
@@ -1723,12 +1761,63 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
       stdio: ["pipe", "pipe", "pipe"]
     });
 
-    child.stdout.on("data", (chunk) => onOutput("stdout", chunk.toString()));
+    let protocolError = null;
+    let buffer = "";
+    const stop = () => containment ? containment.terminate() : stopProcessTree(child);
+    const bridge = native ? createRuntimeRequestBridge({
+      send: (message) => child.stdin.write(`${JSON.stringify(message)}\n`),
+      onChange: onRuntimeRequests
+    }) : null;
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      if (!native) {
+        onOutput("stdout", chunk);
+        return;
+      }
+      try {
+        buffer += chunk;
+        let newline;
+        while ((newline = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, newline);
+          buffer = buffer.slice(newline + 1);
+          if (Buffer.byteLength(line) > MAX_RUNTIME_FRAME_BYTES) {
+            throw new Error("Copilot runtime output exceeded its size limit.");
+          }
+          const message = JSON.parse(line);
+          if (message.type === "request") {
+            bridge.receive(message);
+          } else if (message.type === "output" && typeof message.text === "string" &&
+              ["stdout", "stderr"].includes(message.stream)) {
+            onOutput(message.stream, message.text);
+          } else {
+            throw new Error(message.type === "error"
+              ? message.message : "Copilot sent an unsupported runtime message.");
+          }
+        }
+        if (Buffer.byteLength(buffer) > MAX_RUNTIME_FRAME_BYTES) {
+          throw new Error("Copilot runtime output exceeded its size limit.");
+        }
+      } catch (error) {
+        protocolError = error;
+        onOutput("stderr", `${error.message}\n`);
+        bridge.cancel(false);
+        stop();
+      }
+    });
     child.stderr.on("data", (chunk) => onOutput("stderr", chunk.toString()));
-    child.stdin.on("error", (error) =>
-      onOutput("stderr", `Could not send the FixLab prompt: ${error.message}\n`)
-    );
-    child.stdin.end(invocation.input);
+    child.stdin.on("error", (error) => {
+      onOutput("stderr", `Could not send the FixLab prompt: ${error.message}\n`);
+      if (native) {
+        protocolError = error;
+        bridge.cancel(false);
+        stop();
+      }
+    });
+    if (native) {
+      child.stdin.write(invocation.input);
+    } else {
+      child.stdin.end(invocation.input);
+    }
 
     const completion = createProcessCompletion(child, onOutput).then(async (result) => {
       if (!containment && child.pid) {
@@ -1747,12 +1836,22 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
           await new Promise((resolve) => setTimeout(resolve, 25));
         }
       }
-      return result;
+      if (native && buffer.trim() && !protocolError) {
+        protocolError = new Error("Copilot runtime exited with an incomplete protocol message.");
+      }
+      bridge?.cancel(false);
+      return protocolError ? { code: null, error: protocolError } : result;
     });
 
     return {
       pid: child.pid,
       completion,
+      respondToRuntimeRequest(id, decision) {
+        if (!bridge || protocolError) {
+          throw new Error("The native runtime connection is unavailable.");
+        }
+        bridge.respond(id, decision);
+      },
       hasStopped() {
         if (containment) {
           return containment.hasStopped();
@@ -1776,6 +1875,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
         return true;
       },
       terminate() {
+        bridge?.cancel();
         if (containment) {
           containment.terminate();
           return;
@@ -1833,7 +1933,8 @@ export function createCopilotExecutor({ packageRoot, model = "" }) {
     command: "copilot",
     packageRoot,
     buildInvocation: buildCopilotInvocation,
-    defaultModel: selectedModel
+    defaultModel: selectedModel,
+    native: true
   });
 }
 
@@ -1899,6 +2000,7 @@ function publicJob(job) {
     lastActivityAt: job.lastActivityAt,
     error: job.error,
     permissionRequest: job.permissionRequest ?? null,
+    runtimeRequests: job.runtimeRequests ?? [],
     runtimeDirectoryGrants: (job.runtimeDirectoryGrants ?? []).map((scope) => scope.directory),
     canResume:
       !job.resumeDisabled &&
@@ -1913,7 +2015,7 @@ function publicJob(job) {
     canDismiss:
       !job.executorStopping &&
       ["blocked", "failed"].includes(job.status),
-    canComment: job.status === "running" && !job.permissionRequest,
+    canComment: job.status === "running" && !job.permissionRequest && !job.runtimeRequests?.length,
     inputCount: job.inputs.length,
     pendingInputCount: job.pendingInputs.length,
     durationMs: Math.max(
@@ -2221,6 +2323,18 @@ function appendLine(job, stream, line) {
       });
       return;
     }
+    const selectedMode = job.testEvidence.selectedMutationMode;
+    if (selectedMode && (mutationMode !== selectedMode ||
+        (selectedMode === "none" && source === "synthetic-intercepted"))) {
+      job.testEvidence.modeViolation = true;
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: "Rejected browser evidence that conflicts with this run's explicit request-interception choice."
+      });
+      return;
+    }
     job.testEvidence = {
       ...job.testEvidence,
       source,
@@ -2323,6 +2437,14 @@ function finishJob(job, result) {
     job.error = PERMISSION_BLOCKED_MESSAGE;
     job.finishedAt = new Date().toISOString();
     return;
+  }
+
+  if (job.testEvidence.modeViolation) {
+    job.stages["live-test"] = {
+      status: "failed",
+      message: "Browser evidence conflicts with the explicitly selected per-run mutation mode."
+    };
+    job.error = job.stages["live-test"].message;
   }
 
   if (
@@ -2884,6 +3006,7 @@ function resetJobForResume(job) {
   job.finishedAt = null;
   job.error = null;
   job.partial = { stdout: "", stderr: "" };
+  delete job.testEvidence.modeViolation;
 }
 
 export function createDashboardServer({
@@ -3164,7 +3287,8 @@ export function createDashboardServer({
       manualLocalhostPending: false,
       manualLocalhostResult: null,
       testEvidence: configuredTestSynthesis(
-        loadRepositoryProfile(resolvedRepository)
+        loadRepositoryProfile(resolvedRepository),
+        sourceJob.testEvidence.selectedMutationMode ?? ""
       ),
       stages: Object.fromEntries(
         FIXLAB_STAGES.map((stage) => [
@@ -3232,6 +3356,27 @@ export function createDashboardServer({
       throw new Error("Saved job runtime does not match this dashboard; reconnect using its originating runtime.");
     }
     validateCopilotModel(job.model, runtime);
+    if (job.testEvidence.selectedMutationMode) {
+      const effective = configuredTestSynthesis(
+        loadRepositoryProfile(resolvedRepository), job.testEvidence.selectedMutationMode
+      );
+      if (effective.mutationMode !== job.testEvidence.mutationMode) {
+        throw new Error("The selected run's data-safety configuration changed; start a newly reviewed job.");
+      }
+      prompt += job.testEvidence.selectedMutationMode === "intercepted"
+        ? "\nThe user explicitly selected intercepted validation for this run only. This supersedes conflicting free-text requests for no interception, but not repository safety rules. Use real permitted reads and lookups, including semantically read-only POST searches; intercept actual mutating requests. Do not classify every POST as a write. Clearly distinguish intercepted behavior from backend mutation validation. This choice grants no real-write permission and does not change shared defaults."
+        : "\nThe user explicitly selected live non-production read-only validation without added interception for this run only. Do not perform or send any mutations, including Save, Submit, Approve or automatic draft persistence. Verify an action cannot write before using it; if that cannot be established, stop and ask for a safe mode. Keep repository-required guards and data-safety policy authoritative; this selection cannot waive them. Never claim backend writes were validated or disable a required guard to make the test run. Do not change shared defaults.";
+    }
+    if (runtime === "copilot") {
+      prompt += `\nNative dashboard interaction replaces the exit-and-resume instruction above for live human requests:
+- The runtime forwards actual permission requests to the dashboard. Wait for the user's allow-once or deny response; never infer permission, request blanket grants, or substitute an ask_user answer for a denied runtime permission.
+- For a genuine blocker or missing decision, use ask_user with clear safe choices and optional non-sensitive freeform input. The dashboard displays the question and waits while keeping this same executor and its repository lease alive.
+- Emit a concise FIXLAB_ACTIVITY update before waiting. Do not mark later stages skipped or exit merely because a supported human question is pending.
+- Keep sign-in and MFA in the normal browser. Ask only whether the user has completed that action; never collect passwords, tokens, cookies or verification codes.
+- Continue this same workflow after the explicit answer, without rerunning completed work. Denied or unresolved prerequisites remain blocked, never passed.
+- Do not use a question to waive repository data-safety policy, required validation, organization restrictions, or unrelated production operations. If policy and the request conflict, explain the conflict and ask for a reviewed compliant decision; do not silently rewrite policy.
+- If the native request is unsupported, the user cancels, or the prerequisite remains unavailable, report the exact blocker and exit safely. Ordinary comments, PR approval and conversation replies are not runtime authorization.`;
+    }
     if (closing) {
       throw new Error("the dashboard is shutting down");
     }
@@ -3370,7 +3515,8 @@ export function createDashboardServer({
     });
     const armIdleWatchdog = () => {
       clearTimeout(idleTimer);
-      if (!job.acceptsValidation || job.validationSession.active || job.status !== "running") {
+      if (!job.acceptsValidation || job.validationSession.active || job.status !== "running" ||
+          job.runtimeRequests?.length) {
         return;
       }
       idleTimer = setTimeout(() => {
@@ -3413,7 +3559,8 @@ export function createDashboardServer({
     };
     job.refreshIdleWatchdog = armIdleWatchdog;
     const emitHeartbeat = () => {
-      if (job.status !== "running" || job.validationSession.active || !job.lastActivityAt) {
+      if (job.status !== "running" || job.validationSession.active || !job.lastActivityAt ||
+          job.runtimeRequests?.length) {
         return;
       }
       const quietMs = Date.now() - Date.parse(job.lastActivityAt);
@@ -3449,6 +3596,12 @@ export function createDashboardServer({
         sessionId: job.id,
         resume,
         model: job.model,
+        usage: job.usage,
+        onRuntimeRequests(requests) {
+          job.runtimeRequests = requests;
+          job.lastActivityAt = new Date().toISOString();
+          armIdleWatchdog();
+        },
         onOutput(stream, text) {
           job.lastActivityAt = new Date().toISOString();
           armIdleWatchdog();
@@ -3701,7 +3854,13 @@ export function createDashboardServer({
     const job = currentJob ? publicJob(currentJob) : null;
     let question = null;
     let workspaceReview = null;
-    if (job?.permissionRequest) {
+    if (job?.runtimeRequests?.length) {
+      question = {
+        kind: "runtime-input",
+        message: "Copilot is waiting for a live response in this dashboard's browser panel. Review the exact native request there. Connected conversation replies cannot approve or answer it.",
+        actions: []
+      };
+    } else if (job?.permissionRequest) {
       question = { kind: "permission", message: job.permissionRequest.preflight
         ? "Pre-launch folder review is pending. Ask the user for the exact required external folder, then use permission-review and a separate explicit permission-approve bound to this job and request. Review alone grants nothing."
         : PERMISSION_BLOCKED_MESSAGE, actions: [] };
@@ -3927,7 +4086,7 @@ export function createDashboardServer({
 
     if (
       request.method === "POST" &&
-      ["/api/jobs", "/api/job/input", "/api/job/permissions", "/api/jobs/resume", "/api/jobs/restart", "/api/frontend/start"].includes(requestUrl.pathname)
+      ["/api/jobs", "/api/job/input", "/api/job/permissions", "/api/job/runtime-response", "/api/jobs/resume", "/api/jobs/restart", "/api/frontend/start"].includes(requestUrl.pathname)
     ) {
       try {
         const resource = requestUrl.pathname === "/api/frontend/start" ? "frontend" : "job";
@@ -3955,6 +4114,7 @@ export function createDashboardServer({
     if (request.method === "GET" && requestUrl.pathname === "/api/status") {
       persistDashboardState();
       sendJson(response, 200, {
+        instanceId: sessions.id,
         readiness: inspectRepository(resolvedRepository),
         runtime: {
           name: runtime,
@@ -4247,6 +4407,50 @@ export function createDashboardServer({
       return;
     }
 
+    if (request.method === "POST" && requestUrl.pathname === "/api/job/runtime-response") {
+      const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+      if (request.headers.host !== new URL(expectedOrigin).host ||
+          request.headers.origin !== expectedOrigin) {
+        sendJson(response, 403, { error: "Runtime responses require the dashboard's exact loopback host and origin." });
+        return;
+      }
+      try {
+        if (!request.headers["content-type"]?.toLowerCase().startsWith("application/json")) {
+          sendJson(response, 400, { error: "Content-Type must be application/json." });
+          return;
+        }
+        const body = await readJsonBody(request);
+        const pending = currentJob?.runtimeRequests?.find((item) => item.id === body?.requestId);
+        if (closing || !currentJob || currentJob.status !== "running" ||
+            currentJob.executorStopping || !activeHandle?.respondToRuntimeRequest ||
+            body.instanceId !== sessions.id || body.jobId !== currentJob.id || !pending) {
+          sendJson(response, 409, { error: "The live runtime request changed. Refresh before responding." });
+          return;
+        }
+        if (body.confirmed !== true) {
+          sendJson(response, 400, { error: "Explicit confirmation is required." });
+          return;
+        }
+        activeHandle.respondToRuntimeRequest(body.requestId, body);
+        pushLog(currentJob, {
+          index: currentJob.nextLogIndex,
+          timestamp: new Date().toISOString(),
+          stream: "dashboard",
+          message: body.action === "allow"
+            ? "The user approved one exact native runtime request. No future or blanket approval was granted."
+            : body.action === "deny"
+              ? "The user denied the native runtime permission request. That operation was not authorized."
+              : body.action === "cancel"
+                ? "The user cancelled the native runtime question. No answer was inferred."
+                : "The user answered the live runtime question. The answer is not copied into dashboard logs or history."
+        });
+        sendJson(response, 200, { job: publicJob(currentJob) });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
     if (request.method === "POST" && requestUrl.pathname === "/api/job/permissions") {
       const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
       if (request.headers.host !== new URL(expectedOrigin).host ||
@@ -4367,7 +4571,7 @@ export function createDashboardServer({
         });
         return;
       }
-      if (currentJob.permissionRequest) {
+      if (currentJob.permissionRequest || currentJob.runtimeRequests?.length) {
         sendJson(response, 409, {
           error: "Runtime permission is unresolved. Use the scoped permission review; a comment or workflow approval cannot grant runtime access."
         });
@@ -5157,7 +5361,14 @@ export function createDashboardServer({
       }
       const manualLocalhostUrl =
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
-      const testEvidence = configuredTestSynthesis(repositoryProfile);
+      let testEvidence;
+      try {
+        testEvidence = configuredTestSynthesis(repositoryProfile,
+          body.testMutationMode === undefined ? "" : body.testMutationMode);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       const configuredBranchNaming =
         repositoryProfile.pullRequests?.branchNaming ??
         repositoryProfile.pullRequest?.branchNaming;

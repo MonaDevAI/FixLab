@@ -49,6 +49,13 @@ agency copilot
 For direct mode, install and authenticate GitHub Copilot CLI, then use
 `--runtime copilot` or set `FIXLAB_RUNTIME=copilot`.
 
+Direct Copilot dashboard jobs use the official Copilot SDK and its bundled
+runtime to show live **Allow once / Deny** permission prompts and agent questions.
+Your response continues the same executor; human wait does not trigger the idle
+timeout. Authentication stays in the normal browser. Agency and unclassified
+text denials retain the existing fail-closed folder-review flow. See
+[background runtime permissions](docs/commands.md#background-runtime-permissions).
+
 Select a direct Copilot model with `--model <model>` or `FIXLAB_MODEL`.
 For the account-dependent HydraFusion research preview:
 

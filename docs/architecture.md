@@ -190,7 +190,27 @@ without sharing shell state between jobs. Input, output and errors remain piped
 to the supervisor and dashboard logs. Noninteractive CLI probes and setup
 helpers also hide their Windows console windows; interactive agent sessions
 continue using the user's terminal.
-If the runtime reports that permission was denied because no interactive user
+Direct Copilot executors run a Node.js SDK host inside the same owned process
+containment. The official SDK starts its bundled runtime as a contained child.
+Bounded JSON-line messages carry output and structured permission/question
+requests over the existing pipes; prompts and answers are not process arguments.
+The host holds each SDK callback until the dashboard returns the corresponding
+response. Up to eight concurrent requests remain in memory, not persisted job
+history. The job stays running with its executor lease held, while idle timeout
+and heartbeat are suspended until all human requests resolve.
+
+The dashboard offers allow-once/deny or the question's actual choices and optional
+freeform answer. Responses require the exact loopback Host and browser Origin,
+current instance/job/request IDs, JSON and explicit confirmation. Consumed or
+cancelled IDs cannot be replayed. Stop, hold, shutdown and executor loss invalidate
+pending requests; no answer or approval is inferred. Sensitive, oversized,
+malformed or unsupported permission details cannot be approved. Credentials and
+MFA remain in the browser, never question responses. Managed runtime policy
+remains authoritative; no session-wide or permanent grant is synthesized.
+Workflow input and MCP conversation replies cannot approve native requests.
+The SDK's Node.js requirement is 20.19+ in the 20.x line or 22.12+.
+
+If a text-only runtime reports that permission was denied because no interactive user
 was available, the dashboard stops its owned executor at the first denial and
 keeps the lease until termination is verified. It displays a separate permission
 panel rather than treating ordinary workflow input or PR approval as runtime
@@ -211,7 +231,8 @@ retries and automatic continuation cannot bypass the pending permission review.
 Tool, URL, sandbox and organization-policy restrictions remain authoritative;
 a folder grant does not authorize them. Another denial pauses again instead of
 automatically retrying or granting blanket access. This is a folder-access
-handoff, not an interactive Copilot permission-prompt bridge.
+handoff, separate from direct Copilot's native request bridge. A historical text
+denial cannot be converted into a live native approval after its executor exits.
 Managed long-running frontends keep their input pipe open until owned shutdown;
 React-style servers can interpret EOF as a request to exit. One-shot setup and
 authentication helpers still receive EOF, and process-tree containment and
