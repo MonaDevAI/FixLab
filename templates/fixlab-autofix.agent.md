@@ -100,6 +100,19 @@ validation with identical command and repository state. Never reuse startup,
 health, authentication, browser or live-environment checks, external-data
 checks, dependency installation, deployments, or mutating commands.
 
+Use the dashboard job's saved delivery policy first, otherwise the repository's
+`workflow` settings. The product default is `mode: "efficient"`,
+`publication: "draft"`, `unitTestsAfterPr: false`, `optionalBuilds: false`. Save overrides in Repository
+Settings once; do not repeat workflow questions for each job or stage.
+After focused regression checks and diff review, create or update the authorized
+draft PR. Ready-for-review publication requires explicit `publication: "ready"`.
+Broad tests and builds run only by saved preference or explicit selection;
+update the same PR with actual results.
+Explicit `validation.gates[].required: true`, repository instructions, managed
+approvals and CI/merge policies remain mandatory. Pending or failed optional
+checks remain pending or failed; publication never authorizes merging.
+An explicit saved strict workflow retains the following draft-first behavior:
+
 When the developer authorizes pull-request publication, do not wait for every
 independent validation command to finish before creating review visibility.
 After the scoped production change and its smallest focused regression checks
@@ -110,7 +123,10 @@ push later reviewed checkpoints to the same branch, and never mark the PR ready
 until every required local gate passes or the developer explicitly accepts the
 recorded outcome.
 
-After required local validation and approval gates pass or have an explicitly
+Honor an explicit publication choice in every mode: strict plus draft stays
+draft, with provider `isDraft: true` verified. Legacy strict policy with no
+publication preference retains ready intent. Strict required checks never change.
+Only for saved ready publication (including that legacy default), after required local validation and approval gates pass or have an explicitly
 accepted outcome, publish the authorized PR by marking it ready for review.
 Do not wait for remote PR CI or build completion before publication; publication
 can trigger those checks. Verify the PR is no longer draft before reporting the
@@ -120,12 +136,34 @@ policies intact. Use `gh pr ready <number>` for GitHub or
 `isDraft` from the provider to confirm it is false. If publication or state
 verification fails, report the PR stage blocked or failed, not passed.
 
+Reduce redundant regression cases, not correctness. Reuse existing test files
+and fixtures; move punctuation, length and duplicate matrices to fast pure
+unit checks. Browser coverage uses representative distinct flows, preserving
+safety, permissions, lease/queue and real bug reproductions. Measure comparable
+baseline and final elapsed time; never claim savings from count alone.
+Keep Jest and Playwright discovery separate. Bare Jest may collect E2E specs
+and bare Playwright may select all projects: use repository-owned unit selectors
+and explicitly selected authenticated browser projects. Do not silently edit
+consumer repositories to repair discovery.
+
 Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise
 description of the coding change. Use the repository's PR template and clear
 Markdown sections for the problem, changes, validation and risks. Keep
 validation checkboxes accurate; do not describe a pending gate as passed.
 
 ## Connected dashboard recovery
+
+Use normal Copilot reasoning and native tools; stage markers report work, not
+a recipe requiring extra commands. For explicit browser-only reproduction or
+deployed-result checks, select `playwright-only` and first reuse an approved
+existing application and authorized validation session when supported. Skip
+unnecessary local-stack work honestly; do not clone, restore or run broad
+unit/build gates merely to repeat deployed behavior. Never copy browser state,
+bypass a profile lock, take over another browser or silently change targets.
+Keep sign-in and mutation guards. A deployed baseline does not prove local
+changes or a PR; those require the matching source commit and application.
+For fix requests, start with the smallest known reproduction and prepare
+applications only when needed to exercise changed code.
 
 Use `fixlab_dashboard_control` for user-authorized job/queue, configured gate,
 frontend/authentication session, scoped permission and intake operations.
@@ -145,7 +183,9 @@ existing PR and preserve uncommitted work. A changed fingerprint requires a
 new review. Folder permissions and human authentication remain separate.
 An idle, unconnected Copilot session cannot receive injected questions.
 Honor user-selected scoped iteration: full regression is explicitly deferred,
-not passed, and PR readiness stays blocked. Continue independent safe checks
+not passed; in strict workflow PR readiness stays blocked, whereas efficient
+workflow permits publication after focused checks and explicitly required
+pre-publication gates. Continue independent safe checks
 after unrelated failures without bypassing dependencies. Do not delete or edit
 transient test artifacts while validation is discovering or executing them;
 wait for the owned validation to finish before cleanup.

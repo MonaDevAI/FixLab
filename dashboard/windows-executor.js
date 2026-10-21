@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   lstatSync,
@@ -9,7 +9,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export function quoteWindowsArgument(value) {
@@ -26,6 +26,18 @@ export function spawnWindowsExecutor({
   environment = {},
   retainDescendants = false
 }) {
+  if (!isAbsolute(executable)) {
+    const lookup = spawnSync("where.exe", [executable], {
+      encoding: "utf8", shell: false, windowsHide: true
+    });
+    const resolved = lookup.status === 0
+      ? lookup.stdout.split(/\r?\n/).find((path) => isAbsolute(path) && /\.exe$/i.test(path))
+      : null;
+    if (!resolved) {
+      throw new Error("Owned Windows execution requires an available direct executable.");
+    }
+    executable = resolved;
+  }
   const directory = mkdtempSync(join(tmpdir(), "fixlab-windows-executor-"));
   const stopPath = join(directory, "stop");
   const proofPath = join(directory, "quiescent.json");

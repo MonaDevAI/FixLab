@@ -3,6 +3,41 @@
 FixLab must not assume that every React and .NET repository has the same layout.
 The target repository owns a versioned profile.
 
+## Dashboard chat setup
+
+Choose **Add local repository** in the repository sidebar and enter the absolute
+root of an existing local Git working tree. A deterministic chat asks about
+application folders, commands and loopback health URLs, browser tests, sign-in
+configuration, non-production environments and branch ownership. It makes no
+model calls and never asks for credentials or authentication-file contents.
+
+Review the proposed settings and exact file list before **Apply reviewed setup**.
+Only the profile and missing packaged FixLab prompts/agent files are written;
+existing custom scaffolding is not overwritten. No dependencies are installed,
+commands executed, authentication performed or jobs started. Configuration alone
+is not a passed Doctor or browser check. Failed multi-file scaffolding can leave
+some newly created files; reload and review again rather than blindly retrying.
+
+**Open repository workspace** reuses a verified local owner or opens an idle
+loopback workspace in the same dashboard host. The original repository job keeps
+running when you switch workspaces. The host owns at most eight additional
+workspaces; shutting down that host closes its owned workspaces and resources,
+not independently started dashboard processes.
+
+Under **Settings & usage**, **Load repository settings** exposes the supported
+repository-level fields without returning environment-variable values or a raw
+profile. Preview and confirm every save. Unshown configuration is preserved,
+including structured environment definitions; add new structured definitions
+in the repository profile before enabling them through the editor. Production
+operation policy cannot be enabled here. An executor lease or active owned
+frontend/sign-in session prevents saving, without stopping those resources.
+Only the selected repository's ownership scopes are checked for setup writes
+and workspace opening. An unreachable or identity-mismatched registered owner
+in those scopes blocks the operation; it is not evidence that its resources
+stopped. Unrelated unavailable dashboard registrations do not block setup.
+Plans expire after ten minutes and are invalidated by concurrent profile edits.
+Setup paths reject traversal and symbolic links.
+
 ## Required information
 
 ### Repository
@@ -53,6 +88,14 @@ The profile must also declare:
   scenario evidence.
 - `browserAutomation.authentication.required`, explicitly stating whether login is needed.
 - An authentication command and status paths when authentication is required.
+- A reviewed `browserAutomation.authentication.proofCommand` for authenticated
+  browser readiness. It must exercise a read-only signed-in assertion against
+  `FIXLAB_TARGET_ENVIRONMENT`, fail for expired/unauthenticated state, and close
+  its owned browser. A helper exit or state-file existence is not login proof.
+  Dashboard proof is memory-only and bound to the job, selected environment,
+  configuration and unchanged regular status-file identities; new jobs and
+  changed state require a fresh proof. No browser-state contents are inspected
+  or copied by this check.
 - `browserAutomation.dataSafety.policy`, describing mock, read-only, or intercepted-mutation behavior.
 - `browserAutomation.dataSafety.productionAllowed: false`.
 

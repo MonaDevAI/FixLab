@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-const TOOLS = new Set(["npm", "pnpm", "yarn", "dotnet"]);
+const TOOLS = new Set(["npm", "npx", "pnpm", "yarn", "dotnet"]);
 const DEFAULT_PROBE_TIMEOUT_MS = 30000;
 const MIN_PROBE_TIMEOUT_MS = 1000;
 const MAX_PROBE_TIMEOUT_MS = 600000;
@@ -36,8 +36,12 @@ function leadingTool(command) {
 }
 
 // Offline checks only: nothing here contacts the application, DEV, or the network.
-export function runJobPreflight({ profile, resolve = resolveOnPath } = {}) {
-  const commands = [
+export function runJobPreflight({ profile, mode, resolve = resolveOnPath } = {}) {
+  const commands = mode === "playwright-only" ? [
+    profile?.browserAutomation?.testCommand,
+    ...(profile?.browserAutomation?.authentication?.required
+      ? [profile.browserAutomation.authentication.command] : [])
+  ] : [
     profile?.validation?.commands?.frontendRestore,
     profile?.validation?.commands?.backendRestore,
     profile?.applications?.frontend?.command,

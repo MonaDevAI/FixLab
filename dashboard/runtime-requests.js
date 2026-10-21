@@ -11,6 +11,22 @@ export function safeRuntimeText(value, limit = 8192) {
     !secret.test(value) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 }
 
+export function validateRuntimeUsage(value, previous = {}) {
+  const usage = {};
+  for (const name of ["inputTokens", "cachedInputTokens", "cacheWriteTokens", "outputTokens"]) {
+    if (!Number.isSafeInteger(value?.[name]) || value[name] < (previous[name] ?? 0)) {
+      throw new Error("Copilot sent invalid or decreasing structured usage counters.");
+    }
+    usage[name] = value[name];
+  }
+  if (usage.cachedInputTokens > usage.inputTokens) {
+    throw new Error("Copilot cached input cannot exceed total structured input.");
+  }
+  usage.cacheReusePercent = usage.inputTokens > 0
+    ? usage.cachedInputTokens / usage.inputTokens * 100 : 0;
+  return usage;
+}
+
 export function runtimePermissionPrompt(request) {
   const text = (value) => typeof value === "string" && value.trim().length > 0;
   const supported = {
@@ -43,12 +59,17 @@ export function runtimePermissionPrompt(request) {
   const sensitivePath = ["read", "write"].includes(request?.kind) &&
     credentialPath.test(request.path ?? request.fileName ?? "");
   const reviewable = supported && !sensitivePath && safeRuntimeText(details);
+  const canUseFileTrust = request?.kind === "write" && supported && !sensitivePath &&
+    Buffer.byteLength(details, "utf8") <= MAX_RUNTIME_FRAME_BYTES &&
+    safeRuntimeText(request.diff, MAX_RUNTIME_FRAME_BYTES) &&
+    safeRuntimeText(details, MAX_RUNTIME_FRAME_BYTES);
   return {
     kind: "permission",
     title: "Copilot requests permission",
     details: reviewable ? details :
       "This request has unsupported, sensitive or oversized details. Approval is unavailable; deny it and inspect it in an interactive Copilot session.",
     canApprove: reviewable,
+    canUseFileTrust,
     choices: [],
     allowFreeform: false
   };
@@ -88,7 +109,10 @@ export function createRuntimeRequestBridge({ send, onChange }) {
           !Array.isArray(value.choices) || value.choices.length > 20 ||
           value.choices.some((choice) => !safeRuntimeText(choice, 1000)) ||
           typeof value.canApprove !== "boolean" ||
-          typeof value.allowFreeform !== "boolean") {
+          typeof value.allowFreeform !== "boolean" ||
+          (value.grantScope !== undefined &&
+            (!value.canApprove || value.kind !== "permission" ||
+              !["repository-reads", "exact-test-command", "publication-batch"].includes(value.grantScope)))) {
         throw new Error("Copilot sent an invalid or excessive runtime request.");
       }
       pending.set(value.id, {
@@ -98,7 +122,8 @@ export function createRuntimeRequestBridge({ send, onChange }) {
         details: value.details,
         choices: [...value.choices],
         canApprove: value.canApprove,
-        allowFreeform: value.allowFreeform
+        allowFreeform: value.allowFreeform,
+        ...(value.grantScope ? { grantScope: value.grantScope } : {})
       });
       publish();
     },
@@ -109,6 +134,12 @@ export function createRuntimeRequestBridge({ send, onChange }) {
       }
       const { action, choice, answer } = response;
       let result = { type: "response", id, action };
+      if (response.scope !== undefined) {
+        if (action !== "allow" || !request.grantScope || response.scope !== request.grantScope) {
+          throw new Error("This job-scoped permission decision is not available.");
+        }
+        result.scope = response.scope;
+      }
       if (request.kind === "permission") {
         if (!["allow", "deny"].includes(action) ||
             (action === "allow" && !request.canApprove)) {
