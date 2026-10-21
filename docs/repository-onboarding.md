@@ -96,6 +96,10 @@ The profile must also declare:
   configuration and unchanged regular status-file identities; new jobs and
   changed state require a fresh proof. No browser-state contents are inspected
   or copied by this check.
+  Include the persistent browser-profile directory in `statusPaths` as well
+  when ownership checks must detect another browser using it. Directory identity
+  is checked without treating browser lock-file updates as credential changes;
+  at least one regular status file is still required for authenticated proof.
 - `browserAutomation.dataSafety.policy`, describing mock, read-only, or intercepted-mutation behavior.
 - `browserAutomation.dataSafety.productionAllowed: false`.
 

@@ -4,6 +4,9 @@ All notable changes to FixLab are documented in this file.
 
 ## 0.7.4 - Unreleased
 
+- Keep persistent browser-profile directories in ownership checks without
+  rejecting authenticated readiness proof. Require a regular status file and
+  a successful signed-in browser check; directory existence is never login proof.
 - Make browser-only reproduction and deployed-result checks existing-application
   first, with mode-aware runner/authentication preflight instead of unused
   backend toolchain requirements. Preserve target, commit and data-safety

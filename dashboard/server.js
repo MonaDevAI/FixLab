@@ -3040,6 +3040,23 @@ async function frontendStatus(repository, connection) {
 }
 
 function authenticationProofIdentity(configuration, job) {
+  let stateFiles = 0;
+  const paths = configuration.statusPaths.map((path) => {
+    const file = resolveContainedPath(configuration.workingDirectory, path, "authentication status path");
+    const info = lstatSync(resolve(configuration.workingDirectory, path));
+    if (info.isSymbolicLink() || (!info.isFile() && !info.isDirectory()) ||
+        (info.isFile() && info.nlink !== 1)) {
+      throw new Error("Authentication status must be an unlinked file or browser-profile directory.");
+    }
+    if (info.isDirectory()) {
+      return [path, file, info.dev, info.ino, "directory"];
+    }
+    stateFiles += 1;
+    return [path, file, info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs];
+  });
+  if (!stateFiles) {
+    throw new Error("Authentication proof requires at least one regular status file.");
+  }
   return JSON.stringify({
     command: configuration.command,
     proofCommand: configuration.proofCommand,
@@ -3047,14 +3064,7 @@ function authenticationProofIdentity(configuration, job) {
     environment: configuration.environment,
     jobId: job?.id ?? null,
     targetEnvironment: job?.targetEnvironment ?? null,
-    paths: configuration.statusPaths.map((path) => {
-      const file = resolveContainedPath(configuration.workingDirectory, path, "authentication status path");
-      const info = lstatSync(file);
-      if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) {
-        throw new Error("Authentication status must be a regular, unlinked file.");
-      }
-      return [path, info.dev, info.ino, info.size, info.mtimeMs, info.ctimeMs];
-    })
+    paths
   });
 }
 

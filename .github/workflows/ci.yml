@@ -32,6 +32,8 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      - name: Install native source-search prerequisite
+        run: sudo apt-get update -qq && sudo apt-get install --yes --no-install-recommends ripgrep
       - run: npx playwright install --with-deps chromium
       - run: npm run lint
       - run: npm run typecheck
