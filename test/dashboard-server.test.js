@@ -3234,7 +3234,9 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     ({ prompt }) => {
       receivedPrompt = prompt;
       return { completion: new Promise(() => {}), terminate() {} };
-    }
+    },
+    undefined,
+    { browserOwnership: () => null }
   );
 
   try {
@@ -3261,7 +3263,10 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.equal(status.body.ready, false, "a helper exit and state file are not authenticated browser proof");
     assert.equal(status.body.statePresent, true);
     const profile = JSON.parse(readFileSync(profilePath, "utf8"));
-    profile.browserAutomation.authentication.proofCommand = "node -e \"process.exit(0)\"";
+    mkdirSync(join(repository, "e2e", ".edge-profile"));
+    profile.browserAutomation.authentication.statusPaths.push("e2e/.edge-profile");
+    profile.browserAutomation.authentication.proofCommand =
+      "node -e \"require('node:fs').writeFileSync('e2e/.edge-profile/browser-lock', 'owned')\"";
     writeFileSync(profilePath, JSON.stringify(profile));
     assert.equal((await jsonRequest(url, "/api/playwright/connect", { method: "POST" })).response.status, 202);
     const proofDeadline = Date.now() + 10000;
@@ -3272,6 +3277,9 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     assert.equal(status.body.ready, true, JSON.stringify(status.body));
     assert.equal(status.body.lastResult.ok, true);
     assert.equal(status.body.paths[0].path, "e2e/.auth/user.json");
+    assert.equal(status.body.paths[1].path, "e2e/.edge-profile");
+    assert.equal((await jsonRequest(url, "/api/playwright/status")).body.ready, true,
+      "browser-profile directory metadata changes do not invalidate an unchanged state file");
     writeFileSync(join(repository, "e2e", ".auth", "user.json"), "{}\n");
     assert.equal((await jsonRequest(url, "/api/playwright/status")).body.ready, false,
       "changed browser-state metadata invalidates the existing proof");
@@ -3285,6 +3293,20 @@ test("dashboard checks and starts repository-owned Playwright authentication", a
     } while (status.body.running && Date.now() < failedProofDeadline);
     assert.equal(status.body.ready, false);
     assert.equal(status.body.lastResult.ok, false);
+
+    profile.browserAutomation.authentication.statusPaths = ["e2e/.edge-profile"];
+    profile.browserAutomation.authentication.proofCommand = "node -e \"process.exit(0)\"";
+    writeFileSync(profilePath, JSON.stringify(profile));
+    assert.equal((await jsonRequest(url, "/api/playwright/connect", { method: "POST" })).response.status, 202);
+    const directoryOnlyDeadline = Date.now() + 10000;
+    do {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      status = await jsonRequest(url, "/api/playwright/status");
+    } while (status.body.running && Date.now() < directoryOnlyDeadline);
+    assert.equal(status.body.ready, false, "profile-directory existence cannot replace a regular status file");
+    assert.match(status.body.lastResult.message, /at least one regular status file/);
+    profile.browserAutomation.authentication.statusPaths = ["e2e/.auth/user.json", "e2e/.edge-profile"];
+    writeFileSync(profilePath, JSON.stringify(profile));
 
     const job = await jsonRequest(url, "/api/jobs", {
       method: "POST",
