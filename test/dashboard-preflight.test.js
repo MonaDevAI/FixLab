@@ -32,25 +32,6 @@ test("preflight passes when every required tool resolves", () => {
   assert.deepEqual(runJobPreflight({ profile, resolve: () => true }), []);
 });
 
-test("browser-only preflight checks only its runner and required authentication, not local-stack tools", () => {
-  const resolved = [];
-  const browserProfile = { ...profile,
-    applications: { frontend: { command: "npm start" }, backend: { command: "dotnet run" } },
-    browserAutomation: {
-      testCommand: "npx playwright test",
-      authentication: { required: false, command: "pnpm login-browser" }
-    }
-  };
-  assert.deepEqual(runJobPreflight({ profile: browserProfile, mode: "playwright-only",
-    resolve: (tool) => { resolved.push(tool); return tool === "npx"; } }), []);
-  assert.deepEqual(resolved, ["npx"]);
-  browserProfile.browserAutomation.authentication.required = true;
-  const issues = runJobPreflight({ profile: browserProfile, mode: "playwright-only",
-    resolve: (tool) => tool === "npx" });
-  assert.deepEqual(issues.map((issue) => issue.check), ["pnpm on PATH"]);
-  assert.ok(runJobPreflight({ profile: browserProfile, mode: "fix-and-validate",
-    resolve: (tool) => tool !== "dotnet" }).some((issue) => issue.check === "dotnet on PATH"));
-});
 test("preflight ignores commands it does not recognise and missing profiles", () => {
   const unknown = { validation: { commands: { frontendRestore: "make deps" } } };
   assert.deepEqual(runJobPreflight({ profile: unknown, resolve: () => false }), []);

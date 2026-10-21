@@ -8,7 +8,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { join } from "node:path";
 
 const ownerPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/u;
 
@@ -38,11 +38,11 @@ export function createSessionRegistry(repositoryIdentity) {
   const path = join(directory, `${id}.json`);
   let owner = null;
 
-  function readOwner(ownerId, ownerDirectory = directory) {
+  function readOwner(ownerId) {
     if (!ownerPattern.test(ownerId)) {
       throw new Error("invalid FixLab session owner ID");
     }
-    const ownerPath = join(ownerDirectory, `${ownerId}.json`);
+    const ownerPath = join(directory, `${ownerId}.json`);
     const info = lstatSync(ownerPath);
     if (!info.isFile() || info.isSymbolicLink() || info.size > 2048) {
       throw new Error("invalid FixLab session ownership record");
@@ -50,7 +50,7 @@ export function createSessionRegistry(repositoryIdentity) {
     return validateOwner(JSON.parse(readFileSync(ownerPath, "utf8")), ownerId);
   }
 
-  async function inspectOwner(record, scopeId = key) {
+  async function inspectOwner(record) {
     const response = await fetch(`${record.url}/api/session`, {
       signal: AbortSignal.timeout(1500),
       redirect: "error"
@@ -59,7 +59,7 @@ export function createSessionRegistry(repositoryIdentity) {
       throw new Error(`owner returned HTTP ${response.status}`);
     }
     const session = await response.json();
-    if (session.id !== record.id || session.scopeId !== scopeId) {
+    if (session.id !== record.id || session.scopeId !== key) {
       throw new Error("the port no longer belongs to this repository's FixLab session");
     }
     return { ...session, url: record.url };
@@ -97,45 +97,6 @@ export function createSessionRegistry(repositoryIdentity) {
           return { id: ownerId, available: false, error: error.message };
         }
       }));
-    },
-    async repositories({ scopeIds } = {}) {
-      const root = join(tmpdir(), "fixlab-dashboard-sessions");
-      const scopes = readdirSync(root, { withFileTypes: true }).filter((entry) =>
-        entry.isDirectory() && !entry.isSymbolicLink() && /^[0-9a-f]{64}$/u.test(entry.name)
-      );
-      if (scopes.length > 10000) {
-        throw new Error("too many retained repository session directories");
-      }
-      const records = [];
-      for (const scope of scopes) {
-        if (scopeIds && !scopeIds.includes(scope.name)) { continue; }
-        const ownerDirectory = join(root, scope.name);
-        for (const name of readdirSync(ownerDirectory).filter((name) => ownerPattern.test(name.slice(0, -5)) && name.endsWith(".json"))) {
-          if (records.length >= 250) {
-            throw new Error("too many retained local dashboard records; repository discovery is bounded");
-          }
-          records.push({ ownerDirectory, scopeId: scope.name, ownerId: name.slice(0, -5) });
-        }
-      }
-      const results = await Promise.all(records.map(async ({ ownerDirectory, scopeId, ownerId }) => {
-        try {
-          const session = await inspectOwner(readOwner(ownerId, ownerDirectory), scopeId);
-          if (typeof session.repository !== "string" || !isAbsolute(session.repository) ||
-              session.repository.length > 2048) {
-            throw new Error("invalid repository identity");
-          }
-          return {
-            id: session.id, repository: session.repository, url: session.url,
-            status: session.job?.status ?? "idle"
-          };
-        } catch {
-          return null;
-        }
-      }));
-      return {
-        repositories: results.filter(Boolean),
-        unavailableCount: results.filter((result) => result === null).length
-      };
     },
     async control(ownerId, control) {
       const record = readOwner(ownerId);

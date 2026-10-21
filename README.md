@@ -33,52 +33,11 @@ FixLab runs through **Agency Copilot** or directly through
 
 ## Get started
 
-With a supported runtime installed and signed in:
-
-```powershell
-npm install --global github:MonaDevAI/FixLab
-fixlab chat C:\source\application --runtime copilot
-```
-
-Replace the path with your clone; use `--runtime agency` for Agency.
-Review guided setup when prompted, then describe your request in the dashboard.
-Use **Menu** on small screens. **Run options** and the sidebar reveal advanced
-controls only when needed; **Back to chat** returns to your unsent message.
-See [Installation](docs/installation.md) for prerequisites and troubleshooting.
-
-<details>
-<summary>Delivery and validation defaults</summary>
-
-**Efficient delivery is the product default:** focused regression checks and
-diff review, then an authorized draft PR. Broad unit tests and optional builds
-are off by default; run them by saved preference or explicit selection. Save preferences
-once in **Repository Settings**, not for every job or stage.
-Explicitly required repository checks, organization approvals and CI/merge
-policies are never waived; a ready PR does not mean every check passed.
-Set `workflow.publication: "ready"` only when ready-for-review publication is intended.
-Keep Jest discovery separate from Playwright, explicitly selecting authenticated
-browser projects; do not use bare commands that accidentally collect browser specs.
-Consolidate duplicate regressions and move value matrices to pure unit tests,
-while retaining representative browser flows and critical safety boundaries.
-Use `workflow.mode: "strict"` to retain full local validation before readiness.
-Existing saved jobs retain their recorded policy; migrating one requires an
-explicit stopped-job review.
-
-For **browser-only reproduction or deployed-result checks**, use the browser
-reproduction/result-check mode (`playwright-only`). FixLab first checks the
-approved existing application and validation session; it does not require
-local-stack toolchains or broad unit/build gates merely to repeat a deployed
-scenario. Copilot keeps its native tools and reasoning; stage markers report
-work rather than impose extra tasks. Existing deployment results never stand
-in for validation of an unpublished local fix or a different PR commit.
-
-</details>
-
 Already inside Copilot? Follow the
 [Copilot installation steps](docs/installation.md#starting-from-an-existing-copilot-session)
 without opening a separate terminal.
 
-### 1. Install a supported runtime (manual setup)
+### 1. Install a supported runtime
 
 Agency is the default compatibility runtime:
 
@@ -92,25 +51,6 @@ For direct mode, install and authenticate GitHub Copilot CLI, then use
 
 Direct Copilot dashboard jobs use the official Copilot SDK and its bundled
 runtime to show live **Allow once / Deny** permission prompts and agent questions.
-Bounded read-only exceptions cover native filename discovery, provenance-bound
-source search in one canonical checkout directory, and
-`node <this-installed-fixlab.js> --help`. Source search requires one matching
-live native `rg` event, an explicit source glob and bounded output; multi-root
-searches and arbitrary directory reads remain manual. Managed human approvals
-and sandbox escalation still require review.
-Eligible requests also offer separately confirmed, executor-local repository-file
-read or exact test-command grants. Manual review remains the default, and
-organization policy stays authoritative. Optional per-job input-token ceilings
-default to unlimited; all native modes use earlier context compaction.
-Budget controls are hidden by default; select **Show budget** in Current job
-details to reveal them. Hiding them never changes an existing job's ceiling.
-For a stopped Copilot job, **Current job details > Repository file trust** can
-separately authorize non-sensitive source/test reads and edits for that exact
-job and canonical checkout, including resumes and dashboard restart. Other
-jobs never inherit it. The same review can optionally trust dashboard-owned
-validation gates bound to this job, checkout and current dashboard port.
-Sensitive files, configuration edits and other shell commands remain separately
-controlled; read-only jobs cannot acquire edit trust.
 Your response continues the same executor; human wait does not trigger the idle
 timeout. Authentication stays in the normal browser. Agency and unclassified
 text denials retain the existing fail-closed folder-review flow. See
@@ -355,9 +295,6 @@ Example requests:
 Read the complete [security model](docs/security.md).
 
 ## Current availability
-
-The next version being prepared is **v0.7.4**; updating local installations does
-not publish a GitHub release or npm package.
 
 The current GitHub release is **v0.7.3**. It includes:
 

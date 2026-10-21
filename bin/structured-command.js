@@ -1,9 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
-import { spawnWindowsExecutor, quoteWindowsArgument } from "../dashboard/windows-executor.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   existsSync,
-  lstatSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -62,7 +60,7 @@ function isContained(root, candidate) {
   );
 }
 
-export function resolveEvidenceRoot(repository) {
+function resolveEvidenceRoot(repository) {
   const result = git(repository, [
     "rev-parse",
     "--git-path",
@@ -280,31 +278,6 @@ function resolveWindowsNpmCommand(command, args) {
   return npmCli
     ? { command: process.execPath, args: [npmCli, ...args] }
     : null;
-}
-
-export function resolveWindowsAzureCommand(command, args, platform = process.platform, searchPath = process.env.PATH ?? "") {
-  if (platform !== "win32" || !/^az(?:\.cmd)?$/i.test(basename(command))) {
-    return null;
-  }
-  if (!isAbsolute(command) && command !== basename(command)) {
-    return null;
-  }
-  const candidates = isAbsolute(command) ? [command] :
-    searchPath.split(";").filter((path) => isAbsolute(path)).map((path) => join(path, "az.cmd"));
-  for (const wrapper of candidates) {
-    if (basename(dirname(wrapper)).toLowerCase() !== "wbin" ||
-        basename(dirname(dirname(wrapper))).toLowerCase() !== "cli2") {
-      continue;
-    }
-    const python = join(dirname(dirname(wrapper)), "python.exe");
-    if (existsSync(wrapper) && existsSync(python) &&
-        statSync(wrapper).isFile() && statSync(python).isFile() &&
-        realpathSync.native(wrapper) === resolve(wrapper) &&
-        realpathSync.native(python) === resolve(python)) {
-      return { command: python, args: ["-m", "azure.cli", ...args] };
-    }
-  }
-  return null;
 }
 
 function parsePositiveInteger(value, name) {
@@ -649,7 +622,7 @@ function cacheFingerprint(options, state) {
 
 function formatSummary(result, reused = false) {
   const lines = [
-    `${reused ? "REUSED" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${sanitize(result.displayCommand)} (${(result.durationMs / 1000).toFixed(1)}s)`,
+    `${reused ? "REUSED" : result.status === 0 ? "PASS" : "FAIL"} fixlab exec: ${result.displayCommand} (${(result.durationMs / 1000).toFixed(1)}s)`,
     `Tool: ${sanitize(result.tool ?? "command")}`
   ];
   const tests = result.stdout.tests ?? result.stderr.tests;
@@ -727,31 +700,18 @@ function formatSummary(result, reused = false) {
   return { text, metrics };
 }
 
-function readReusableResult(cachePath, evidenceRoot, stderr) {
+function readReusableResult(cachePath) {
   if (!existsSync(cachePath)) {
     return null;
   }
   try {
     const result = JSON.parse(readFileSync(cachePath, "utf8"));
-    const count = (value) => Number.isSafeInteger(value) && value >= 0;
-    const stream = (value) => value && count(value.totalBytes) && count(value.lineCount) &&
-      ["errors", "warnings", "tail"].every((key) => Array.isArray(value[key]) &&
-        value[key].length <= 100 && value[key].every((line) => typeof line === "string" && line.length <= 65536)) &&
-      (!value.tests || ["passed", "failed", "skipped", "total"].every((key) => count(value.tests[key])));
-    const valid = result?.status === 0 && result.terminationVerified === true &&
-      typeof result.displayCommand === "string" && result.displayCommand.length <= 8192 &&
-      Number.isFinite(result.durationMs) && result.durationMs >= 0 &&
-      stream(result.stdout) && stream(result.stderr) &&
-      typeof result.evidenceDirectory === "string" && dirname(result.evidenceDirectory) === evidenceRoot &&
-      existsSync(result.evidenceDirectory) && lstatSync(result.evidenceDirectory).isDirectory() &&
-      !lstatSync(result.evidenceDirectory).isSymbolicLink();
-    if (valid) { return result; }
-    stderr.write("Ignored invalid or unavailable reusable command evidence; running validation again.\n");
-  } catch (error) {
-    if (!(error instanceof SyntaxError)) { throw error; }
-    stderr.write("Ignored malformed reusable command metadata; running validation again.\n");
+    return result?.status === 0 && existsSync(result.evidenceDirectory)
+      ? result
+      : null;
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export async function executeStructuredCommand(options, io = {}) {
@@ -772,7 +732,7 @@ export async function executeStructuredCommand(options, io = {}) {
     options.reuse &&
     reusableValidationCommand(options.command, options.commandArgs);
   if (reusable) {
-    const cached = readReusableResult(cachePath, evidenceRoot, stderr);
+    const cached = readReusableResult(cachePath);
     if (cached) {
       stdout.write(formatSummary(cached, true).text);
       return 0;
@@ -795,12 +755,10 @@ export async function executeStructuredCommand(options, io = {}) {
   const stdoutCollector = createCollector(join(evidenceDirectory, "stdout.log"));
   const stderrCollector = createCollector(join(evidenceDirectory, "stderr.log"));
   const startedAt = now();
-  let terminationVerified = true;
-  let executionFailed = false;
   const displayCommand = sanitize(
     [options.command, ...options.commandArgs].join(" ")
   );
-  const windowsNpmCommand = resolveWindowsAzureCommand(options.command, options.commandArgs) ?? resolveWindowsNpmCommand(
+  const windowsNpmCommand = resolveWindowsNpmCommand(
     options.command,
     options.commandArgs
   );
@@ -835,84 +793,24 @@ export async function executeStructuredCommand(options, io = {}) {
     let forceTimeout = null;
     let abandonTimeout = null;
     let cancelled = false;
-    let containment = null;
-    let child;
-    let terminating = false;
-    const ownedGroup = process.platform !== "win32" && io.ownProcessTree && !io.spawn;
-    const settlementFailure = (message) => {
-      terminationVerified = false;
-      executionFailed = true;
-      stderrCollector.write(`${message}; owned-tree settlement is unverified and its repository lease must remain held.\n`);
-    };
-    const verifyOwnedTree = () => {
-      if (containment) {
-        try {
-          terminationVerified = containment.hasStopped();
-          if (terminationVerified && executionFailed) {
-            stderrCollector.write("Owned-tree stopped proof verified; the command failure is retained.\n");
-          }
-        } catch (error) {
-          settlementFailure(`Owned containment proof failed (${error.code ?? "invalid proof"})`);
-        }
-      } else if (ownedGroup && Number.isInteger(child.pid)) {
-        try {
-          process.kill(-child.pid, 0);
-          terminationVerified = false;
-        } catch (error) {
-          terminationVerified = error.code === "ESRCH";
-        }
-      } else {
-        return false;
-      }
-      if (!terminationVerified) {
-        stderrCollector.write("Owned command tree termination could not be verified; its repository lease must remain held.\n");
-      }
-      return terminationVerified;
-    };
-    const signalChild = (signal) => {
-      try {
-        if (ownedGroup && Number.isInteger(child.pid)) {
-          process.kill(-child.pid, signal);
-        } else if (!child.kill(signal)) {
-          settlementFailure("Owned command termination was not accepted");
-        }
-      } catch (error) {
-        if (!ownedGroup || error.code !== "ESRCH") {
-          settlementFailure(`Owned command termination failed (${error.code ?? "unknown error"})`);
-        }
-      }
-    };
     const terminate = (exitCode) => {
-      if (terminating || settled) { return; }
-      terminating = true;
-      if (containment) {
-        try {
-          containment.terminate();
-        } catch (error) {
-          settlementFailure(`Owned containment termination failed (${error.code ?? "unknown error"})`);
-        }
-      } else if (process.platform === "win32" && Number.isInteger(child.pid)) {
+      if (process.platform === "win32" && Number.isInteger(child.pid)) {
         const killed = spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], {
           encoding: "utf8",
           windowsHide: true
         });
-        if (killed.status !== 0) {
-          settlementFailure("Could not terminate the owned command tree");
-          signalChild("SIGTERM");
+        if (killed.status !== 0 && child.exitCode === null) {
+          stderrCollector.write("Could not terminate the owned command tree; attempting direct termination.\n");
+          child.kill("SIGTERM");
         }
       } else {
-        signalChild("SIGTERM");
+        child.kill("SIGTERM");
       }
       forceTimeout = setTimeout(() => {
         if (!settled) {
-          if (!containment) { signalChild("SIGKILL"); }
+          child.kill("SIGKILL");
           abandonTimeout = setTimeout(() => {
             if (!settled) {
-              if (!verifyOwnedTree()) {
-                settlementFailure("Timed out waiting for owned command termination");
-              } else {
-                stderrCollector.write("Command close event was unavailable; owned-tree stopped proof verified and command failure retained.\n");
-              }
               settled = true;
               clearTimers();
               child.stdout.destroy();
@@ -938,23 +836,14 @@ export async function executeStructuredCommand(options, io = {}) {
     };
     const environment = { ...process.env };
     delete environment.NODE_TEST_CONTEXT;
-    const spawnOptions = {
+    const child = spawnProcess(executable, spawnedArguments, {
       cwd: options.cwd,
       env: environment,
       shell: false,
-      detached: process.platform !== "win32" && io.ownProcessTree === true && !io.spawn,
       windowsVerbatimArguments: windowsCommandShell,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"]
-    };
-    if (process.platform === "win32" && io.ownProcessTree && !io.spawn) {
-      containment = (io.spawnWindowsExecutor ?? spawnWindowsExecutor)({
-        executable, args: spawnedArguments, repository: options.cwd,
-        environment: { ...environment, NODE_TEST_CONTEXT: undefined },
-        ...(windowsCommandShell ? { commandLine: `${quoteWindowsArgument(executable)} /d /v:off /c ${spawnedCommand}` } : {})
-      });
-    }
-    child = containment?.child ?? spawnProcess(executable, spawnedArguments, spawnOptions);
+    });
     child.stdout.on("data", stdoutCollector.write);
     child.stderr.on("data", stderrCollector.write);
     io.signal?.addEventListener("abort", abort, { once: true });
@@ -964,11 +853,6 @@ export async function executeStructuredCommand(options, io = {}) {
     child.on("error", (error) => {
       stderrCollector.write(`${error.message}\n`);
       if (!settled) {
-        if (Number.isInteger(child.pid)) {
-          settlementFailure("Owned command emitted a post-spawn error");
-          terminate(cancelled ? 130 : timedOut ? 124 : 1);
-          return;
-        }
         settled = true;
         clearTimers();
         let exitCode = 1;
@@ -984,7 +868,6 @@ export async function executeStructuredCommand(options, io = {}) {
     });
     child.on("close", (code, signal) => {
       if (!settled) {
-        if (containment || ownedGroup) { verifyOwnedTree(); }
         settled = true;
         clearTimers();
         if (signal) {
@@ -998,14 +881,14 @@ export async function executeStructuredCommand(options, io = {}) {
         } else if (Number.isInteger(code)) {
           exitCode = code;
         }
-        resolveStatus(terminationVerified && !executionFailed ? exitCode : exitCode || 1);
+        resolveStatus(exitCode);
       }
     });
-    if (!settled && options.timeoutSeconds > 0) {
+    if (options.timeoutSeconds > 0) {
       timeout = setTimeout(() => {
         timedOut = true;
         stderrCollector.write(
-          `Command exceeded ${options.timeoutSeconds} second(s); requesting owned-tree termination.\n`
+          `Command exceeded ${options.timeoutSeconds} second(s) and was terminated.\n`
         );
         terminate(124);
       }, options.timeoutSeconds * 1000);
@@ -1015,7 +898,6 @@ export async function executeStructuredCommand(options, io = {}) {
   const result = {
     version: 2,
     status,
-    terminationVerified,
     stage: options.stage,
     displayCommand,
     tool: sanitize(describeTool(options.command, options.commandArgs)),
@@ -1053,5 +935,5 @@ export async function runStructuredCommand(
   io = {}
 ) {
   const options = parseStructuredCommandArguments(args, defaultRepository);
-  return executeStructuredCommand(options, { ownProcessTree: true, ...io });
+  return executeStructuredCommand(options, io);
 }

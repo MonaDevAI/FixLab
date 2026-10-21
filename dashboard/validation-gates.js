@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import {
   executeStructuredCommand,
@@ -161,9 +161,6 @@ export function validationGates(profile, mode) {
       gate.args.some((argument) => typeof argument !== "string") ||
       typeof gate.workingDirectory !== "string" ||
       (gate.reuse !== undefined && typeof gate.reuse !== "boolean") ||
-      (gate.required !== undefined && typeof gate.required !== "boolean") ||
-      (gate.kind !== undefined && !["tests", "builds", "checks"].includes(gate.kind)) ||
-      (gate.stage !== undefined && !["review", "local-stack", "live-test", "fix", "pr"].includes(gate.stage)) ||
       !Number.isInteger(gate.timeoutSeconds) ||
       gate.timeoutSeconds < 1 ||
       gate.timeoutSeconds > 7200
@@ -177,10 +174,6 @@ export function validationGates(profile, mode) {
       args: [...gate.args],
       workingDirectory: gate.workingDirectory,
       reuse: gate.reuse === true && reusableValidationCommand(gate.command, gate.args),
-      required: gate.required === true,
-      kind: gate.kind ?? (/^(?:test|test:|--test)/.test(gate.args[0] === "run" ? gate.args[1] ?? "" : gate.args[0] ?? "")
-        ? "tests" : gate.args.includes("build") ? "builds" : "checks"),
-      stage: gate.stage ?? "review",
       timeoutSeconds: gate.timeoutSeconds
     };
   });
@@ -188,26 +181,14 @@ export function validationGates(profile, mode) {
   return normalized;
 }
 
-export function selectedValidationGates(gates, selection, value) {
-  if (!Array.isArray(gates) || !["all", "tests", "builds", "gate", "stage"].includes(selection) ||
-      (["gate", "stage"].includes(selection) && typeof value !== "string")) {
-    throw new Error("Select configured all, tests, builds, gate or stage validation.");
-  }
-  const selected = gates.filter((gate) => selection === "all" ||
-    (selection === "gate" ? gate.id === value : selection === "stage" ? gate.stage === value : gate.kind === selection));
-  if (!selected.length) {throw new Error("No configured validation gates match this selection.");}
-  return selected;
-}
-
 export class ValidationSession {
   constructor(repository, profile, mode, {
-    validationIntent = "full", baseCommit, history = { complete: true, gates: [] }, advisory = false
+    validationIntent = "full", baseCommit, history = { complete: true, gates: [] }
   } = {}) {
     this.repository = realpathSync(repository);
     this.gates = validationGates(profile, mode);
     this.policy = mode === "playwright-only" ? null : validationScopePolicy(profile, this.gates);
     this.validationIntent = validationIntent;
-    this.advisory = advisory && profile.workflow?.mode !== "strict";
     this.baseCommit = null;
     this.scopeWarning = "";
     if (this.policy) {
@@ -300,10 +281,6 @@ export class ValidationSession {
     };
   }
 
-  blocking(gate, scope) {
-    return this.required(gate, scope) && (!this.advisory || gate.required);
-  }
-
   summary() {
     // Refresh scope at validation checkpoints, not on every dashboard poll.
     const { scope, reason } = this.validationIntent === "affected"
@@ -314,16 +291,14 @@ export class ValidationSession {
       status = "blocked";
     } else if (this.gates === null) {
       status = "unconfigured";
-    } else if (this.advisory && !this.gates.some((gate) => this.blocking(gate, scope))) {
-      status = "advisory";
     } else if (this.gates.every((gate) =>
-      !this.blocking(gate, scope) || this.results.get(gate.id)?.status === "passed"
+      !this.required(gate, scope) || this.results.get(gate.id)?.status === "passed"
     )) {
       status = "passed";
     } else if (this.active) {
       status = "running";
-    } else if (this.gates.some((gate) => this.blocking(gate, scope) &&
-      ["failed", "cancelled", "stale"].includes(this.results.get(gate.id)?.status)
+    } else if ([...this.results.values()].some((result) =>
+      ["failed", "cancelled", "stale"].includes(result.status)
     )) {
       status = "blocked";
     }
@@ -331,12 +306,8 @@ export class ValidationSession {
       status,
       scope,
       reason,
-      fullValidationPassed: !this.error && this.gates !== null && this.gates.every((gate) =>
-        !this.required(gate, scope) || this.results.get(gate.id)?.status === "passed"),
       message: this.error ?? (this.gates === null
         ? "Configure validation.gates for executor-backed readiness."
-        : this.advisory
-          ? "Efficient delivery: only explicitly required local gates block publication. Optional checks retain their real pending, failed or stale status; ready for review does not mean fully validated."
         : scope === "api-only"
           ? `${status === "passed" ? "API-scope validation passed." : "API-scope validation."} ${reason}`
           : scope === "affected"
@@ -344,9 +315,7 @@ export class ValidationSession {
             : `Required gates use dashboard-owned execution; agent markers are not evidence. ${reason}`),
       gates: (this.gates ?? []).map((gate) => ({
         id: gate.id,
-        kind: gate.kind,
-        stage: gate.stage,
-        required: this.blocking(gate, scope),
+        required: this.required(gate, scope),
         ...Object.fromEntries(Object.entries(
           this.results.get(gate.id) ?? (this.required(gate, scope)
             ? { status: "pending" }
@@ -385,9 +354,6 @@ export class ValidationSession {
   }
 
   async run(id, target, profile, io = {}) {
-    if (io.jobId !== undefined && (typeof io.jobId !== "string" || !/^[a-f0-9-]{36}$/i.test(io.jobId))) {
-      throw new Error("Validation evidence requires a valid owning job ID.");
-    }
     if (this.active) {
       throw new Error("A validation gate is already running for this job.");
     }
@@ -446,17 +412,8 @@ export class ValidationSession {
         stdout: output,
         stderr: output,
         signal: controller.signal,
-        ownProcessTree: true,
         repositoryState: inputs,
-        onResult: (result) => {
-          evidence = result;
-          if (result.terminationVerified === false) {this.terminationUnverified = true;}
-          if (io.jobId !== undefined) {
-            writeFileSync(join(result.evidenceDirectory, "job.json"), JSON.stringify({
-              jobId: io.jobId, repository: realpathSync.native(repository), gateId: id
-            }), { mode: 0o600, flag: "wx" });
-          }
-        }
+        onResult: (result) => { evidence = result; }
       });
       const after = JSON.stringify(repositoryState(repository));
       const gateStatus = controller.signal.aborted
