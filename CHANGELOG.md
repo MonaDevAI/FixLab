@@ -2,7 +2,36 @@
 
 All notable changes to FixLab are documented in this file.
 
-## Unreleased
+## 0.7.4 - Unreleased
+
+- Make browser-only reproduction and deployed-result checks existing-application
+  first, with mode-aware runner/authentication preflight instead of unused
+  backend toolchain requirements. Preserve target, commit and data-safety
+  boundaries and native Copilot reasoning/tools across entry points.
+- Default new editing jobs to focused checks and a ready-for-review PR, with
+  broader local unit tests afterward and optional builds saved once in
+  Repository Settings. Preserve explicit required checks and strict delivery.
+- Keep optional validation pending, failed or stale honestly; retain legacy
+  saved-job policy until an explicitly confirmed stopped-job migration.
+- Add reviewed, persistent job-bound source/test read-write trust and narrowly
+  owned validation-gate/output access without granting secrets, arbitrary shell
+  commands, other jobs or managed-approval exceptions.
+- Classify JavaScript/TypeScript `auth.spec` and `auth.test` source as tests
+  under reviewed file trust, without admitting saved authentication state,
+  sensitive directories, credential markers or configured protected paths.
+- Keep the permission display limit from invalidating reviewed source-edit
+  trust; larger writes require bounded full-content safety scanning and retain
+  all job, checkout, path, managed-policy and sandbox boundaries.
+- Hide input-token budget controls by default behind a Show budget checkbox;
+  preserve existing limits, usage reporting and stopped-job review.
+- Simplify the dashboard around chat, with advanced controls in Run options and
+  the sidebar, responsive navigation, and preserved unsent messages.
+- Limit fullscreen header requests to two visible lines while retaining the
+  complete title on hover and keeping the exit control accessible.
+- Recover stopped shared-worktree jobs through an explicitly reviewed,
+  fingerprint-bound stash of eligible untracked source files and a new job
+  branch from the latest configured base. Preserve the previous branch, job,
+  and verified stash without automatically restoring files or reusing grants.
 
 - Keep managed frontend input open so React-style development servers do not
   stop on EOF; preserve one-shot helper behavior and owned process cleanup.

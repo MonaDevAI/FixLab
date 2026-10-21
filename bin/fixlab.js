@@ -42,10 +42,12 @@ import { runStructuredCommand } from "./structured-command.js";
 import {
   applyWorktreeSetup,
   browserConfigurationErrors,
-  planWorktreeSetup
+  planWorktreeSetup,
+  REPOSITORY_PROMPT_NAMES
 } from "../dashboard/repository-setup.js";
 import { runValidationGate } from "./validation-gate-client.js";
 import { installNotifications } from "./notifications.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE } from "../dashboard/workflow-policy.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -53,16 +55,7 @@ const profileRelativePath = join(
   "fixlab",
   "repository-profile.json"
 );
-const promptNames = [
-  "fixlab.bugfix.prompt.md",
-  "fixlab.intake.prompt.md",
-  "fixlab.diagnose.prompt.md",
-  "fixlab.reproduce.prompt.md",
-  "fixlab.fix.prompt.md",
-  "fixlab.validate.prompt.md",
-  "fixlab.live-test.prompt.md",
-  "fixlab.pr.prompt.md"
-];
+const promptNames = REPOSITORY_PROMPT_NAMES;
 const vscodeAgentName = "fixlab-autofix.agent.md";
 const troubleshootingUrl =
   "https://github.com/MonaDevAI/FixLab/blob/main/docs/troubleshooting.md";
@@ -616,6 +609,7 @@ function doctor(repository, runtime) {
     console.log(`${check.ok ? "PASS" : "FAIL"}  ${check.name} (${check.detail})`);
   }
 
+  console.log("Doctor does not prove an authenticated browser session. Required sign-in needs the owning job's fresh authentication proof.");
   const failed = checks.filter((check) => !check.ok);
   if (failed.length > 0) {
     console.error(`FixLab doctor found ${failed.length} blocking check(s).`);
@@ -648,7 +642,7 @@ function doctor(repository, runtime) {
     return 1;
   }
 
-  console.log(`FixLab is ready for ${profile.name ?? repository}.`);
+  console.log(`FixLab configuration checks passed for ${profile.name ?? repository}.`);
   return 0;
 }
 
@@ -945,7 +939,7 @@ function authenticate(repository, approved) {
     return 1;
   }
 
-  console.log("Browser authentication completed and required state is ready.");
+  console.log("Browser authentication helper completed and required state is present; this does not prove sign-in. Run the repository-owned authenticated browser proof for the selected job and environment.");
   return 0;
 }
 
@@ -965,7 +959,9 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
   }
 
   let selectedEnvironment;
+  let workflow;
   try {
+    workflow = configuredWorkflow(profile);
     selectedEnvironment = validateTargetEnvironment(
       targetEnvironment,
       configuredValidationEnvironments(profile)
@@ -983,14 +979,20 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
   }
 
   const guidance = [
+    COPILOT_EXECUTION_GUIDANCE,
     "For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.",
     "Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For 'test this PR', verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.",
-    "For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed, and PR readiness stays blocked. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.",
+    "For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed; in strict workflow PR readiness stays blocked. Efficient delivery permits publication after focused checks and explicitly required pre-publication gates. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.",
+    !readOnly && workflow.mode === "efficient"
+      ? efficientWorkflowGuidance(workflow, { dashboard: false })
+      : "Use strict delivery: all applicable local gates and required approvals remain mandatory before readiness. Honor the saved draft/ready publication choice. Read-only runs never create or update a PR.",
     "Do not delete or edit transient test artifacts while validation is discovering or executing them; wait for owned validation to finish before cleanup.",
     "Before validation in a new isolated worktree, plan `fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME`. After scoped setup approval, add `--yes`. The source profile declares non-sensitive configuration in `worktreeSetup.files`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.",
     "Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise coding-change description. Use the repository's PR template with clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.",
     readOnly
       ? "Do not publish a pull request or change its draft status in read-only mode."
+      : workflow.publication === "draft"
+        ? "Keep the published PR draft and read back provider isDraft=true before reporting publication passed. Marking ready requires a separate reviewed decision. Strict required checks remain mandatory."
       : "After required local validation and approval gates pass or have an explicitly accepted outcome, publish the authorized PR by marking it ready for review. Do not wait for remote PR CI or build completion before publication; publication can trigger those checks. Verify the PR is no longer draft before reporting the PR stage passed. Report remote checks as pending, not passed, and leave merge policies intact. Use `gh pr ready PR_NUMBER` for GitHub or `az repos pr update --id PR_ID --draft false` for Azure DevOps, then read back `isDraft` from the provider to confirm it is false. If publication or state verification fails, report the PR stage blocked or failed, not passed.",
     "Treat runtime-synthesized Playwright scenarios as transient validation artifacts by default. Remove their source files and validation-only configuration edits before review, commit, push, or pull-request creation. Do not add newly generated authenticated tests such as *.auth.spec.ts unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.",
     ...(selectedEnvironment
@@ -1008,7 +1010,7 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
           : [])
       ]
       : [])
-  ].join(" ");
+  ].join(" ").replace(/\s+/gu, " ");
   const prompt =
     request || selectedEnvironment || interactiveRequest
       ? `${guidance}${request || interactiveRequest ? ` Request: ${request || interactiveRequest}` : ""}`

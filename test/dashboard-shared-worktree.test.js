@@ -5,7 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, rmdirSync, wr
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, verifySharedWorktreeBranch } from "../dashboard/shared-worktree.js";
+import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, stashReviewedSharedWorktree, verifySharedWorktreeBranch } from "../dashboard/shared-worktree.js";
 
 function git(repository, ...args) {
   const result = spawnSync("git", args, { cwd: repository, encoding: "utf8", windowsHide: true });
@@ -191,7 +191,7 @@ test("explicit reviewed reuse preserves a dirty existing PR branch without fetch
     const originalId = randomUUID();
     const original = prepare(f, { jobId: originalId });
     writeFileSync(join(f.repository, "tracked.txt"), "reviewed work");
-    writeFileSync(join(f.repository, "untracked.txt"), "preserve too");
+    writeFileSync(join(f.repository, "untracked.ts"), "preserve too");
     const review = reviewSharedWorktree(f.repository, f.profile);
     assert.equal(review.branch, original.branch);
     assert.equal(review.dirty, true);
@@ -201,9 +201,32 @@ test("explicit reviewed reuse preserves a dirty existing PR branch without fetch
     assert.equal(saved.branch, original.branch);
     assert.equal(saved.reusedFromJobId, originalId);
     assert.equal(readFileSync(join(f.repository, "tracked.txt"), "utf8"), "reviewed work");
-    assert.equal(readFileSync(join(f.repository, "untracked.txt"), "utf8"), "preserve too");
+    assert.equal(readFileSync(join(f.repository, "untracked.ts"), "utf8"), "preserve too");
     assert.deepEqual(prepare(f, { jobId, saved, resume: true, resourcesRunning: true }), saved);
     assert.match(sharedWorktreeGuidance(saved), /existing PR for this branch/);
+    assert.throws(() => stashReviewedSharedWorktree({ ...f, reviewedWorkspace: review }), /tracked changes/);
+    writeFileSync(join(f.repository, "tracked.txt"), "base");
+    const freshReview = reviewSharedWorktree(f.repository, f.profile);
+    assert.equal(freshReview.freshBranch.available, true);
+    assert.deepEqual(freshReview.freshBranch.files, ["untracked.ts"]);
+    writeFileSync(join(f.repository, "untracked.ts"), "updated preserved source");
+    assert.throws(() => stashReviewedSharedWorktree({ ...f, reviewedWorkspace: freshReview }), /changed since review/);
+    const receipt = stashReviewedSharedWorktree({
+      ...f, reviewedWorkspace: reviewSharedWorktree(f.repository, f.profile)
+    });
+    assert.equal(git(f.repository, "show", `${receipt.stashRef}^3:untracked.ts`), "updated preserved source");
+    assert.equal(existsSync(join(f.repository, "untracked.ts")), false);
+    assert.equal(git(f.repository, "branch", "--show-current"), original.branch);
+    git(f.repository, "remote", "set-url", "origin", f.source);
+    writeFileSync(join(f.source, "new-base.md"), "latest base");
+    git(f.source, "add", ".");
+    git(f.source, "commit", "--quiet", "-m", "Advance develop");
+    const next = prepare(f);
+    assert.notEqual(next.branch, original.branch);
+    assert.equal(next.baseCommit, git(f.source, "rev-parse", "HEAD"));
+    assert.equal(readFileSync(join(f.repository, "new-base.md"), "utf8"), "latest base");
+    assert.equal(git(f.repository, "rev-parse", original.branch), original.baseCommit);
+    assert.equal(git(f.repository, "stash", "list", "--max-count=1", "--format=%H"), receipt.stashRef);
   } finally {
     rmSync(f.root, { recursive: true, force: true });
   }

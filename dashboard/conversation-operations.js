@@ -19,6 +19,7 @@ export const conversationOperations = Object.freeze({
   "permission-review": { method: "POST", path: "/api/job/permissions", action: "review-directory" },
   "permission-approve": { method: "POST", path: "/api/job/permissions", action: "approve-directory" },
   "validation-run": { method: "POST", path: "/api/validation/run" },
+  "validation-select": { method: "POST", path: "/api/job/checks" },
   "onboarding-configure": { method: "POST", path: "/api/onboarding/azure-devops" },
   "work-items-load": { method: "POST", path: "/api/azure-devops/load" }
 });
@@ -39,7 +40,8 @@ const resultKeys = new Set([
   "total", "passed", "failed", "blocked", "cancelled", "heldCount", "queuedCount",
   "completed", "bugs", "averageDurationMs", "usageJobs", "totalInputTokens",
   "totalCachedInputTokens", "totalCacheWriteTokens", "totalOutputTokens",
-  "averageCacheHitPercent"
+  "averageCacheHitPercent", "inputTokenLimit", "budgetExceeded", "inputTokens", "fileAccess",
+  "workflow", "publication", "unitTestsAfterPr", "optionalBuilds", "fullValidationPassed"
 ]);
 
 export function compactControlResult(value, depth = 0) {

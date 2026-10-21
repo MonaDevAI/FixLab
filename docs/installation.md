@@ -27,6 +27,20 @@ The commands below are manual setup and troubleshooting alternatives, not a
 checklist that every user must run. A PR-only feature needs its approved commit
 installed until the change reaches the default branch.
 
+## Use the dashboard
+
+Describe your request and select **Start job**. Attach images when useful;
+**Run options** holds mode, environment and evidence settings.
+
+The sidebar opens saved work, run details, connections and settings on demand.
+On a small screen, select **Menu** first. **Back to chat** hides those tools
+without clearing your draft or running a job. A repository that needs setup
+shows **Set up a repository**; Azure DevOps intake is optional and separate.
+
+Approval requests and errors remain inline. Review the actual command, path
+or diff before approving; enter sign-in details only in the normal browser.
+Required checks and managed approvals are unchanged.
+
 ## Prerequisites
 
 The machine running FixLab needs:

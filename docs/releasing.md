@@ -54,7 +54,7 @@ external GitHub source by adding an entry like this to
     "repo": "MonaDevAI/FixLab"
   },
   "description": "Evidence-backed defect diagnosis, repair, and validation for React and .NET repositories.",
-  "version": "0.7.3",
+  "version": "0.7.4",
   "author": {
     "name": "MonaDevAI",
     "url": "https://github.com/MonaDevAI"

@@ -47,6 +47,66 @@ Result, evidence, and pull request status
 
 ## Components
 
+### Delivery policy
+
+`dashboard/workflow-policy.js` supplies product-wide defaults for new jobs:
+`workflow: { mode: "efficient", publication: "draft", unitTestsAfterPr: false, optionalBuilds: false }`.
+Repository Settings persists overrides once. The reviewed focused checkpoint
+precedes an authorized draft PR; ready-for-review publication requires the
+explicit `publication: "ready"` preference. Broad unit tests and builds run
+only by saved preference or explicit selection. Legacy saved jobs without a
+publication field retain their recorded ready-for-review intent. The runtime
+also preserves legacy strict-ready intent when no publication preference is
+specified. An explicit strict plus draft choice remains draft, with provider
+`isDraft: true` verified; strict validation requirements are unchanged.
+The runtime
+executes these checks through the existing permission-controlled, owned gate
+interface; no independent unreviewed shell scheduler is introduced.
+
+Stopped jobs expose identity-bound, explicitly confirmed configured gate
+selection: all, tests, builds, one gate, or a stage. Gate `kind` and `stage`
+metadata disambiguate repository commands. Runs acquire the canonical executor
+lease; overlapping work and queue advancement are blocked until owned execution
+settles. Completing a scoped job cancels and waits for owned validation before
+advancing the queue, without changing failed, stale or deferred outcomes.
+Unverified termination retains the lease for recovery.
+
+Regression slimming removes duplicate expensive setup, not safety assertions.
+Value matrices belong in fast pure checks; browser tests cover representative
+distinct flows. Jest and Playwright discovery remain separate, and authenticated
+projects must be explicitly selected rather than added to broad unit commands.
+
+Gate applicability and publication requirements are separate. In efficient
+editing jobs, only applicable gates explicitly marked `required: true` block
+publication. Other gates remain executable with honest pending/failed/stale
+results. `advisory` is not `passed`, and `fullValidationPassed` reports whether
+all applicable configured gates really passed. Read-only jobs and explicit
+strict delivery retain the original all-applicable-gates requirement.
+
+Snapshots retain delivery policy. Legacy snapshots restore as strict instead
+of silently weakening an existing job. `/api/job/workflow` permits an explicitly
+confirmed, exact-origin, identity-bound stopped-job migration without editing
+the pinned repository profile, clearing validation history or resuming work.
+An explicitly strict repository policy cannot be waived through this route.
+Required approvals, repository instructions and remote CI/merge policies remain
+authoritative in both modes.
+
+Browser-only reproduction and deployed-result checking use the existing
+`playwright-only` read-only scope. The runtime first checks the selected
+environment's approved existing application and supported authorized browser
+connection. It skips unnecessary stack setup and preserves exact target/version
+and assertion evidence. No browser state is copied and profile locks remain
+authoritative; an unavailable deployment does not authorize a different target.
+Offline job preflight receives the mode and checks only the browser runner and
+required authentication tools for this scope, rather than rejecting it for an
+unused backend or restore toolchain. Fix/checkout validation retains those
+checks. A deployed baseline cannot prove unpublished code or another PR commit.
+
+The SDK continues to load native Copilot configuration, tools and instructions,
+without a replacement system prompt or restricted tool list. FixLab supplies
+scope, safety, evidence and continuity guidance, not a separate cut-down coding
+model. The selected model and environment still affect speed and results.
+
 ### Dashboard or CLI
 
 Collects defect details, screenshots, repository selection, validation mode,
@@ -202,11 +262,65 @@ and heartbeat are suspended until all human requests resolve.
 The dashboard offers allow-once/deny or the question's actual choices and optional
 freeform answer. Responses require the exact loopback Host and browser Origin,
 current instance/job/request IDs, JSON and explicit confirmation. Consumed or
-cancelled IDs cannot be replayed. Stop, hold, shutdown and executor loss invalidate
+cancelled IDs cannot be replayed. **Allow all pending once** displays a bounded
+snapshot of approvable permissions and requires one explicit confirmation.
+The client rechecks the instance, live job and exact reviewed request details,
+then uses the existing single-use response endpoint for each captured ID.
+New requests, questions and non-approvable requests are excluded. Partial delivery
+stops immediately and reports confirmed approvals; it never rolls them back,
+retries automatically, or grants permission to future requests.
+Stop, hold, shutdown and executor loss invalidate
 pending requests; no answer or approval is inferred. Sensitive, oversized,
 malformed or unsupported permission details cannot be approved. Credentials and
 MFA remain in the browser, never question responses. Managed runtime policy
-remains authoritative; no session-wide or permanent grant is synthesized.
+remains authoritative; no blanket or permanent grant is synthesized.
+After enterprise policy is available, two built-in read-only exceptions return
+one-request, non-interactive approvals: native glob filename discovery under
+canonical, non-sensitive checkout directories, and the exact
+`node <this-installed-fixlab.js> --help` command. Discovery is identified by the
+native glob tool's fixed intention, never a generic directory read or content
+search. It may list protected filenames but grants no access to their contents.
+Help accepts only the running package's canonical CLI entrypoint, without extra
+arguments, composition, redirects, reported external paths or URLs. Neither
+exception creates a scope or overrides escalation, warnings or managed human
+approval.
+Additionally, `/api/job/file-access` reviews source-read or source-read-write
+trust for one stopped native job, bound to its canonical checkout and job UUID.
+Exact loopback Host/Origin, current instance/job, JSON and explicit confirmation
+are required. It neither resumes nor approves pending runtime requests. The
+private job snapshot retains this separate grant across same-job resumes and
+dashboard restart; creating or copying a job resets it. The native host validates
+the identity again; non-fix modes cannot receive edit trust.
+The policy checks each path again, including configured authentication paths,
+symlinks, hard links, file type and protected configuration names. New files
+require canonical existing parents. Source/test trust grants neither commands
+nor managed-policy exceptions. The exact repository profile is read-eligible
+only with bounded valid JSON and sensitive-content checks; writes and arbitrary
+JSON remain outside trust. Stop the executor before changing or revoking it.
+Dashboard-owned validation writes an exclusive `job.json` sidecar beside its
+sanitized command output. Reviewed file trust can read bounded stdout/stderr
+logs inside the checkout's `.git/fixlab/command-evidence` only after matching
+that sidecar's job/repository identity and rechecking links and sensitive
+content. Older unowned artifacts and other Git metadata remain manual.
+An optional `allowValidationGates` flag in that explicit review additionally
+matches only the running package's `node ...fixlab.js gate` invocation with
+this job UUID, canonical checkout, current owning dashboard port and four
+known options. Extra arguments, composition, reported external paths/URLs,
+escalation and managed human approval stay manual. The dashboard retains all
+gate-membership, checkout, profile-freshness and execution-state checks; this
+is not a general shell grant.
+
+Eligible native requests separately offer a reviewed executor-local scope:
+non-sensitive repository source/documentation/project-file reads, or an exact
+test command bound to its canonical in-repository working directory, reported
+paths and package manifests. Directories, hidden/sensitive files, linked paths,
+unknown commands, network requests, escalation and managed human approvals stay
+manual. Missing canonical command metadata cannot receive a command grant.
+Changed package manifests or command identity require review again. These scopes
+remain only in the SDK host's memory and expire on every executor termination,
+including an automatic continuation; snapshots, retries and new jobs cannot
+restore them. Automatic matches still return one-request decisions and never
+claim that the matched request itself was interactively approved.
 Workflow input and MCP conversation replies cannot approve native requests.
 The SDK's Node.js requirement is 20.19+ in the 20.x line or 22.12+.
 
@@ -420,6 +534,67 @@ request summaries, bug identities and outcomes, stage summaries, held state,
 and pull-request readiness, but no raw logs, screenshots, credentials,
 authentication state, or source content.
 
+The dashboard uses a chat-first workspace with an explicitly local repository
+sidebar and inline human-response panels. Run details, memory, connections and
+settings are hidden until opened from navigation, rather than occupying a
+permanent inspector column. Back to chat collapses those tools and restores
+focus to the preserved draft. Mobile navigation uses an explicitly expanded
+Menu control. New run options and secondary help remain collapsed until
+requested; critical request payloads, errors and approval actions stay visible.
+Repository
+memory is a read-only view of retained job summaries and reported stage
+outcomes; selecting a memory never resumes work or grants permission.
+The repository catalog reads bounded local dashboard registrations and verifies
+their loopback owner identity before linking to another workspace. It does not
+scan repositories, list GitHub access, launch dashboards, or make model calls.
+The chat presents existing activity summaries, not generated explanations or
+hidden reasoning, so rendering and refreshing it adds no model token usage.
+**Current job full screen** moves the existing details/evidence inspector into
+an accessible viewport-sized dialog. It follows the current job even when a
+history entry was selected, and restores that selection and focus on exit or
+Escape. Its header limits the request to two visible lines, retaining the full
+text for assistive technology and on hover while keeping the exit button visible.
+Opening and closing the inspector never starts, resumes or approves work.
+Stale artifact responses cannot replace another selected job's evidence.
+
+Shared-worktree blockers expose **Review workspace** in the chat. A separate
+confirmed **Stash files and start fresh** action preserves reviewed untracked
+source files in a retained Git stash, fetches the configured remote/base branch,
+and creates a new job branch in the same folder. The original job and branch
+are retained; no reset, clean, force-switch or automatic stash restore occurs.
+Review is bound to the dashboard, job and workspace fingerprint. Tracked changes,
+sensitive or linked files, active execution, pending permissions, queued jobs,
+and owned React/authentication sessions block automatic recovery. Fresh jobs
+do not inherit file trust or external-folder grants.
+
+Local repository setup uses an explicit same-origin, instance-bound API and a
+deterministic chat, not an onboarding model session. A bounded, expiring plan
+captures the canonical Git working tree, profile fingerprint, supported field
+values and non-overwriting scaffold list. Application paths stay inside that
+tree; credentials and authentication-state contents are not exposed. Applying
+acquires the repository executor lease, rechecks the fingerprint and uses an
+exclusive temporary profile file followed by atomic rename. Existing resource
+owners must be idle; the editor does not stop them. Opening an onboarded workspace
+registers a separate loopback owner in the same host without launching a job.
+Host shutdown fences new workspace creation and closes only its tracked children.
+The Queue sidebar action opens the jobs list at the top of Run details, with
+the waiting count visible without opening the inspector. Navigation never
+starts, resumes, or grants access to a job.
+
+Before starting or resuming an automated browser-only executor, the dashboard
+checks directory-valued authentication `statusPaths` for a matching same-user
+browser process. It reads filesystem/process metadata, not authentication-file
+or browser-profile contents. A busy declared profile blocks before acquiring
+the execution lease or starting the model. Repeating a retry while that owner
+remains returns a conflict without recording another input or starting AI.
+The authentication connection endpoint applies the same ownership check.
+FixLab never terminates or attaches to an existing browser to release a lock;
+the user must first preserve unsaved form data and close the previous test
+browser. Ownership inspection errors also block and are shown explicitly.
+State-file-only configuration cannot identify a persistent profile, and a
+profile acquired after preflight can still require a human-owned recovery;
+this is a prerequisite check, not a universal browser lock manager.
+
 ## Context and token efficiency
 
 Each job reads the repository profile and existing instructions first, then
@@ -429,21 +604,69 @@ Unchanged files, completed diagnosis, available dependencies, and broad checks
 are not repeated without new risk evidence. Tests and validation are focused
 and risk-scaled.
 
+Native Copilot sessions explicitly defer MCP/external tool definitions behind
+tool search and move tool output above 8 KiB to runtime-managed evidence files.
+This preserves tool availability, repository configuration discovery and managed
+policy; it does not replace the runtime's safety prompt or grant permissions.
+Playwright-only jobs use a smaller browser-specific contract instead of the
+implementation/PR lifecycle. They reuse a parameterized same-job script and
+retain it through retries rather than rediscovering selectors for every row.
+Browser-only continuation and dashboard retry/skip input keep the original
+environment, request, decisions and browser evidence; they do not introduce
+implementation or PR lifecycle work. A first launch blocked by browser
+preflight has no model session to resume, including after a dashboard restart.
+
+All native Copilot sessions start background compaction at 25% of the model context
+allowance and block for compaction at 40%. On resume, the host re-tokenizes
+retained conversation using the selected model; above 24,000 conversation
+tokens it asks the official runtime to compact history before sending the next
+job prompt. The summary must preserve explicit decisions, pending/denied
+permissions, form state, safety constraints, script paths and exact evidence.
+It also preserves checkout ownership, changed files, completed test commands,
+baseline failures, deferred gates, budget and remaining work.
+Compaction failure blocks continuation rather than clearing history, inventing
+approvals or silently resending oversized context. Numeric compaction outcomes
+are visible in activity; raw summaries are not sent to the dashboard.
+Cumulative usage is not reset by compaction or dashboard restarts and is not a
+dollar-cost estimate. Only numeric counters are retained in job summaries;
+older summaries recover counters from the same job's local metrics record
+when available.
+Native counters arrive in dedicated, validated monotonic protocol frames;
+rendered token-summary text cannot overwrite them or reset a resumed budget.
+Agency retains its legacy rendered-usage parser.
+
+Native jobs accept an optional `inputTokenLimit` (safe non-negative integer,
+default `0`, unlimited). Cumulative SDK usage, including cached input and
+compaction, pauses the owned executor when a reported total reaches the ceiling.
+The current call may exceed it; this is a soft usage limit, not a billing cap.
+Exhausted resumes cannot open another runtime, and queued comments cannot
+automatically continue an exhausted job. A stopped-job budget change requires
+exact browser origin, current instance/job identity and explicit confirmation;
+it preserves usage and neither resumes work nor grants permissions. Agency
+rejects positive ceilings rather than pretending to enforce SDK usage.
+
 For fix-and-validate jobs with pull-request publication already authorized,
-FixLab uses an early-draft pipeline. After the scoped production change and
-smallest focused regression checks pass, it removes transient validation
-artifacts, reviews the effective diff, pushes the checkpoint, and creates or
-updates a draft pull request. Independent builds, application startup, and
-browser journeys continue while the draft is visible. Later reviewed
-checkpoints update the same branch and PR. The PR remains explicitly
-validation-in-progress until required local validation and approval gates
-pass or repository policy records an accepted outcome. FixLab then publishes
-the authorized PR by clearing its draft status and verifies the provider's
-`isDraft` state is false before reporting the PR stage passed. Publication
-does not wait for remote CI or build completion: some providers trigger PR
-builds only after publication. Those checks remain reported as pending, not
-passed, and normal review, build, and merge policies remain enforced. Failed
-publication or state verification blocks or fails the PR stage.
+FixLab follows the selected publication policy. Efficient mode defaults to a
+draft PR after the scoped change, focused regression checks, effective-diff
+review, and explicitly required pre-publication gates. Transient validation
+artifacts are removed before pushing the reviewed checkpoint. A successful
+authorized draft publication requires verifying the provider's `isDraft` state
+is true; it does not authorize clearing draft status. Marking a draft ready
+requires a separate reviewed decision. Explicit ready intent or the legacy
+strict-ready policy requires normal review, required fresh validation and
+approval gates, and verification that `isDraft` is false before the PR stage
+passes. Strict-required gates, freshness checks, provider protections, and
+managed approvals remain unchanged.
+
+Later reviewed checkpoints and validation results update the same branch and
+PR. Optional broad unit tests and builds are not automatically requested when
+disabled; enabled independent checks can continue after publication without
+blocking efficient delivery. Every pending, failed, stale, skipped, or not-run
+check remains explicit rather than being reported as passed. Publication does
+not wait for remote CI or build completion: some providers trigger PR builds
+only after publication. Remote checks remain pending until their results are
+known, and normal review, build, and merge policies remain enforced. Failed
+publication or selected-state verification blocks or fails the PR stage.
 
 Stage summaries remain structured independently of raw output. The dashboard
 retains a bounded local log window and reports how many older entries were

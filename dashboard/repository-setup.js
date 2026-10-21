@@ -3,8 +3,10 @@ import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { canonicalExecutionRepository } from "./executor-lease.js";
 
 export const SETUP_PROFILE_PATH = join(".github", "fixlab", "repository-profile.json");
+export const REPOSITORY_PROMPT_NAMES = ["bugfix", "intake", "diagnose", "reproduce", "fix", "validate", "live-test", "pr"]
+  .map((name) => `fixlab.${name}.prompt.md`);
 
-function setupPath(root, value) {
+export function setupPath(root, value) {
   if (
     typeof value !== "string" || !value ||
     isAbsolute(value) || /^[A-Za-z]:|^[/\\]/u.test(value) ||
