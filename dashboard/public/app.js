@@ -20,43 +20,6 @@ const stagesElement = document.querySelector("#stages");
 const validationPanel = document.querySelector("#validation-panel");
 const validationSummary = document.querySelector("#validation-summary");
 const validationGatesElement = document.querySelector("#validation-gates");
-const validationControls = document.querySelector("#validation-controls");
-const validationSelection = document.querySelector("#validation-selection");
-const validationRunSelection = document.querySelector("#validation-run-selection");
-const validationComplete = document.querySelector("#validation-complete");
-const validationControlMessage = document.querySelector("#validation-control-message");
-let validationControlBusy = false;
-
-async function controlValidation(action) {
-  const job = observedJobs.get(selectedJobId) ?? activeJob;
-  if (!job || job.id !== activeJob?.id || (validationControlBusy && action !== "complete")) {return;}
-  const identity = { instanceId: dashboardInstanceId, jobId: job.id, repository: dashboardRepository };
-  const [selection, value] = validationSelection.value.split(":");
-  if (!window.confirm(action === "complete"
-    ? "Complete this scoped job and advance the queue after owned checks stop? Failed and deferred checks remain unverified; this does not approve a PR."
-    : `Run ${validationSelection.selectedOptions[0].textContent} for this stopped job and checkout?`)) {return;}
-  validationControlBusy = true;
-  validationRunSelection.disabled = true;
-  try {
-    await fetchJson("/api/job/checks", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...identity, action, selection, value, confirmed: true })
-    });
-    if (dashboardInstanceId === identity.instanceId && activeJob?.id === identity.jobId) {
-      validationControlMessage.textContent = action === "complete" ? "Scoped job completed; evidence retained." : "Selected checks settled. Inspect their actual outcomes.";
-      await refresh();
-    }
-  } catch (error) {
-    if (dashboardInstanceId === identity.instanceId && activeJob?.id === identity.jobId) {
-      validationControlMessage.textContent = error.message;
-    }
-  } finally {
-    validationControlBusy = false;
-    validationRunSelection.disabled = false;
-  }
-}
-validationRunSelection.addEventListener("click", () => controlValidation("run"));
-validationComplete.addEventListener("click", () => controlValidation("complete"));
 const jobStatusElement = document.querySelector("#job-status");
 const testEvidenceElement = document.querySelector("#test-evidence");
 const testEvidenceScenario = document.querySelector(
@@ -116,127 +79,10 @@ const permissionScope = document.querySelector("#permission-scope");
 const permissionMessage = document.querySelector("#permission-message");
 const permissionHelper = document.querySelector("#permission-helper");
 let permissionSelection = null;
-const workspaceRecoveryPanel = document.querySelector("#workspace-recovery-panel");
-const workspaceRecoveryReview = document.querySelector("#workspace-recovery-review");
-const workspaceRecoverySummary = document.querySelector("#workspace-recovery-summary");
-const workspaceRecoveryStart = document.querySelector("#workspace-recovery-start");
-const workspaceRecoveryCancel = document.querySelector("#workspace-recovery-cancel");
-const workspaceRecoveryMessage = document.querySelector("#workspace-recovery-message");
-const workspaceStashResult = document.querySelector("#workspace-stash-result");
-let workspaceRecoverySelection = null;
-let workspaceRecoveryBusy = false;
-
-function clearWorkspaceRecovery() {
-  workspaceRecoverySelection = null;
-  workspaceRecoverySummary.hidden = true;
-  workspaceRecoveryStart.hidden = true;
-  workspaceRecoveryCancel.hidden = true;
-}
-
-function renderWorkspaceRecovery(job, isActive) {
-  const available = isActive && Boolean(job?.workspaceReview) &&
-    ["blocked", "failed"].includes(job.status) && !job.executorStopping &&
-    !job.permissionRequest && !job.runtimeRequests?.length;
-  workspaceRecoveryPanel.hidden = !available;
-  if (!available || (workspaceRecoverySelection &&
-      (workspaceRecoverySelection.jobId !== job.id ||
-        workspaceRecoverySelection.instanceId !== dashboardInstanceId))) {
-    clearWorkspaceRecovery();
-  }
-  workspaceRecoveryReview.disabled = workspaceRecoveryBusy;
-  workspaceRecoveryCancel.disabled = workspaceRecoveryBusy;
-  workspaceRecoveryStart.disabled = workspaceRecoveryBusy ||
-    !workspaceRecoverySelection?.workspaceReview.freshBranch?.available;
-  workspaceStashResult.hidden = !isActive || !job?.workspaceStash?.stashRef;
-  workspaceStashResult.textContent = workspaceStashResult.hidden ? "" :
-    `Preserved stash: ${job.workspaceStash.stashRef}. Restore it separately when needed.`;
-}
-
-workspaceRecoveryReview.addEventListener("click", async () => {
-  clearWorkspaceRecovery();
-  workspaceRecoveryBusy = true;
-  workspaceRecoveryReview.disabled = true;
-  workspaceRecoveryMessage.textContent = "Reviewing the current branch and files...";
-  try {
-    const body = await fetchJson("/api/conversation");
-    if (body.instanceId !== dashboardInstanceId || body.job?.id !== activeJob?.id ||
-        body.repository !== dashboardRepository || body.question?.kind !== "workspace" ||
-        !body.workspaceReview?.freshBranch) {
-      throw new Error("The job or workspace changed. Refresh and review again.");
-    }
-    workspaceRecoverySelection = {
-      instanceId: body.instanceId, jobId: body.job.id,
-      repository: body.repository, workspaceReview: body.workspaceReview
-    };
-    const plan = body.workspaceReview.freshBranch;
-    workspaceRecoverySummary.textContent =
-      `Folder: ${body.repository}\nCurrent branch: ${body.workspaceReview.branch}\nNew base: ${plan.remote}/${plan.baseBranch}\nFiles to stash:\n${plan.files.length ? plan.files.join("\n") : "None"}`;
-    workspaceRecoverySummary.hidden = false;
-    workspaceRecoveryStart.textContent = plan.files.length ? "Stash files and start fresh" : "Start fresh from base";
-    workspaceRecoveryStart.hidden = false;
-    workspaceRecoveryStart.disabled = !plan.available;
-    workspaceRecoveryCancel.hidden = false;
-    workspaceRecoveryMessage.textContent = plan.reason || "Review complete. No files or jobs have changed.";
-  } catch (error) {
-    clearWorkspaceRecovery();
-    workspaceRecoveryMessage.textContent = error.message;
-  } finally {
-    workspaceRecoveryBusy = false;
-    workspaceRecoveryReview.disabled = false;
-  }
-});
-
-workspaceRecoveryCancel.addEventListener("click", () => {
-  if (workspaceRecoveryBusy) {return;}
-  clearWorkspaceRecovery();
-  workspaceRecoveryMessage.textContent = "The job remains stopped. No files were changed.";
-});
-
-workspaceRecoveryStart.addEventListener("click", async () => {
-  const selection = workspaceRecoverySelection;
-  if (!selection || workspaceRecoveryBusy || selection.jobId !== activeJob?.id ||
-      selection.instanceId !== dashboardInstanceId || !selection.workspaceReview.freshBranch?.available) {
-    workspaceRecoveryMessage.textContent = "Review the current workspace before starting.";
-    return;
-  }
-  const plan = selection.workspaceReview.freshBranch;
-  if (!window.confirm(`Save ${plan.files.length} reviewed file(s) in a stash and start a NEW job from ${plan.remote}/${plan.baseBranch} in this folder? The old branch ${selection.workspaceReview.branch} and job are preserved. No reset, deletion or automatic stash restore.`)) {
-    return;
-  }
-  workspaceRecoveryBusy = true;
-  workspaceRecoveryStart.disabled = true;
-  workspaceRecoveryReview.disabled = true;
-  workspaceRecoveryCancel.disabled = true;
-  workspaceRecoveryMessage.textContent = "Preserving files and preparing the new branch...";
-  try {
-    const body = await fetchJson("/api/jobs/restart", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        confirmed: true, instanceId: selection.instanceId, jobId: selection.jobId,
-        repository: selection.repository,
-        workspaceRecovery: {
-          branch: selection.workspaceReview.branch, fingerprint: selection.workspaceReview.fingerprint
-        }
-      })
-    });
-    selectedJobId = body.restartedJob?.id ?? body.job?.id ?? null;
-    clearWorkspaceRecovery();
-    await refresh();
-  } catch (error) {
-    clearWorkspaceRecovery();
-    workspaceRecoveryMessage.textContent = error.message;
-  } finally {
-    workspaceRecoveryBusy = false;
-    workspaceRecoveryReview.disabled = false;
-    workspaceRecoveryCancel.disabled = false;
-  }
-});
-
 let runtimeHelperDirectory = "";
 let permissionBusy = false;
 let permissionEdited = false;
 let dashboardInstanceId = null;
-let dashboardRepository = "";
 let runtimeSelection = null;
 let runtimeBusy = false;
 const runtimePanel = document.querySelector("#runtime-request-panel");
@@ -246,268 +92,21 @@ const runtimeAnswer = document.querySelector("#runtime-request-answer");
 const runtimeAnswerLabel = document.querySelector("#runtime-request-answer-label");
 const runtimeActions = document.querySelector("#runtime-request-actions");
 const runtimeMessage = document.querySelector("#runtime-request-message");
-const runtimeBatchReview = document.querySelector("#runtime-batch-review");
-const runtimeBatchSummary = document.querySelector("#runtime-batch-summary");
-const runtimeBatchRequests = document.querySelector("#runtime-batch-requests");
-const runtimeBatchAllow = document.querySelector("#runtime-allow-pending");
-const runtimeBatchResult = document.querySelector("#runtime-batch-result");
-let runtimeBatchSelection = null;
-const budgetPanel = document.querySelector("#job-budget-panel");
-const budgetToggle = document.querySelector("#show-input-budget");
-const budgetLimit = document.querySelector("#job-budget-limit");
-const budgetSummary = document.querySelector("#job-budget-summary");
-const budgetMessage = document.querySelector("#job-budget-message");
-const budgetSave = document.querySelector("#job-budget-save");
-let budgetSelection = null;
-let budgetBusy = false;
-const fileAccessPanel = document.querySelector("#job-file-access-panel");
-const fileAccessMode = document.querySelector("#job-file-access-mode");
-const fileAccessGates = document.querySelector("#job-file-access-gates");
-const fileAccessSummary = document.querySelector("#job-file-access-summary");
-const fileAccessMessage = document.querySelector("#job-file-access-message");
-const fileAccessSave = document.querySelector("#job-file-access-save");
-let fileAccessSelection = null;
-let fileAccessBusy = false;
 
-function renderFileAccess(job, isActive) {
-  fileAccessPanel.hidden = !job || job.runtime !== "copilot";
-  if (fileAccessPanel.hidden) {
-    fileAccessSelection = null;
-    return;
-  }
-  const mode = job.fileAccess?.mode ?? "manual";
-  const key = `${dashboardInstanceId}:${job.id}:${mode}:${job.fileAccess?.allowValidationGates === true}`;
-  if (fileAccessSelection?.key !== key) {
-    fileAccessSelection = {
-      key, instanceId: dashboardInstanceId, jobId: job.id,
-      repository: job.fileAccess?.repository ?? dashboardRepository
-    };
-    fileAccessMode.value = mode;
-    fileAccessGates.checked = job.fileAccess?.allowValidationGates === true;
-    fileAccessMessage.textContent = "";
-  }
-  fileAccessSummary.textContent = mode === "manual" ? "Individual file approvals are active."
-    : `${mode === "source-read-write" ? "Read and edit" : "Read"} non-sensitive source/test files for this job and checkout, including resumes. ${job.fileAccess?.allowValidationGates ? "Dashboard-owned validation gates are also trusted; other commands remain manual." : "Commands remain separately reviewed."}`;
-  const editable = isActive && ["blocked", "failed", "passed"].includes(job.status);
-  fileAccessMode.disabled = fileAccessBusy || !editable;
-  fileAccessSave.disabled = fileAccessBusy || !editable;
-  fileAccessGates.disabled = fileAccessBusy || !editable || fileAccessMode.value === "manual";
-  fileAccessMode.querySelector('option[value="source-read-write"]').disabled = job.mode !== "fix-and-validate";
-}
-fileAccessMode.addEventListener("change", () => {
-  fileAccessGates.disabled = fileAccessBusy || fileAccessMode.disabled || fileAccessMode.value === "manual";
-  if (fileAccessMode.value === "manual") {
-    fileAccessGates.checked = false;
-  }
-});
-
-fileAccessSave.addEventListener("click", async () => {
-  const selection = fileAccessSelection;
-  const mode = fileAccessMode.value;
-  if (!selection || fileAccessBusy) {return;}
-  const allowValidationGates = mode !== "manual" && fileAccessGates.checked;
-  if (!window.confirm(`Set repository file trust to ${mode} for this job and checkout, including resumes? Dashboard-owned validation gates: ${allowValidationGates ? "also trusted" : "manual"}. Other commands, sensitive files, configuration edits and organization-policy exceptions are never granted. This does not resume the job.`)) {return;}
-  fileAccessBusy = true;
-  fileAccessSave.disabled = true;
-  try {
-    const body = await fetchJson("/api/job/file-access", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...selection, mode, allowValidationGates, confirmed: true })
-    });
-    if (dashboardInstanceId === selection.instanceId && fileAccessSelection?.jobId === selection.jobId) {
-      activeJob = body.job;
-      rememberJob(body.job);
-      renderJob(body.job, body.job);
-      fileAccessMessage.textContent = "File trust updated for this job only. Resume separately when ready.";
-    }
-  } catch (error) {
-    if (dashboardInstanceId === selection.instanceId && fileAccessSelection?.jobId === selection.jobId) {
-      fileAccessMessage.textContent = error.message;
-    }
-  } finally {
-    fileAccessBusy = false;
-    const job = observedJobs.get(selectedJobId) ?? activeJob;
-    renderFileAccess(job, job?.id === activeJob?.id);
-  }
-});
-
-function renderBudget(job, isActive) {
-  budgetPanel.hidden = !budgetToggle.checked || !job || job.runtime !== "copilot";
-  if (budgetPanel.hidden) {
-    budgetSelection = null;
-    return;
-  }
-  const key = `${dashboardInstanceId}:${job.id}:${job.inputTokenLimit ?? 0}`;
-  if (budgetSelection?.key !== key) {
-    budgetSelection = { key, jobId: job.id, instanceId: dashboardInstanceId };
-    budgetLimit.value = String(job.inputTokenLimit ?? 0);
-    budgetMessage.textContent = "";
-  }
-  const input = job.usage?.inputTokens ?? 0;
-  const cached = job.usage?.cachedInputTokens ?? 0;
-  budgetSummary.textContent = `${input.toLocaleString()} input tokens (${cached.toLocaleString()} cached; ${Math.max(0, input - cached).toLocaleString()} uncached). Ceiling: ${job.inputTokenLimit ? job.inputTokenLimit.toLocaleString() : "unlimited"}. ${job.budgetExceeded ? "Paused: explicitly update the budget, then resume. " : ""}An in-flight model call can exceed a positive ceiling; it is not a hard billing cap.`;
-  const editable = isActive && ["blocked", "failed", "passed"].includes(job.status) &&
-    (job.canResume || job.budgetExceeded);
-  budgetLimit.disabled = budgetBusy || !editable;
-  budgetSave.disabled = budgetBusy || !editable;
-}
-
-budgetToggle.addEventListener("change", () => {
-  document.querySelector("#input-budget-control").hidden =
-    !budgetToggle.checked || document.querySelector("#input-token-limit").disabled;
-  const job = observedJobs.get(selectedJobId) ?? activeJob;
-  renderBudget(job, job?.id === activeJob?.id);
-});
-
-budgetSave.addEventListener("click", async () => {
-  const selection = budgetSelection;
-  const inputTokenLimit = Number(budgetLimit.value);
-  if (!selection || budgetBusy || !Number.isSafeInteger(inputTokenLimit) || inputTokenLimit < 0) {
-    budgetMessage.textContent = "Enter a non-negative safe integer; 0 means unlimited.";
-    return;
-  }
-  if (!window.confirm(`Set this stopped job's input-token ceiling to ${inputTokenLimit || "unlimited"}? Usage is preserved. This does not resume the job or grant any tool permissions.`)) {
-    return;
-  }
-  budgetBusy = true;
-  budgetSave.disabled = true;
-  try {
-    const body = await fetchJson("/api/job/budget", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        instanceId: selection.instanceId, jobId: selection.jobId,
-        inputTokenLimit, confirmed: true
-      })
-    });
-    if (budgetSelection?.jobId === selection.jobId && dashboardInstanceId === selection.instanceId) {
-      activeJob = body.job;
-      rememberJob(body.job);
-      renderJob(body.job, body.job);
-      budgetMessage.textContent = "Budget updated. Usage is preserved; resume separately when ready.";
-    }
-  } catch (error) {
-    if (budgetSelection?.jobId === selection.jobId && dashboardInstanceId === selection.instanceId) {
-      budgetMessage.textContent = error.message;
-    }
-  } finally {
-    budgetBusy = false;
-    const job = observedJobs.get(selectedJobId) ?? activeJob;
-    renderBudget(job, job?.id === activeJob?.id);
-  }
-});
-
-function setRuntimeBusy(busy) {
-  runtimeBusy = busy;
-  runtimePanel.querySelectorAll("button, textarea").forEach((element) => {
-    element.disabled = busy;
-  });
-}
-
-function renderRuntimeBatch(job, isActive) {
-  const requests = isActive
-    ? (job?.runtimeRequests ?? []).filter((request) => request.kind === "permission" && request.canApprove === true)
-    : [];
-  runtimeBatchReview.hidden = requests.length < 2;
-  runtimeBatchAllow.disabled = runtimeBusy;
-  if (runtimeBatchResult.dataset.jobId !== job?.id || !isActive) {
-    runtimeBatchResult.hidden = true;
-  }
-  if (requests.length < 2) {
-    runtimeBatchSelection = null;
-    return;
-  }
-  const key = JSON.stringify([dashboardInstanceId, job.id, requests.map((request) => request.id)]);
-  if (runtimeBatchSelection?.key === key) {
-    return;
-  }
-  runtimeBatchSelection = {
-    key, instanceId: dashboardInstanceId, jobId: job.id,
-    requests: requests.map(({ id, title, details }) => ({ id, title, details }))
-  };
-  runtimeBatchReview.open = false;
-  runtimeBatchSummary.textContent = `Review all ${requests.length} pending permissions`;
-  runtimeBatchRequests.replaceChildren();
-  for (const request of requests) {
-    const article = document.createElement("article");
-    const title = document.createElement("h3");
-    const details = document.createElement("pre");
-    title.textContent = request.title;
-    details.textContent = request.details;
-    article.append(title, details);
-    runtimeBatchRequests.append(article);
-  }
-}
-
-async function allowPendingPermissions() {
-  const selection = runtimeBatchSelection;
-  if (!selection || runtimeBusy || !window.confirm(
-    `Allow only the ${selection.requests.length} permission requests listed in this review once? This can run their commands and access or change their listed files and URLs. Questions and future requests still require a separate response. Organization policy and business-action restrictions remain in effect.`
-  )) {
-    return;
-  }
-  setRuntimeBusy(true);
-  runtimeBatchResult.dataset.jobId = selection.jobId;
-  runtimeBatchResult.hidden = false;
-  runtimeBatchResult.classList.remove("error");
-  runtimeBatchResult.textContent = "Checking the reviewed permission requests before sending approvals...";
-  let approved = 0;
-  let attempted = false;
-  try {
-    const current = await fetchJson("/api/status");
-    if (current.instanceId !== selection.instanceId || current.job?.id !== selection.jobId ||
-        current.job.status !== "running" || !Array.isArray(current.job.runtimeRequests) ||
-        !selection.requests.every((reviewed) => current.job.runtimeRequests.some((request) =>
-          request.id === reviewed.id && request.kind === "permission" && request.canApprove === true &&
-          request.title === reviewed.title && request.details === reviewed.details))) {
-      throw new Error("The reviewed permissions or live job changed. Review the current requests again.");
-    }
-    for (const request of selection.requests) {
-      attempted = true;
-      const body = await fetchJson("/api/job/runtime-response", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          instanceId: selection.instanceId, jobId: selection.jobId,
-          requestId: request.id, action: "allow", confirmed: true
-        })
-      });
-      approved++;
-      activeJob = body.job;
-      observedJobs.set(body.job.id, body.job);
-      runtimeBatchResult.textContent = `Confirmed ${approved} of ${selection.requests.length} one-time approvals.`;
-    }
-    renderJob(activeJob, activeJob);
-    runtimeBatchResult.textContent = `Allowed ${approved} reviewed permission requests once. New requests still require approval.`;
-  } catch (error) {
-    runtimeBatchResult.hidden = false;
-    runtimeBatchResult.classList.add("error");
-    runtimeBatchResult.textContent = attempted
-      ? `Batch stopped after ${approved} confirmed approval(s) out of ${selection.requests.length}: ${error.message} No automatic retry was made; review the remaining requests.`
-      : `No approvals were sent. ${error.message}`;
-  } finally {
-    setRuntimeBusy(false);
-  }
-}
-
-runtimeBatchAllow.addEventListener("click", () => void allowPendingPermissions());
-
-async function respondToRuntime(action, choice, scope) {
+async function respondToRuntime(action, choice) {
   const selection = runtimeSelection;
   if (!selection || runtimeBusy) {
     return;
   }
-  if (action === "allow" && !window.confirm(scope === "repository-reads"
-    ? "Allow non-sensitive source, documentation and selected project-file reads within this job's repository for this executor? Directories, hidden/sensitive files, browser state, outside paths, symbolic links, escalation and managed human approval remain manual. The grant expires when the executor ends."
-    : scope === "exact-test-command"
-      ? "Allow this exact reviewed test command for this executor? Its working directory, reported paths and package.json are bound to this grant. Tests can have side effects: review the script before approving. Changed commands, network requests, sandbox escalation, business writes and managed human approvals are not separately authorized. The grant expires when the executor ends."
-      : scope === "publication-batch"
-        ? "Allow the reviewed staged checkpoint's routine commit, non-force origin push and explicit-provider PR creation for this executor? Review every listed path (including deletions), destination, source/target and draft policy above. Only one unchanged tree and its single-parent commit transition qualify. Untracked scratch is not staged or published. Changed content, destinations, required readiness, managed approvals, merge and deployment remain outside this grant."
-      : "Allow only this exact Copilot permission request once? Review its command, files, URLs and any sandbox escalation above. This does not override organization policy."
+  if (action === "allow" && !window.confirm(
+    "Allow only this exact Copilot permission request once? Review its command, files, URLs and any sandbox escalation above. This does not override organization policy."
   )) {
     return;
   }
-  setRuntimeBusy(true);
+  runtimeBusy = true;
+  runtimePanel.querySelectorAll("button, textarea").forEach((element) => {
+    element.disabled = true;
+  });
   try {
     const body = await fetchJson("/api/job/runtime-response", {
       method: "POST",
@@ -518,7 +117,6 @@ async function respondToRuntime(action, choice, scope) {
         requestId: selection.requestId,
         confirmed: true,
         action,
-        ...(scope ? { scope } : {}),
         ...(choice === undefined ? { answer: runtimeAnswer.value } : { choice })
       })
     });
@@ -529,12 +127,14 @@ async function respondToRuntime(action, choice, scope) {
   } catch (error) {
     runtimeMessage.textContent = error.message;
   } finally {
-    setRuntimeBusy(false);
+    runtimeBusy = false;
+    runtimePanel.querySelectorAll("button, textarea").forEach((element) => {
+      element.disabled = false;
+    });
   }
 }
 
 function renderRuntimeRequest(job, isActive) {
-  renderRuntimeBatch(job, isActive);
   const pending = isActive ? job?.runtimeRequests?.[0] : null;
   runtimePanel.hidden = !pending;
   if (!pending) {
@@ -555,24 +155,16 @@ function renderRuntimeRequest(job, isActive) {
   runtimeActions.replaceChildren();
   runtimeAnswer.hidden = pending.kind !== "question" || !pending.allowFreeform;
   runtimeAnswerLabel.hidden = runtimeAnswer.hidden;
-  const button = (parent, label, action, choice, scope) => {
+  const button = (parent, label, action, choice) => {
     const element = document.createElement("button");
     element.type = "button";
-    element.disabled = runtimeBusy;
     element.textContent = label;
-    element.addEventListener("click", () => void respondToRuntime(action, choice, scope));
+    element.addEventListener("click", () => void respondToRuntime(action, choice));
     parent.append(element);
   };
   if (pending.kind === "permission") {
     if (pending.canApprove) {
       button(runtimeActions, "Allow once", "allow");
-      if (pending.grantScope === "repository-reads") {
-        button(runtimeActions, "Allow repository-file reads for this job", "allow", undefined, pending.grantScope);
-      } else if (pending.grantScope === "exact-test-command") {
-        button(runtimeActions, "Allow this test command for this job", "allow", undefined, pending.grantScope);
-      } else if (pending.grantScope === "publication-batch") {
-        button(runtimeActions, "Allow this reviewed publication checkpoint", "allow", undefined, pending.grantScope);
-      }
     }
     button(runtimeActions, "Deny", "deny");
   } else {
@@ -777,303 +369,12 @@ const metricStatuses = document.querySelector("#metric-statuses");
 let loadedWorkItems = [];
 let selectedScreenshots = [];
 let activeJob = null;
-const currentJobDialog = document.querySelector("#current-job-dialog");
-const currentJobFullscreen = document.querySelector("#current-job-fullscreen");
-const currentJobDetails = document.querySelector("#details-view");
-let previousJobView = null;
-
-currentJobFullscreen.addEventListener("click", () => {
-  if (!activeJob || currentJobDialog.open) {
-    return;
-  }
-  previousJobView = { selectedJobId, draftingConversation };
-  selectedJobId = activeJob.id;
-  draftingConversation = false;
-  document.querySelector("#current-job-fullscreen-content").append(currentJobDetails);
-  renderJob(activeJob, activeJob);
-  currentJobDialog.showModal();
-  void refreshPlaywrightEvidence();
-});
-document.querySelector("#current-job-fullscreen-close").addEventListener("click", () => currentJobDialog.close());
-currentJobDialog.addEventListener("close", () => {
-  document.querySelector("#details-group").append(currentJobDetails);
-  if (previousJobView) {
-    selectedJobId = previousJobView.selectedJobId;
-    draftingConversation = previousJobView.draftingConversation;
-    previousJobView = null;
-  }
-  renderJob(draftingConversation ? null : observedJobs.get(selectedJobId) ?? activeJob, activeJob);
-  void refreshPlaywrightEvidence();
-  currentJobFullscreen.focus();
-});
 let selectedJobId = null;
 let pendingRetryAfterConnectJobId = null;
 let playwrightAuthenticationRunning = false;
 const observedJobs = new Map();
 const expandedJobIds = new Set();
 let renderedEvidenceJobId = null;
-let playwrightEvidenceRequestId = 0;
-let repositoryCatalog = [];
-let workspaceSignature = "";
-let memorySignature = "";
-let draftingConversation = false;
-const chatThread = document.querySelector("#chat-thread");
-const conversationTitle = document.querySelector("#conversation-state-title");
-const conversationDetail = document.querySelector("#conversation-state-detail");
-const needsResponse = document.querySelector("#needs-response");
-const workspaceTools = document.querySelector("#workspace-tools");
-const navigationToggle = document.querySelector("#navigation-toggle");
-const repositorySidebar = document.querySelector(".repository-sidebar");
-
-function setNavigationExpanded(expanded) {
-  repositorySidebar.classList.toggle("navigation-open", expanded);
-  navigationToggle.setAttribute("aria-expanded", String(expanded));
-}
-
-navigationToggle.addEventListener("click", () => {
-  setNavigationExpanded(navigationToggle.getAttribute("aria-expanded") !== "true");
-});
-
-for (const panel of document.querySelectorAll("[data-area]")) {
-  document.getElementById(panel.dataset.area).append(panel);
-}
-document.querySelector("#chat-panels").append(document.querySelector("#new-job-panel"));
-document.querySelector("#details-view").prepend(queuePanel);
-chatThread.before(runtimePanel, runtimeBatchResult, permissionPanel);
-
-export function openWorkspaceSection(id) {
-  const section = document.getElementById(id);
-  if (!section) {
-    throw new Error(`Unknown workspace section: ${id}`);
-  }
-  if (workspaceTools.contains(section)) {
-    workspaceTools.hidden = false;
-  }
-  for (let ancestor = section; ancestor; ancestor = ancestor.parentElement) {
-    if (ancestor instanceof HTMLDetailsElement) {
-      ancestor.open = true;
-    }
-  }
-  const navigationId = workspaceTools.contains(section)
-    ? id === "queue-panel" ? id : section.closest(".inspector-group")?.id
-    : "chat-view";
-  for (const button of document.querySelectorAll(".workspace-navigation [data-open]")) {
-    if (button.dataset.open === navigationId) {
-      button.setAttribute("aria-current", "page");
-    } else {
-      button.removeAttribute("aria-current");
-    }
-  }
-  if (window.matchMedia("(max-width: 760px)").matches) {
-    setNavigationExpanded(false);
-  }
-  const focusTarget = section instanceof HTMLDetailsElement
-    ? section.querySelector(":scope > summary") : section;
-  if (focusTarget.tabIndex < 0 && !focusTarget.hasAttribute("tabindex")) {
-    focusTarget.setAttribute("tabindex", "-1");
-  }
-  focusTarget.focus({ preventScroll: true });
-  section.scrollIntoView({ behavior: "smooth", block: "start" });
-}
-
-document.querySelector("#close-workspace-tools").addEventListener("click", () => {
-  workspaceTools.hidden = true;
-  for (const group of workspaceTools.querySelectorAll(".inspector-group")) {
-    group.open = false;
-  }
-  openWorkspaceSection("chat-view");
-  requestInput.focus();
-});
-document.querySelector("#welcome-add-repository").addEventListener("click", () => {
-  document.querySelector("#add-local-repository").click();
-});
-document.querySelector("#add-local-repository").addEventListener("click", () => {
-  setNavigationExpanded(false);
-});
-document.querySelectorAll("[data-open]").forEach((button) => {
-  button.addEventListener("click", () => openWorkspaceSection(button.dataset.open));
-});
-document.querySelector("#new-conversation").addEventListener("click", () => {
-  draftingConversation = true;
-  renderJob(null, activeJob);
-  openWorkspaceSection("new-job-panel");
-  requestInput.focus();
-});
-document.querySelectorAll("[data-suggestion]").forEach((button) => {
-  button.addEventListener("click", () => {
-    requestInput.value = button.dataset.suggestion === "browser"
-      ? "Validate this browser workflow: "
-      : "Investigate this bug: ";
-    form.elements.mode.value = button.dataset.suggestion === "browser"
-      ? "playwright-only" : "fix-and-validate";
-    openWorkspaceSection("new-job-panel");
-    requestInput.focus();
-  });
-});
-needsResponse.addEventListener("click", () => {
-  const panel = [runtimePanel, permissionPanel, jobInputPanel].find((element) => !element.hidden);
-  if (panel) {
-    openWorkspaceSection("chat-view");
-    panel.scrollIntoView({ behavior: "smooth", block: "center" });
-    panel.querySelector("button:not([hidden]):not(:disabled), textarea:not([hidden])")?.focus();
-  }
-});
-
-function renderRepositoryCatalog() {
-  const list = document.querySelector("#repository-list");
-  list.replaceChildren();
-  const repositories = new Map();
-  for (const entry of repositoryCatalog) {
-    if (!repositories.has(entry.repository) || entry.id === dashboardInstanceId) {
-      repositories.set(entry.repository, entry);
-    }
-  }
-  for (const entry of [...repositories.values()].sort((a, b) =>
-    Number(b.id === dashboardInstanceId) - Number(a.id === dashboardInstanceId))) {
-    const url = new URL(entry.url);
-    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" ||
-        !url.port || url.pathname !== "/" || url.username || url.password || url.search || url.hash) {
-      throw new Error("A registered repository has an invalid local dashboard URL.");
-    }
-    const link = document.createElement("a");
-    link.href = url.href;
-    link.className = "repository-link";
-    link.title = entry.repository;
-    if (entry.id === dashboardInstanceId) {
-      link.setAttribute("aria-current", "page");
-    }
-    const name = document.createElement("strong");
-    name.textContent = entry.repository.split(/[\\/]/u).filter(Boolean).pop();
-    const status = document.createElement("small");
-    status.textContent = entry.id === dashboardInstanceId ? "Current workspace" : entry.status;
-    link.append(name, status);
-    list.append(link);
-  }
-}
-
-async function refreshRepositories() {
-  const button = document.querySelector("#repositories-refresh");
-  const message = document.querySelector("#repositories-message");
-  button.disabled = true;
-  try {
-    const body = await fetchJson("/api/repositories");
-    repositoryCatalog = body.repositories;
-    renderRepositoryCatalog();
-    message.textContent = body.unavailableCount
-      ? `Local dashboards only. ${body.unavailableCount} unavailable registration(s); no repository scan or model calls.`
-      : "";
-  } catch (error) {
-    message.textContent = `Repository list unavailable: ${error.message}`;
-  } finally {
-    button.disabled = false;
-  }
-}
-document.querySelector("#repositories-refresh").addEventListener("click", refreshRepositories);
-
-function renderConversation(job, isActive) {
-  document.querySelector("#chat-welcome").hidden = Boolean(job);
-  document.querySelector("#conversation-state").hidden = !job;
-  const pending = isActive ? job?.runtimeRequests?.[0] : null;
-  const waiting = Boolean(pending || (isActive && (job?.permissionRequest ||
-    job?.status === "blocked" || job?.status === "failed")));
-  document.querySelector("#conversation-state").classList.toggle("waiting", waiting);
-  needsResponse.hidden = !waiting;
-  if (!job) {
-    conversationTitle.textContent = "Ready when you are";
-    conversationDetail.textContent = "Describe an outcome. Run options control the mode and environment; nothing runs until you send it.";
-  } else if (pending) {
-    conversationTitle.textContent = pending.kind === "permission" ? "Waiting for your permission" : "Waiting for your answer";
-    conversationDetail.textContent = pending.title;
-  } else if (job.permissionRequest) {
-    conversationTitle.textContent = "Access review required";
-    conversationDetail.textContent = "The executor is paused. Review the exact folder scope; no access has been granted.";
-  } else if (job.browserBlocker) {
-    conversationTitle.textContent = "Browser launch blocked; no retry running";
-    conversationDetail.textContent = job.browserBlocker.message;
-  } else {
-    conversationTitle.textContent = {
-      running: "Working on your request",
-      blocked: "Paused until you choose to continue",
-      failed: "Stopped with a reported failure",
-      passed: "Run passed its required gates",
-      queued: "Waiting in the queue",
-      held: "On hold",
-      cancelled: "Cancelled"
-    }[job.status] ?? job.status;
-    const stage = Object.entries(job.stages ?? {}).find(([, value]) =>
-      ["running", "blocked", "failed"].includes(value.status));
-    conversationDetail.textContent = job.error || stage?.[1].message ||
-      (job.status === "running"
-        ? "Progress below comes from this job's evidence, not additional AI polling."
-        : "Selecting saved work does not run it. Use an explicit lifecycle action to continue.");
-  }
-  const messages = [
-    ...(job ? [{ role: "You", message: job.request }] : []),
-    ...(job?.activity ?? []).slice(-20).map((entry) => ({
-      role: "FixLab", message: entry.message, stage: entry.stage
-    }))
-  ];
-  const signature = JSON.stringify([job?.id, messages]);
-  if (signature !== workspaceSignature) {
-    workspaceSignature = signature;
-    chatThread.replaceChildren();
-    for (const entry of messages) {
-      const article = document.createElement("article");
-      article.className = `chat-message ${entry.role === "You" ? "user-message" : "assistant-message"}`;
-      const name = document.createElement("strong");
-      name.textContent = entry.stage ? `${entry.role} / ${entry.stage}` : entry.role;
-      const message = document.createElement("p");
-      message.textContent = entry.message;
-      article.append(name, message);
-      chatThread.append(article);
-    }
-  }
-}
-
-function renderRepositoryMemory() {
-  const jobs = [...observedJobs.values()].filter((job) =>
-    !["queued", "running", "holding"].includes(job.status)).slice(0, 20);
-  const signature = JSON.stringify(jobs.map((job) => [job.id, job.request, job.status, job.stages]));
-  if (signature === memorySignature) {
-    return;
-  }
-  memorySignature = signature;
-  const list = document.querySelector("#repository-memory-list");
-  const conversations = document.querySelector("#sidebar-conversations");
-  list.replaceChildren();
-  conversations.replaceChildren();
-  document.querySelector("#repository-memory-empty").hidden = jobs.length > 0;
-  for (const job of jobs) {
-    const item = document.createElement("li");
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "memory-entry";
-    const title = document.createElement("strong");
-    title.textContent = job.request;
-    const result = document.createElement("span");
-    const completed = Object.values(job.stages ?? {}).filter((stage) => stage.status === "passed").length;
-    result.textContent = `${job.status} / ${completed} passed stage(s)${job.targetEnvironment ? ` / ${job.targetEnvironment}` : ""}`;
-    button.append(title, result);
-    button.addEventListener("click", () => {
-      selectJob(job.id);
-      openWorkspaceSection("chat-view");
-    });
-    item.append(button);
-    list.append(item);
-    if (conversations.childElementCount < 6) {
-      const recent = document.createElement("button");
-      recent.type = "button";
-      recent.className = "recent-conversation";
-      recent.textContent = job.request;
-      recent.title = `${job.status}: ${job.request}`;
-      recent.addEventListener("click", () => {
-        selectJob(job.id);
-        openWorkspaceSection("chat-view");
-      });
-      conversations.append(recent);
-    }
-  }
-}
 
 const maxScreenshots = 5;
 const maxScreenshotBytes = 2 * 1024 * 1024;
@@ -1106,17 +407,10 @@ function formatDuration(milliseconds) {
 }
 
 function renderReadiness(readiness) {
-  dashboardRepository = readiness.repository;
-  document.querySelector("#workspace-title").textContent = readiness.profileName || "FixLab";
-  document.querySelector("#workspace-repository").textContent = readiness.repository;
   const ready = readiness.repositoryReady && readiness.profileReady;
-  document.querySelector("#welcome-add-repository").hidden = ready;
-  document.querySelector("#welcome-guidance").textContent = ready
-    ? "Describe a bug, change, or browser check."
-    : "Set up a repository to get started.";
   readinessElement.className = `readiness ${ready ? "ready" : "blocked"}`;
   readinessElement.textContent = ready
-    ? "Ready"
+    ? `Ready: ${readiness.profileName || readiness.repository}`
     : `Not ready: ${readiness.error}`;
   startButton.disabled = !ready;
   const selectedEnvironment = targetEnvironmentSelect.value;
@@ -1142,9 +436,6 @@ function renderReadiness(readiness) {
 function renderRuntime(runtime) {
   runtimeHelperDirectory = runtime?.helperDirectory ?? "";
   const supported = runtime?.supportsModelSelection === true;
-  document.querySelector("#input-budget-visibility").hidden = !supported;
-  document.querySelector("#input-budget-control").hidden = !supported || !budgetToggle.checked;
-  document.querySelector("#input-token-limit").disabled = !supported;
   modelControl.hidden = !supported;
   modelSelect.disabled = !supported;
   if (!supported) {
@@ -1209,23 +500,11 @@ function inferActiveStageFromLogs(logs = []) {
 }
 
 function renderJob(job, currentActiveJob = job) {
-  currentJobFullscreen.disabled = !currentActiveJob;
-  currentJobFullscreen.hidden = !currentActiveJob;
-  const currentJobTitle = document.querySelector("#current-job-dialog-title");
-  currentJobTitle.textContent = currentActiveJob
-    ? `Current job: ${currentActiveJob.request}` : "No current job";
-  currentJobTitle.title = currentJobTitle.textContent;
   const running = job?.status === "running";
   const isActive = Boolean(job?.id && job.id === currentActiveJob?.id);
-  renderBudget(job, isActive);
-  renderFileAccess(job, isActive);
-  renderWorkspaceRecovery(job, isActive);
   const activeNeedsQueue =
     currentActiveJob &&
     ["running", "blocked", "failed"].includes(currentActiveJob.status);
-  document.querySelector(".composer-heading span").textContent = activeNeedsQueue
-    ? "Queues a new job"
-    : "New job";
   startButton.disabled = readinessElement.classList.contains("blocked");
   startButton.textContent =
     activeNeedsQueue
@@ -1319,19 +598,6 @@ function renderJob(job, currentActiveJob = job) {
   }
 
   const validation = job?.validation;
-  validationControls.hidden = !job || job.id !== activeJob?.id || !["passed", "blocked", "failed"].includes(job.status);
-  const savedSelection = validationSelection.value;
-  validationSelection.replaceChildren();
-  const selections = [["all", "All configured checks"], ["tests", "Tests only"], ["builds", "Builds only"],
-    ...(validation?.gates ?? []).map((gate) => [`gate:${gate.id}`, `Gate: ${gate.id}`]),
-    ...[...new Set((validation?.gates ?? []).map((gate) => gate.stage).filter(Boolean))].map((stage) => [`stage:${stage}`, `Stage: ${stage}`])];
-  for (const [value, label] of selections) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    validationSelection.append(option);
-  }
-  if (selections.some(([value]) => value === savedSelection)) {validationSelection.value = savedSelection;}
   validationPanel.hidden = !validation;
   validationSummary.textContent = validation?.message ?? "";
   validationGatesElement.replaceChildren();
@@ -1419,7 +685,7 @@ function renderJob(job, currentActiveJob = job) {
 
   renderPermission(job, isActive);
   renderRuntimeRequest(job, isActive);
-  const canResume = isActive && Boolean(job?.canResume) && !job?.permissionRequest && !job?.workspaceReview;
+  const canResume = isActive && Boolean(job?.canResume) && !job?.permissionRequest;
   const canComment = isActive && Boolean(job?.canComment) && !job?.permissionRequest;
   const canRetryLiveTest =
     canResume &&
@@ -1435,7 +701,7 @@ function renderJob(job, currentActiveJob = job) {
     canResume &&
     job?.pullRequestReadiness?.status === "approval-required";
   const canDismissFailedJob =
-    isActive && Boolean(job?.canDismiss ?? job?.canResume) &&
+    isActive && Boolean(job?.canDismiss ?? canResume) &&
     ["failed", "blocked"].includes(job?.status);
   const dismissOnly = canDismissFailedJob && !canResume && !canComment;
   dismissFailedJobButton.textContent =
@@ -1459,8 +725,7 @@ function renderJob(job, currentActiveJob = job) {
   resumeHeldJobButton.disabled = !canResumeHeldJob;
   restartJobButton.hidden = !canRestartJob;
   restartJobButton.disabled = !canRestartJob;
-  jobInputPanel.hidden = Boolean(job?.workspaceReview) ||
-    !(canResume || canComment || canCancelQueuedJob || canDismissFailedJob);
+  jobInputPanel.hidden = !(canResume || canComment || canCancelQueuedJob || canDismissFailedJob);
   jobInputSubmit.disabled = !(canResume || canComment);
   jobInputSubmit.hidden = canCancelQueuedJob || canConfirmManualLocalhost || dismissOnly;
   jobInputAction.hidden = canCancelQueuedJob || canConfirmManualLocalhost || dismissOnly;
@@ -1534,7 +799,6 @@ function renderJob(job, currentActiveJob = job) {
     jobInputGuidance.textContent =
       "Removing this waiting job prevents it from starting, records it as cancelled in history, and deletes its queued screenshot artifacts.";
   }
-  renderConversation(job, isActive);
 }
 
 function updateLiveTestRetryAvailability() {
@@ -1590,8 +854,8 @@ async function resumeAfterConnect(status) {
     return;
   }
   pendingRetryAfterConnectJobId = null;
-  if (!result.ok || !status.ready) {
-    formError.textContent = `${result.message} Authenticated browser readiness is unverified; the live test was not retried.`;
+  if (!result.ok) {
+    formError.textContent = `${result.message} The live test was not retried.`;
     return;
   }
   if (activeJob?.id === jobId && activeJob.status === "blocked") {
@@ -1746,10 +1010,9 @@ async function refreshPlaywrightStatus() {
 }
 
 async function refreshPlaywrightEvidence() {
-  const requestId = ++playwrightEvidenceRequestId;
-  const jobId = selectedJobId ?? activeJob?.id;
   playwrightEvidenceRefresh.disabled = true;
   try {
+    const jobId = selectedJobId ?? activeJob?.id;
     if (!jobId) {
       playwrightEvidenceGuidance.textContent =
         "Select a job to view its browser evidence.";
@@ -1759,9 +1022,6 @@ async function refreshPlaywrightEvidence() {
     const body = await fetchJson(
       `/api/playwright/artifacts?jobId=${encodeURIComponent(jobId)}`
     );
-    if (requestId !== playwrightEvidenceRequestId || jobId !== (selectedJobId ?? activeJob?.id)) {
-      return;
-    }
     playwrightEvidenceList.replaceChildren();
     playwrightEvidenceGuidance.textContent =
       body.artifacts.length > 0
@@ -1797,13 +1057,9 @@ async function refreshPlaywrightEvidence() {
       playwrightEvidenceList.append(item);
     }
   } catch (error) {
-    if (requestId === playwrightEvidenceRequestId && jobId === (selectedJobId ?? activeJob?.id)) {
-      playwrightEvidenceGuidance.textContent = error.message;
-    }
+    playwrightEvidenceGuidance.textContent = error.message;
   } finally {
-    if (requestId === playwrightEvidenceRequestId) {
-      playwrightEvidenceRefresh.disabled = false;
-    }
+    playwrightEvidenceRefresh.disabled = false;
   }
 }
 
@@ -1842,7 +1098,6 @@ function rememberJob(job) {
 }
 
 function selectJob(jobId) {
-  draftingConversation = false;
   selectedJobId = jobId;
   const selectedJob = observedJobs.get(jobId);
   if (selectedJob) {
@@ -1898,8 +1153,7 @@ function renderQueue(currentJob, queue = [], held = [], history = []) {
     ...recentJobs.map((job) => ({ job, label: "Recent" }))
   ];
 
-  queuePanel.hidden = false;
-  document.querySelector("#queue-nav-count").textContent = String(queue.length);
+  queuePanel.hidden = entries.length < 2;
   queuePanel.querySelector("h3").textContent = "Jobs";
   queueCount.textContent =
     `${queue.length} waiting · ${held.length} held · ${recentJobs.length} recent`;
@@ -1961,7 +1215,6 @@ function renderQueue(currentJob, queue = [], held = [], history = []) {
     }
     queueList.append(item);
   }
-  renderRepositoryMemory();
 }
 
 function renderMetrics(metrics, warning) {
@@ -1978,7 +1231,7 @@ function renderMetrics(metrics, warning) {
     `${metrics.passed} passed · ${metrics.failed} failed · ${metrics.blocked} blocked · ${metrics.cancelled} cancelled · exact usage available for ${metrics.usageJobs} completed job(s)`;
 }
 
-export async function fetchJson(url, options) {
+async function fetchJson(url, options) {
   const response = await fetch(url, options);
   const body = await response.json();
   if (!response.ok) {
@@ -2282,15 +1535,8 @@ document.addEventListener("paste", async (event) => {
 async function refresh() {
   try {
     const body = await fetchJson("/api/status");
-    const instanceChanged = dashboardInstanceId !== body.instanceId;
     dashboardInstanceId = body.instanceId;
-    if (instanceChanged && repositoryCatalog.length) {
-      renderRepositoryCatalog();
-    }
     activeJob = body.job;
-    if (currentJobDialog.open) {
-      selectedJobId = activeJob?.id ?? null;
-    }
     rememberJob(activeJob);
     for (const queuedJob of body.queue) {
       const existing = observedJobs.get(queuedJob.id);
@@ -2310,11 +1556,8 @@ async function refresh() {
     }
     renderRuntime(body.runtime);
     renderReadiness(body.readiness);
-    renderJob(draftingConversation ? null : observedJobs.get(selectedJobId) ?? activeJob, activeJob);
+    renderJob(observedJobs.get(selectedJobId) ?? activeJob, activeJob);
     renderQueue(activeJob, body.queue, body.held, body.history);
-    const memoryEmpty = document.querySelector("#repository-memory-empty");
-    memoryEmpty.hidden = !body.historyWarning && document.querySelector("#repository-memory-list").childElementCount > 0;
-    memoryEmpty.textContent = body.historyWarning || "Completed work will appear here for this repository.";
   } catch (error) {
     formError.textContent = error.message;
   }
@@ -2356,8 +1599,6 @@ form.addEventListener("submit", async (event) => {
         mode: data.get("mode"),
         validationIntent: data.get("validationIntent") || undefined,
         permissionPreflight: data.get("permissionPreflight") === "on",
-        routineFileAccess: data.get("routineFileAccess") === "on",
-        inputTokenLimit: Number(data.get("inputTokenLimit") ?? 0),
         pullRequestStrategy: data.get("separatePullRequests") === "on"
           ? "per-bug"
           : "common",
@@ -2379,7 +1620,6 @@ form.addEventListener("submit", async (event) => {
     selectedScreenshots = [];
     renderScreenshots();
     showScreenshotResult("");
-    draftingConversation = false;
     activeJob = body.job;
     selectedJobId = body.job?.id ?? null;
     rememberJob(body.job);
@@ -2692,9 +1932,7 @@ async function retryLiveTest() {
       body: JSON.stringify({
         action: "retry",
         details:
-          activeJob?.mode === "playwright-only"
-            ? "Retry only the browser-validation prerequisite and focused Playwright journey using the retained same-job script, selected environment and existing authentication. Do not retry an unchanged profile lock, copy browser state, delete a script still needed for continuation, change product source, or perform PR work. Report unavailable browser prerequisites as blocked and non-browser stages as skipped."
-            : "Reuse the repository-profile-defined browser authentication and all completed diagnosis, fix, review, and local validation evidence. Rerun only the blocked Playwright live-test gate using the profile-defined browser and test command, save at least one non-sensitive screenshot under the profile-defined working directory's test-results folder, emit the terminal live-test result, and continue to pull-request creation. Do not skip the live-test or PR stage."
+          "Reuse the repository-profile-defined browser authentication and all completed diagnosis, fix, review, and local validation evidence. Rerun only the blocked Playwright live-test gate using the profile-defined browser and test command, save at least one non-sensitive screenshot under the profile-defined working directory's test-results folder, emit the terminal live-test result, and continue to pull-request creation. Do not skip the live-test or PR stage."
       })
     });
     jobInputMessage.textContent =
@@ -2742,9 +1980,7 @@ skipLiveTestButton.addEventListener("click", async () => {
       body: JSON.stringify({
         action: "skip",
         details:
-          activeJob?.mode === "playwright-only"
-            ? "The user explicitly chose to skip the blocked browser validation. Mark live-test skipped, retain the exact unverified risk and missing browser evidence, and leave diagnosis, reproduce, fix, review and pr skipped. Do not claim validation passed or perform implementation or PR work."
-            : "The user explicitly chose to skip only the blocked authenticated Playwright live-test gate. Mark live-test skipped, preserve the exact unverified browser risk and missing screenshot evidence, do not report it as passed, and continue the safe pull-request outcome according to repository policy without repeating completed work."
+          "The user explicitly chose to skip only the blocked authenticated Playwright live-test gate. Mark live-test skipped, preserve the exact unverified browser risk and missing screenshot evidence, do not report it as passed, and continue the safe pull-request outcome according to repository policy without repeating completed work."
       })
     });
 
@@ -2839,7 +2075,6 @@ refreshPlaywrightStatus();
 refreshFrontendStatus();
 refreshPlaywrightEvidence();
 refreshOnboarding();
-void refreshRepositories();
 setInterval(refresh, 1000);
 setInterval(refreshMetrics, 5000);
 setInterval(refreshPlaywrightStatus, 5000);

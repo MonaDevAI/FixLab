@@ -1,25 +1,5 @@
 # FixLab commands
 
-New editing jobs use efficient delivery automatically: focused regression
-checks and reviewed diff, then an authorized draft PR. Broader local unit tests
-and optional builds are not automatically requested. Repository Settings saves
-`workflow.mode` (`efficient` or `strict`), `workflow.publication` (`draft` by
-default in efficient mode, `ready` by default in strict mode),
-`workflow.unitTestsAfterPr` (default `false`) and `workflow.optionalBuilds`
-(default `false`) once. Marking a draft ready requires a separate reviewed
-decision. No per-stage workflow selection is needed.
-`validation.gates[].required: true` remains publication-blocking in efficient
-mode. Optional gates remain runnable and keep their actual status; neither
-publication nor `advisory` implies validation passed. Existing saved jobs retain
-strict behavior unless explicitly migrated while stopped.
-
-The browser reproduction/result-check mode (`playwright-only`) is the light
-path for explicit reproduction-only and deployed browser-result requests. It
-first reuses an approved existing application/validation session when supported,
-skips irrelevant local-stack setup, and does not run broad unit/build gates or
-create a PR. Missing browser runner/authentication prerequisites still block.
-Local-fix and PR claims still require the matching checkout and application.
-
 ## Interactive repository shell
 
 ```text
@@ -218,15 +198,6 @@ resets preflight and requires fresh approval. If the first approved launch is
 blocked by workspace admission, the job keeps its already approved folder and
 exposes a separate workspace review. Explicit workspace approval preserves
 the reviewed work and starts the first runtime session fresh.
-To avoid resuming that job, use **Review workspace**, inspect the proposed
-base and untracked-file list, then confirm **Stash files and start fresh**.
-FixLab keeps the same folder, saves eligible files in a retained stash, refreshes
-the configured base (for example, `origin/develop`), and creates a new job branch.
-The old job and branch remain preserved. Restore the reported stash separately;
-it is never automatically applied to the clean new branch.
-This separately confirmed Git recovery can prepare the branch before a new
-job's external-folder preflight. It grants no folder or tool access; the fresh
-executor still waits for any required approval.
 If the approved folder changes before that first launch, FixLab clears the
 invalid grant and requires a replacement review and approval while preserving
 the fresh initial prompt and non-resume launch.
@@ -388,78 +359,12 @@ passwords, tokens or MFA codes into FixLab.
 
 The same executor waits for your response, retains its repository lease, and
 suspends its idle timer. No restart or generic Resume is needed. Multiple requests
-are shown one at a time. When two or more approvable permission requests are
-pending, expand **Review all pending permissions**, inspect every listed scope,
-then choose **Allow all pending once** and confirm. This sends individual
-one-time responses only for that reviewed snapshot. Questions, requests whose
-approval is unavailable, and requests arriving afterward remain unanswered.
-The dashboard rechecks the snapshot before sending; a stale request or delivery
-failure stops the batch and reports confirmed partial progress without retrying.
-Already delivered approvals cannot be rolled back. Nothing is enabled for the
-rest of the job or for another job.
-Stop/hold/shutdown cancels unanswered requests. Responses
+are shown one at a time. Stop/hold/shutdown cancels unanswered requests. Responses
 are live-only and are not saved in dashboard history or copied to another job.
 Unknown, sensitive or oversized permission details offer **Deny**, not approval.
 Organization policy remains authoritative; an approval is not a passed test or
 permission for unrelated production operations. The dashboard does not offer
-blanket or permanent approvals.
-
-Native filename-only discovery in canonical, non-sensitive checkout directories
-and the exact `node <this-installed-fixlab.js> --help` command are built-in
-read-only exceptions: they do not prompt or create a reusable grant. Discovery
-does not read file contents; protected filenames may appear, but reading them
-still requires their own permission check. Generic directory reads, content
-search and other CLI commands are not included. Help must target the running
-package's canonical CLI file, without extra arguments, shell composition,
-redirects, reported external paths or URLs. Both exceptions retain managed human
-approval, warning and sandbox-escalation checks.
-
-Eligible native requests also offer **Allow repository-file reads for this job**
-or **Allow this test command for this job**, each with a separate confirmation.
-Separately, a stopped native job's **Repository file trust** editor can review
-source/test reads or source/test reads and edits for that exact job and canonical
-checkout, including resumes and dashboard restart. This setting is not inherited
-by another job, a fresh restart-as-new-job, a copied job or another checkout.
-Change or revoke it while the executor is stopped; applying it never resumes.
-Edit trust is available only in fix-and-validate mode. It allows new source/test
-files under existing canonical directories, not directory creation, links,
-hard-linked files, sensitive files, build/safety configuration, profile writes,
-shell commands, external access or managed-policy exceptions.
-The exact `.github/fixlab/repository-profile.json` is an eligible read after
-bounded valid-profile and sensitive-content checks; other JSON is not added.
-Configured authentication paths remain protected regardless of their names.
-JavaScript/TypeScript test-source names such as `auth.spec.ts` and
-`scenario.auth.test.ts` are eligible under reviewed file trust; the `auth`
-test marker is not saved authentication state. Hidden files, authentication
-directories and other sensitive filename markers remain excluded.
-Manual permission review remains limited to 8,192 characters. Separately
-reviewed source-edit trust can cover larger write requests when their complete
-serialized review payload is at most 1 MiB and passes the full sensitive-content
-scan. Display size never replaces the job/checkout, protected-path, source-file,
-managed-approval or sandbox checks. Without reviewed edit trust, oversized writes
-still cannot be approved through the dashboard.
-Read trust also covers bounded, non-sensitive `stdout.log`/`stderr.log` under
-this checkout's `.git/fixlab/command-evidence`, only with a canonical, regular
-`job.json` receipt binding the gate to this exact job and repository. New
-dashboard gate executions write that receipt. Other Git metadata, older
-unowned logs, linked files and output containing detected secrets remain manual.
-The review can also explicitly opt into dashboard-owned validation gates.
-Only `node <this-installed-fixlab.js> gate` with this exact job, canonical
-checkout and current dashboard port is matched, with four known options and
-no extra arguments, shell composition or external URLs. The dashboard still
-verifies gate membership, assigned checkout, profile freshness and job state.
-Unknown or arbitrary shell commands remain separately reviewed.
-Reads cover non-sensitive source, documentation and selected project files in
-this checkout, never whole directories, hidden/sensitive files, browser state,
-outside paths or symbolic links. Commands cover only the exact reviewed test
-invocation in its canonical repository working directory, with the same reported
-paths and package manifests. Shell composition, unknown commands, outside paths,
-network permission requests, escalation and managed human approvals remain
-manual. Missing command metadata means allow-once only. Tests can have side
-effects: review their scripts; a command grant does not separately authorize
-production/business writes. Grants are in-memory and expire whenever this
-executor ends, including stop, hold, failure, restart or automatic continuation.
-Ordinary **Allow once** and **Allow all pending once** never create these grants.
+blanket, session-wide or permanent approvals.
 
 Agency and older text-only jobs cannot forward native prompts. When one reports
 a non-interactive permission denial, FixLab stops the owned
@@ -483,25 +388,6 @@ After owned termination is verified, **Dismiss blocked job and continue queue**
 also remains available without granting permissions or enabling ordinary Resume.
 If an already approved folder target changes, its grants are cleared and a new
 permission review is required; a failed restart cannot restore the stale grants.
-
-### Token controls
-
-Native Copilot jobs in every mode use earlier context compaction, not just
-Playwright-only jobs. Resumes measure retained context and compact above 24,000
-conversation tokens, preserving decisions, safety restrictions, exact results
-and remaining work instead of replaying discovery.
-
-Under run options, **Input-token ceiling** defaults to `0` (unlimited). A positive
-integer pauses once cumulative SDK-reported input, including cached input and
-compaction, reaches it. A running model call can overshoot; it is not a hard
-billing cap or dollar-cost estimate. Retries retain consumed usage. The
-**Input-token budget** panel separates cached and uncached input; after verified
-executor termination, explicitly update the ceiling above consumed input (or
-choose `0`) and resume separately. A comment or retry cannot reset usage or bypass
-an exhausted ceiling. Agency does not support positive SDK token ceilings.
-Connected conversation status reports the exhausted budget and directs the user
-to its separate browser review instead of suggesting an ineffective retry.
-
 The UI starts one selected-runtime job at a time
 and displays the intake, diagnosis, reproduce, fix, review, local-stack,
 live-test, and pull-request stages with polled logs.

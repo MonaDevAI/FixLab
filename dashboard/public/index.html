@@ -7,87 +7,17 @@
     <link rel="stylesheet" href="/styles.css">
   </head>
   <body>
-    <div class="app-shell">
-      <aside class="repository-sidebar" aria-label="Repository navigation">
-        <div class="sidebar-top">
-          <a class="brand" href="/"><span class="brand-mark" aria-hidden="true">F</span><span>FixLab</span></a>
-          <button id="navigation-toggle" type="button" class="secondary" aria-controls="repository-navigation" aria-expanded="false">Menu</button>
-        </div>
-        <div id="repository-navigation">
-        <button id="new-conversation" class="new-conversation" type="button">+ New conversation</button>
-        <div class="sidebar-heading"><h2>Repositories</h2><button id="repositories-refresh" class="icon-button" type="button" aria-label="Refresh repositories">↻</button></div>
-        <nav id="repository-list" aria-label="Local repositories"></nav>
-        <button id="add-local-repository" type="button" class="secondary">+ Add repository</button>
-        <p id="repositories-message" class="sidebar-note" role="status"></p>
-        <nav class="workspace-navigation" aria-label="Workspace sections">
-          <button type="button" data-open="chat-view" aria-current="page">Chat</button>
-          <button type="button" data-open="queue-panel">Queue <span id="queue-nav-count">0</span></button>
-          <button type="button" data-open="details-group">Run details</button>
-          <button type="button" data-open="memory-group">Repository memory</button>
-          <button type="button" data-open="connections-group">Connections</button>
-          <button type="button" data-open="settings-group">Settings</button>
-        </nav>
-        <div id="sidebar-conversations"></div>
-        </div>
-      </aside>
-    <main class="workspace">
+    <main>
       <header>
         <div>
-          <h1 id="workspace-title">FixLab</h1>
-          <p id="workspace-repository" class="summary">Connecting to your local repository</p>
+          <p class="eyebrow">Local repository workflow</p>
+          <h1>FixLab Dashboard</h1>
+          <p class="summary">Describe the bug or required enhancement. FixLab uses the repository profile to own diagnosis, implementation, local validation, live testing, evidence, and the gated pull-request outcome.</p>
         </div>
         <div id="readiness" class="readiness">Checking repository…</div>
-        <button id="current-job-fullscreen" type="button" disabled>Current job full screen</button>
       </header>
 
-      <div class="conversation-column" id="chat-view" tabindex="-1">
-        <section class="chat-welcome" id="chat-welcome">
-          <h2>What are we working on?</h2>
-          <p id="welcome-guidance">Describe a bug, change, or browser check.</p>
-          <button id="welcome-add-repository" type="button" hidden>Set up a repository</button>
-          <div class="suggestion-grid">
-            <button type="button" data-suggestion="browser">Validate a browser workflow</button>
-            <button type="button" data-suggestion="bug">Investigate a bug</button>
-            <button type="button" data-open="memory-group">Pick up previous work</button>
-          </div>
-        </section>
-        <section id="conversation-state" class="conversation-state" aria-live="polite">
-          <span id="job-status" class="badge">Not started</span>
-          <h2 id="conversation-state-title">Ready when you are</h2>
-          <p id="conversation-state-detail">Choose a repository and describe what you want to accomplish.</p>
-          <button id="needs-response" type="button" hidden>Review and respond</button>
-        </section>
-        <section id="chat-thread" class="chat-thread" aria-label="Conversation"></section>
-        <div id="chat-panels"></div>
-      </div>
-      <aside id="workspace-tools" class="inspector" aria-label="Repository context and workflow details" hidden>
-        <div class="section-heading tools-heading">
-          <h2>Workspace tools</h2>
-          <button id="close-workspace-tools" type="button" class="secondary">Back to chat</button>
-        </div>
-        <details id="memory-group" class="inspector-group">
-          <summary>Repository memory <span class="detail-hint">Saved work</span></summary>
-          <section id="repository-memory" aria-label="Repository memory">
-            <p class="guidance">Saved outcomes do not grant permissions or approve business data.</p>
-            <ol id="repository-memory-list"></ol>
-            <p id="repository-memory-empty" class="guidance">No saved runs yet.</p>
-          </section>
-        </details>
-        <details id="details-group" class="inspector-group">
-          <summary>Run details <span class="detail-hint">Stages &amp; evidence</span></summary>
-          <div id="details-view"></div>
-        </details>
-        <details id="connections-group" class="inspector-group">
-          <summary>Connections <span class="detail-hint">Browser &amp; sessions</span></summary>
-          <div id="connections-view"></div>
-        </details>
-        <details id="settings-group" class="inspector-group">
-          <summary>Settings <span class="detail-hint">Repository setup &amp; usage</span></summary>
-          <div id="settings-view"></div>
-        </details>
-      </aside>
-
-      <section class="panel connection-panel" data-area="connections-view">
+      <section class="panel connection-panel">
         <div class="section-heading">
           <h2>Playwright authentication</h2>
           <span id="playwright-status" class="badge">Checking…</span>
@@ -99,7 +29,7 @@
         </div>
       </section>
 
-      <section class="panel connection-panel" data-area="connections-view">
+      <section class="panel connection-panel">
         <div class="section-heading">
           <h2>React frontend</h2>
           <span id="frontend-status" class="badge">Checking…</span>
@@ -111,7 +41,7 @@
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="session-heading" data-area="connections-view">
+      <section class="panel" aria-labelledby="session-heading">
         <div class="section-heading">
           <h2 id="session-heading">Session controls</h2>
           <button id="sessions-refresh" type="button" class="secondary">Refresh sessions</button>
@@ -121,53 +51,12 @@
         <div id="sessions-list"></div>
       </section>
 
-      <section class="panel" data-area="settings-view">
+      <section class="panel">
         <div class="section-heading">
-          <h2>Repository-level settings</h2>
-          <button id="repository-settings-load" type="button">Load repository settings</button>
-        </div>
-        <p class="guidance">Edit this repository's paths, commands, browser sign-in configuration, environments and branch settings. No credentials belong here. Preview before saving; active resources are never stopped to apply settings.</p>
-        <form id="repository-settings-form" hidden>
-          <div id="repository-settings-fields" class="onboarding-grid"></div>
-          <button type="submit">Preview repository settings</button>
-        </form>
-        <div id="repository-settings-review" hidden>
-          <pre id="repository-settings-plan"></pre>
-          <button id="repository-settings-apply" type="button">Apply reviewed settings</button>
-        </div>
-        <p id="repository-settings-message" class="guidance" role="status"></p>
-      </section>
-
-      <section id="repository-onboarding-chat" class="panel" data-area="chat-panels" hidden>
-        <div class="section-heading">
-          <h2>Set up a local repository</h2>
-          <button id="repository-onboarding-close" type="button" class="secondary">Close setup</button>
-        </div>
-        <p class="guidance">A guided setup conversation, with no AI calls. Nothing is written until you review and apply the plan. Never enter passwords, tokens, cookies or authentication-file contents.</p>
-        <div id="repository-onboarding-messages" class="chat-thread" role="log" aria-live="polite"></div>
-        <form id="repository-onboarding-form">
-          <label id="repository-onboarding-label" for="repository-onboarding-answer">Local repository folder</label>
-          <input id="repository-onboarding-answer" type="text" maxlength="2048" autocomplete="off">
-          <div class="button-row">
-            <button type="submit">Send answer</button>
-            <button id="repository-onboarding-suggested" type="button" class="secondary" hidden>Use suggested answer</button>
-          </div>
-        </form>
-        <div id="repository-onboarding-review" hidden>
-          <pre id="repository-onboarding-plan"></pre>
-          <button id="repository-onboarding-apply" type="button">Apply reviewed setup</button>
-          <button id="repository-onboarding-reload" type="button" class="secondary">Reload settings and review again</button>
-          <button id="repository-onboarding-open" type="button" hidden>Open repository workspace</button>
-        </div>
-        <p id="repository-onboarding-message" class="guidance" role="status"></p>
-      </section>
-
-      <section class="panel" data-area="settings-view">
-        <div class="section-heading">
-          <h2>Azure DevOps intake (optional)</h2>
+          <h2>Repository onboarding</h2>
           <span id="onboarding-status" class="badge">Checking…</span>
         </div>
-        <p class="guidance">Load work items using this repository's Azure DevOps settings. Defaults come from Git when available.</p>
+        <p class="guidance">Configure Azure DevOps intake for this repository. Values are detected from the Git origin when possible and saved only to the repository-owned FixLab profile.</p>
         <div class="onboarding-grid">
           <label for="onboarding-organization">
             Azure DevOps organization
@@ -184,23 +73,8 @@
         <p id="onboarding-message" class="guidance" role="status" aria-live="polite"></p>
       </section>
 
-      <section class="panel composer-panel" data-area="chat-panels" id="new-job-panel">
-        <div class="composer-heading"><h2>Message FixLab</h2><span>New job</span></div>
+      <section class="panel">
         <form id="job-form">
-          <label for="request" class="visually-hidden">Bug or required enhancement</label>
-          <textarea id="request" name="request" rows="3" maxlength="10000" required
-            placeholder="Describe what you want to fix or check."></textarea>
-          <label for="screenshots">Images (optional)</label>
-          <input id="screenshots" name="screenshots" type="file"
-            accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple>
-          <details class="help-note">
-            <summary>Paste with Ctrl+V · Image limits</summary>
-            <p class="guidance">Up to 5 PNG, JPEG or WebP files; 2 MiB each, 8 MiB total. Images stay local and are removed when replaced or when the dashboard stops.</p>
-          </details>
-          <ul id="screenshot-list" class="file-list"></ul>
-          <p id="screenshot-message" class="guidance" role="status" aria-live="polite"></p>
-          <details id="run-options" class="run-options">
-            <summary>Run options <span class="detail-hint">Mode, environment &amp; evidence</span></summary>
           <label id="model-control" for="model" hidden>
             Copilot model
             <select id="model" name="model" disabled>
@@ -234,6 +108,15 @@
               <ul id="work-item-list" class="work-item-list"></ul>
             </div>
           </div>
+          <label for="request">Bug or required enhancement</label>
+          <textarea id="request" name="request" rows="6" maxlength="10000" required
+            placeholder="Describe what is wrong or what small enhancement is required. Repository-defined validation context is loaded automatically."></textarea>
+          <label for="screenshots">Screenshots (optional)</label>
+          <input id="screenshots" name="screenshots" type="file"
+            accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp" multiple>
+          <p class="guidance">Copy an image and press Ctrl+V anywhere on this page, or select up to 5 PNG, JPEG, or WebP files; 2 MiB each and 8 MiB total. Other clipboard image formats are converted to PNG. Files remain local and are removed when replaced or when the dashboard stops.</p>
+          <ul id="screenshot-list" class="file-list"></ul>
+          <p id="screenshot-message" class="guidance" role="status" aria-live="polite"></p>
           <fieldset>
             <legend>Request type</legend>
             <label><input type="radio" name="requestType" value="bug-fix" checked> Bug fix</label>
@@ -243,9 +126,8 @@
             <legend>Mode</legend>
             <label><input type="radio" name="mode" value="fix-and-validate" checked> Fix and validate</label>
             <label><input type="radio" name="mode" value="validate-only"> Validate only</label>
-            <label><input type="radio" name="mode" value="playwright-only"> Browser reproduction / result check only</label>
+            <label><input type="radio" name="mode" value="playwright-only"> Playwright validation only</label>
           </fieldset>
-          <p class="guidance">Browser-only requests first reuse an approved existing application and validation session when supported. No fix, commit, PR or broad unit/build run is required merely to check deployed behavior. Testing a local fix or PR still requires its matching source/application.</p>
           <label for="validation-intent">Validation coverage</label>
           <select id="validation-intent" name="validationIntent">
             <option value="">Profile default</option>
@@ -254,11 +136,6 @@
             <option value="scoped">Focused iteration (not PR-ready)</option>
           </select>
           <p class="guidance">Change-aware checks use reviewed API-only or component path-to-gate policies. Contracts, shared files, unknown impact, or All configured checks require every gate. Previously executed gates stay required.</p>
-          <div id="input-budget-control" hidden>
-            <label for="input-token-limit">Input-token ceiling (Copilot jobs)</label>
-            <input id="input-token-limit" name="inputTokenLimit" type="number" min="0" max="9007199254740991" step="1" value="0">
-            <p class="guidance">0 means unlimited. Includes cached input and usage already consumed on retries. A positive ceiling pauses after a usage report reaches it; an in-flight model call or compaction can exceed it. This is not a hard billing cap.</p>
-          </div>
           <label for="target-environment">Validation environment</label>
           <select id="target-environment" name="targetEnvironment">
             <option value="">Profile default</option>
@@ -282,22 +159,16 @@
           <p class="guidance">Manual localhost validation is separate from Playwright. FixLab opens the healthy profile-defined React frontend in your default browser, keeps it running, and pauses before completion until you confirm Passed or Failed.</p>
           <p class="guidance">Video evidence records only the application journey and remains local under repository-owned Playwright artifact directories. Screenshots are still required for lightweight review evidence.</p>
           <p class="guidance">Playwright validation only skips source diagnosis, implementation, review, and pull-request work. It performs required profile setup, reuses browser authentication, starts required applications, and runs the focused browser journey.</p>
-          </details>
-          <label><input type="checkbox" name="routineFileAccess"> Allow routine source access and checks for this job</label>
-          <p class="guidance consent-summary">Secrets, external access and publication still need review.</p>
-          <details class="help-note">
-            <summary>Access scope</summary>
-            <p class="guidance">Submission binds consent to the new job and canonical checkout, including resumes. Fix mode permits source edits; read-only modes permit reads only. Secrets, protected configuration, arbitrary commands, external access, managed approvals and publication remain separately reviewed.</p>
-            <p class="guidance">FixLab proceeds autonomously and asks for authentication, unsafe-data approval, deployment or PR approval, or a genuine blocker.</p>
-          </details>
           <button id="start-button" type="submit">Start job</button>
+          <p class="guidance">FixLab proceeds autonomously. It asks for human input only for authentication, unsafe-data approval, deployment or PR approval, or a genuine blocker.</p>
           <p id="form-error" class="error" role="alert"></p>
         </form>
       </section>
 
-      <section class="panel" data-area="details-view">
+      <section class="panel">
         <div class="section-heading">
           <h2>Job</h2>
+          <span id="job-status" class="badge">Not started</span>
         </div>
         <div id="test-evidence" class="test-evidence" hidden>
           <div>
@@ -310,47 +181,12 @@
           </div>
         </div>
         <div id="stages" class="stages"></div>
-        <section id="job-file-access-panel" hidden aria-labelledby="job-file-access-heading">
-          <h3 id="job-file-access-heading">This job's repository file trust</h3>
-          <p id="job-file-access-summary" class="guidance"></p>
-          <label for="job-file-access-mode">Reviewed access for this job, including resumes</label>
-          <select id="job-file-access-mode">
-            <option value="manual">Individual approvals</option>
-            <option value="source-read">Read non-sensitive source/test files</option>
-            <option value="source-read-write">Read and edit non-sensitive source/test files</option>
-          </select>
-          <label><input id="job-file-access-gates" type="checkbox"> Also allow this job's dashboard-owned validation gates</label>
-          <button id="job-file-access-save" type="button">Update stopped job file trust</button>
-          <p class="guidance">Bound to this job and checkout, including resumes and dashboard restart; never inherited by another job. Includes safe reads of the exact repository profile and bounded test-output logs with this job's ownership receipt. Optionally trust this job's dashboard-owned validation gates. Sensitive files, safety/build configuration edits, other shell commands, external access, links and managed approvals remain separate. New files require existing canonical parent directories. Stop the executor before changing or revoking trust; this does not resume it.</p>
-          <p id="job-file-access-message" class="guidance" role="status" aria-live="polite"></p>
-        </section>
-        <label id="input-budget-visibility" hidden><input id="show-input-budget" type="checkbox"> Show budget</label>
-        <section id="job-budget-panel" hidden aria-labelledby="job-budget-heading">
-          <h3 id="job-budget-heading">Input-token budget</h3>
-          <p id="job-budget-summary" class="guidance"></p>
-          <label for="job-budget-limit">Reviewed ceiling (0 means unlimited)</label>
-          <input id="job-budget-limit" type="number" min="0" max="9007199254740991" step="1">
-          <button id="job-budget-save" type="button">Update stopped job budget</button>
-          <p id="job-budget-message" class="guidance" role="status" aria-live="polite"></p>
-        </section>
         <section id="validation-panel" hidden aria-labelledby="validation-heading">
           <h3 id="validation-heading">Validation gates</h3>
           <p id="validation-summary" class="guidance"></p>
           <div id="validation-gates" class="stages"></div>
-          <div id="validation-controls">
-            <label for="validation-selection">Optional post-PR checks</label>
-            <select id="validation-selection">
-              <option value="all">All configured checks</option>
-              <option value="tests">Tests only</option>
-              <option value="builds">Builds only</option>
-            </select>
-            <button id="validation-run-selection" type="button">Run selected checks</button>
-            <button id="validation-complete" type="button">Complete scoped job and start next</button>
-            <p class="guidance">Stop the executor first. Completion cancels only owned checks and waits for settlement; failed/deferred evidence remains unchanged. It never marks a PR ready or waives required checks.</p>
-            <p id="validation-control-message" role="status"></p>
-          </div>
         </section>
-        <div id="queue-panel" class="queue-panel panel" hidden>
+        <div id="queue-panel" class="queue-panel" hidden>
           <div class="section-heading">
             <h3>Running queue</h3>
             <span id="queue-count"></span>
@@ -377,7 +213,7 @@
         </div>
       </section>
 
-      <section class="panel" data-area="settings-view">
+      <section class="panel">
         <div class="section-heading">
           <h2>Workflow statistics</h2>
           <label class="period-label" for="metrics-period">
@@ -400,7 +236,7 @@
         <p class="guidance">Exact token totals remain in the private local metrics record when Copilot emits them. The dashboard shows only input cache reuse, calculated as cached input divided by total input; it is not presented as exact token or cost savings without a comparable baseline.</p>
       </section>
 
-      <section id="bug-results-panel" class="panel" data-area="details-view" hidden>
+      <section id="bug-results-panel" class="panel" hidden>
         <div class="section-heading">
           <h2>Azure DevOps bug outcomes</h2>
           <span>One combined workflow</span>
@@ -421,31 +257,19 @@
         </div>
       </section>
 
-      <section id="runtime-request-panel" class="panel intervention" data-area="chat-panels" aria-labelledby="runtime-request-heading" hidden>
+      <section id="runtime-request-panel" class="panel intervention" aria-labelledby="runtime-request-heading" hidden>
         <h2 id="runtime-request-heading">Copilot needs your response</h2>
-        <p class="guidance">Review the request below. Allow once approves only this request.</p>
+        <p class="guidance">The live session is waiting, not restarting. Permission applies to this request once, never to all tools or future jobs. Organization policy still applies.</p>
         <pre id="runtime-request-details"></pre>
         <div id="runtime-request-choices"></div>
         <label id="runtime-request-answer-label" for="runtime-request-answer">Answer (never enter passwords, tokens or MFA codes)</label>
         <textarea id="runtime-request-answer" rows="3" maxlength="4000" autocomplete="off"></textarea>
         <div id="runtime-request-actions"></div>
-        <details id="runtime-batch-review" hidden>
-          <summary id="runtime-batch-summary">Review pending permissions</summary>
-          <p class="guidance">Review every command, path, diff, URL and sandbox escalation below. This approves only these listed permission requests once, not questions or future requests. Organization policy and business-action restrictions remain in effect.</p>
-          <div id="runtime-batch-requests"></div>
-          <button id="runtime-allow-pending" type="button">Allow all pending once</button>
-        </details>
-        <details class="help-note">
-          <summary>Approval and sign-in help</summary>
-          <p class="guidance">The live session is waiting, not restarting. Eligible reads and exact test commands offer an executor-local grant. Separately reviewed repository file trust in Current job details can cover source/test reads and edits across resumes for this job only. Neither option overrides sensitive-file or organization-policy checks.</p>
-          <p class="guidance">Complete authentication in the normal browser, then answer the agent's readiness question here. A failed check is not automatically safe to approve.</p>
-        </details>
+        <p class="guidance">For authentication, complete sign-in in the normal browser, then answer the agent's readiness question here. A failed check is not automatically safe to approve.</p>
         <p id="runtime-request-message" class="guidance" role="status" aria-live="polite"></p>
       </section>
 
-      <p id="runtime-batch-result" class="guidance" data-area="chat-panels" role="status" aria-live="polite" hidden></p>
-
-      <section id="permission-panel" class="panel intervention" data-area="chat-panels" aria-labelledby="permission-heading" hidden>
+      <section id="permission-panel" class="panel intervention" aria-labelledby="permission-heading" hidden>
         <h2 id="permission-heading">Copilot permission required</h2>
         <p class="guidance">This background job cannot show an interactive permission prompt. No additional access has been granted for this request. The runtime did not identify a structured permission scope; inspect the raw logs before choosing a folder.</p>
         <p class="guidance">For a path restriction, review one specific external folder below. Approval grants read/write access to that folder and its descendants, including trusted agent configuration, for this job only. Do not choose folders containing credentials or browser state. It does not approve tools, URLs, production changes, or other folders. The job pauses again if execution is still denied.</p>
@@ -459,18 +283,7 @@
         <p id="permission-message" class="guidance" role="status" aria-live="polite"></p>
       </section>
 
-      <section id="workspace-recovery-panel" class="panel intervention" data-area="chat-panels" aria-labelledby="workspace-recovery-title" hidden>
-        <h2 id="workspace-recovery-title">Start with a fresh branch</h2>
-        <p class="guidance">Stash reviewed files and start a new branch from the latest base in this folder. The old branch and job are kept; the stash stays saved.</p>
-        <button id="workspace-recovery-review" type="button">Review workspace</button>
-        <pre id="workspace-recovery-summary" hidden></pre>
-        <button id="workspace-recovery-start" type="button" hidden>Stash files and start fresh</button>
-        <button id="workspace-recovery-cancel" type="button" hidden>Keep job stopped</button>
-        <p id="workspace-recovery-message" class="guidance" role="status" aria-live="polite"></p>
-      </section>
-      <p id="workspace-stash-result" class="guidance" data-area="chat-panels" role="status" hidden></p>
-
-      <section id="job-input-panel" class="panel intervention" data-area="chat-panels" hidden>
+      <section id="job-input-panel" class="panel intervention" hidden>
         <div class="section-heading">
           <h2 id="job-input-title">Continue this job</h2>
           <span id="job-input-count"></span>
@@ -490,7 +303,7 @@
         <p id="job-input-message" class="guidance" aria-live="polite"></p>
       </section>
 
-      <section id="agent-activity-panel" class="panel" data-area="details-view" hidden>
+      <section id="agent-activity-panel" class="panel" hidden>
         <div class="section-heading">
           <h2>Agent analysis</h2>
           <span>Evidence and next actions</span>
@@ -499,7 +312,7 @@
         <ol id="agent-activity" class="activity-list" aria-live="polite"></ol>
       </section>
 
-      <section class="panel" data-area="details-view">
+      <section class="panel">
         <div class="section-heading">
           <h2>Raw logs</h2>
           <span>Polled locally</span>
@@ -507,15 +320,6 @@
         <pre id="logs" aria-live="polite">No job output yet.</pre>
       </section>
     </main>
-    </div>
-    <dialog id="current-job-dialog" aria-labelledby="current-job-dialog-title">
-      <div class="section-heading">
-        <h2 id="current-job-dialog-title">Current job details and evidence</h2>
-        <button id="current-job-fullscreen-close" type="button">Exit full screen</button>
-      </div>
-      <div id="current-job-fullscreen-content"></div>
-    </dialog>
     <script type="module" src="/app.js"></script>
-    <script type="module" src="/repository-workspace.js"></script>
   </body>
 </html>

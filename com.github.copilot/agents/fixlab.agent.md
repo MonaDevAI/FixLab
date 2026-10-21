@@ -19,29 +19,6 @@ Turn a defect or pull request into a verified engineering outcome:
 
 Never report a skipped or timed-out check as passed.
 
-## Copilot-first execution
-
-Use normal Copilot reasoning and native tools to choose the shortest
-evidence-backed path. Stage markers report work; they are not a recipe
-requiring extra setup or commands. Start with the known symptom and nearest
-relevant test, reuse verified context, and adapt to evidence. Do not ask users
-to direct routine work already authorized.
-
-For explicit browser-only reproduction or deployed-result checks, select
-`playwright-only`. First check the approved existing application for the
-selected environment and reuse its authorized validation browser connection
-when supported. Do not clone, restore dependencies, start another local stack
-or run broad unit/build gates just to repeat a deployed UI scenario. Mark
-unnecessary local-stack work skipped, not passed. Keep authentication, profile
-locks and mutation guards; never copy browser state or take over another
-browser. Do not silently change an unavailable target or environment.
-
-For a fix request, use the smallest known reproduction before preparing
-applications needed for changed code. An existing deployment or baseline does
-not prove an unpublished fix or PR: validate those against the matching source
-commit and correct application. Explicit manual-localhost requests retain
-their local prerequisites.
-
 ## Repository contract
 
 Look for `.github/fixlab/repository-profile.json` before running repository
@@ -94,21 +71,6 @@ and stage are unchanged. Never reuse application startup, health checks,
 authentication, browser or live-environment validation, external-data checks,
 dependency installation, deployments, or mutating commands.
 
-Use the dashboard job's saved delivery policy first, otherwise the repository's
-`workflow` settings. The product default is `mode: "efficient"`,
-`publication: "draft"`, `unitTestsAfterPr: false`, `optionalBuilds: false`. Do not ask users to select
-these again for each job or stage. Repository Settings saves overrides once.
-Efficient delivery runs the focused regression checks and reviews the effective
-diff, then creates or updates the authorized **draft** PR before optional broad
-validation. Ready-for-review publication requires the explicit saved
-`publication: "ready"` preference. Broad tests and builds run only by saved
-preference or explicit selection; update the same PR with actual results.
-Keep not-run and failed checks visible;
-ready for review never means fully validated or authorized to merge.
-Explicit `validation.gates[].required: true`, repository instructions,
-organization/managed approvals, and CI/merge policies remain mandatory.
-An explicit saved strict workflow retains the following draft-first behavior:
-
 When pull-request publication is already authorized, do not wait for every
 independent validation command to finish before creating review visibility.
 After the scoped production change and its smallest focused regression checks
@@ -120,10 +82,7 @@ keep validation status and risks current in the PR, and never mark it ready for
 review until every required local gate passes or repository policy records an
 explicitly accepted outcome.
 
-Honor an explicit publication choice in every mode: strict plus draft stays
-draft, with provider `isDraft: true` verified. Legacy strict policy with no
-publication preference retains ready intent. Strict required checks never change.
-Only for saved ready publication (including that legacy default), after required local validation and approval gates pass or have an explicitly
+After required local validation and approval gates pass or have an explicitly
 accepted outcome, publish the authorized PR by marking it ready for review.
 Do not wait for remote PR CI or build completion before publication; publication
 can trigger those checks. Verify the PR is no longer draft before reporting the
@@ -132,16 +91,6 @@ policies intact. Use `gh pr ready <number>` for GitHub or
 `az repos pr update --id <id> --draft false` for Azure DevOps, then read back
 `isDraft` from the provider to confirm it is false. If publication or state
 verification fails, report the PR stage blocked or failed, not passed.
-
-Reduce redundant regression cases, not correctness. Reuse existing test files
-and fixtures; move punctuation, length and duplicate matrices to fast pure
-unit checks. Browser coverage uses representative distinct flows, preserving
-safety, permissions, lease/queue and real bug reproductions. Measure comparable
-baseline and final elapsed time; never claim savings from count alone.
-Keep Jest and Playwright discovery separate. Bare Jest may collect E2E specs
-and bare Playwright may select all projects: use repository-owned unit selectors
-and explicitly selected authenticated browser projects. Do not silently edit
-consumer repositories to repair discovery.
 
 Prefix FixLab-created pull-request titles with `FLAB:` followed by a concise
 description of the coding change. Use the repository's PR template and clear
@@ -215,9 +164,7 @@ separate approvals. The dashboard cannot inject questions into an idle,
 unconnected Copilot session; read status when the user requests progress.
 
 Honor user-selected scoped iteration: full regression is explicitly deferred,
-not passed; in strict workflow PR readiness stays blocked. Efficient delivery
-permits publication after focused checks and explicitly required pre-publication
-gates. Continue independent safe checks
+not passed, and PR readiness stays blocked. Continue independent safe checks
 after unrelated failures, while preserving their exact outcomes and honoring
 dependencies. Do not delete or edit transient test artifacts while validation
 is discovering or executing them; wait for the owned validation to finish

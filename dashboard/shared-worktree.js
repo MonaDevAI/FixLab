@@ -1,23 +1,12 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, lstatSync, readFileSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { repositoryState } from "../bin/structured-command.js";
-import { createRuntimePermissionPolicy } from "./runtime-permission-policy.js";
-import { safeRuntimeText } from "./runtime-requests.js";
 
 const jobIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 
-function verifyIdleGit(repository) {
-  for (const name of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"]) {
-    const value = git(repository, ["rev-parse", "--git-path", name], "Git operation verification");
-    if (existsSync(isAbsolute(value) ? value : resolve(repository, value))) {
-      throw new Error("Finish the in-progress Git operation before reusing the shared worktree");
-    }
-  }
-}
-
-function git(repository, args, description, raw = false) {
+function git(repository, args, description) {
   const result = spawnSync("git", args, {
     cwd: repository,
     encoding: "utf8",
@@ -32,7 +21,7 @@ function git(repository, args, description, raw = false) {
       "Resolve the Git prerequisite and retry; FixLab will not reset, stash, clean or force-switch this checkout."
     );
   }
-  return raw ? result.stdout : result.stdout.trim();
+  return result.stdout.trim();
 }
 
 function branchRef(repository, branch, description) {
@@ -90,66 +79,12 @@ export function reviewSharedWorktree(repository, profile) {
     return null;
   }
   const state = repositoryState(repository);
-  const files = git(repository, ["ls-files", "--others", "--exclude-standard", "-z"], "Untracked file review", true)
-    .split("\0").filter(Boolean);
-  const policy = createRuntimePermissionPolicy(repository);
-  let reason = git(repository, ["status", "--porcelain", "--untracked-files=no"], "Tracked change review")
-    ? "Preserve tracked changes separately before starting a fresh branch."
-    : files.length > 50 ? "Too many untracked files for automatic recovery; review them separately." : "";
-  if (!reason && files.some((file) => {
-    const path = resolve(repository, file);
-    return !policy.isSourceFile(path) ||
-      lstatSync(path).size > 1024 * 1024;
-  })) {
-    reason = "Untracked files include sensitive, linked, non-source or oversized files; preserve them separately.";
-  }
   return {
     branch,
     head: state.head,
     dirty: Boolean(git(repository, ["status", "--porcelain", "--untracked-files=all"], "Workspace review")),
-    fingerprint: createHash("sha256").update(JSON.stringify({ branch, config, state })).digest("hex"),
-    freshBranch: {
-      remote: config.remote, baseBranch: config.baseBranch,
-      files: files.slice(0, 50), available: !reason, reason
-    }
+    fingerprint: createHash("sha256").update(JSON.stringify({ branch, config, state })).digest("hex")
   };
-}
-
-export function stashReviewedSharedWorktree({ repository, profile, reviewedWorkspace }) {
-  verifyIdleGit(repository);
-  const review = reviewSharedWorktree(repository, profile);
-  if (!review || review.branch !== reviewedWorkspace?.branch ||
-      review.fingerprint !== reviewedWorkspace?.fingerprint) {
-    throw new Error("The workspace changed since review. Review the branch and files again.");
-  }
-  if (!review.freshBranch.available) {
-    throw new Error(review.freshBranch.reason);
-  }
-  const { files, remote, baseBranch } = review.freshBranch;
-  for (const file of files) {
-    if (!safeRuntimeText(readFileSync(resolve(repository, file), "utf8"), 1024 * 1024)) {
-      throw new Error("A reviewed source file may contain sensitive content; automatic stashing is unavailable.");
-    }
-  }
-  let stashRef = null;
-  if (files.length) {
-    const previous = git(repository, ["stash", "list", "--max-count=1", "--format=%H"], "Existing stash review");
-    git(repository, ["--literal-pathspecs", "stash", "push", "--include-untracked",
-      "--message", `FixLab fresh branch from ${review.branch}`, "--", ...files], "Stash reviewed source files");
-    stashRef = git(repository, ["stash", "list", "--max-count=1", "--format=%H"], "Saved stash verification");
-    if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(stashRef) || stashRef === previous) {
-      throw new Error("A new stash could not be verified. Stop and inspect the checkout; no reset or cleanup will be attempted.");
-    }
-    for (const file of files) {
-      git(repository, ["cat-file", "-e", `${stashRef}^3:${file}`], "Stashed file verification");
-    }
-  }
-  const remaining = git(repository, ["status", "--porcelain", "--untracked-files=all"], "Clean checkout verification");
-  if (remaining) {
-    const summary = safeRuntimeText(remaining, 8000) ? remaining : "Review local Git status for the remaining changes.";
-    throw new Error(`The checkout is not clean. Preserved stash: ${stashRef ?? "none"}. No reset or cleanup will be attempted.\n${summary}`);
-  }
-  return { stashRef, files, previousBranch: review.branch, remote, baseBranch };
 }
 
 function recoveryRequired(repository, profile, message) {
@@ -169,7 +104,13 @@ export function prepareSharedWorktree({ repository, profile, jobId, saved = null
   if (!jobIdPattern.test(jobId)) {
     throw new Error("Shared worktree jobs require a valid job ID");
   }
-  verifyIdleGit(repository);
+  const gitPath = (name) => {
+    const value = git(repository, ["rev-parse", "--git-path", name], "Git operation verification");
+    return isAbsolute(value) ? value : resolve(repository, value);
+  };
+  if (["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply", "sequencer"].some((name) => existsSync(gitPath(name)))) {
+    throw new Error("Finish the in-progress Git operation before reusing the shared worktree");
+  }
   const currentBranch = git(repository, ["branch", "--show-current"], "Current branch verification");
   const dirty = git(repository, ["status", "--porcelain", "--untracked-files=all"], "Shared worktree cleanliness check");
   if (reviewedWorkspace) {

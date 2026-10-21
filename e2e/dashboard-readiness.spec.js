@@ -20,16 +20,6 @@ let repository;
 let dashboard;
 let baseUrl;
 
-async function openWorkflowControls(page, url) {
-  await page.goto(url);
-  await page.locator('.workspace-navigation [data-open="details-group"]').click();
-  for (const id of ["run-options", "details-group", "connections-group", "settings-group"]) {
-    if (await page.locator(`#${id}`).getAttribute("open") === null) {
-      await page.locator(`#${id} > summary`).click();
-    }
-  }
-}
-
 async function availablePort() {
   const probe = createPortProbe();
   await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
@@ -104,7 +94,6 @@ test.beforeAll(async () => {
     join(profileDirectory, "repository-profile.json"),
     JSON.stringify({
       name: "E2E repository",
-      workflow: { mode: "strict" },
       applications: {
         frontend: {
           workingDirectory: ".",
@@ -171,7 +160,7 @@ test("dashboard submits interception as a per-run option rather than a shared de
       })
     });
   });
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   await page.locator("#request").fill("Synthetic per-run interception scenario.");
   await page.locator("input[name=mode][value=playwright-only]").check();
   await page.locator("#job-test-mutation-mode").selectOption("intercepted");
@@ -189,22 +178,13 @@ test("native Copilot prompts allow once, deny and answer choices in the same liv
     readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
   let bridge;
   let launches = 0;
-  let incomingPermission = null;
   const sent = [];
   const instance = createDashboardServer({
     repository: directory, packageRoot, runtime: "copilot", browserOpener() {},
     executor({ onRuntimeRequests }) {
       launches++;
       bridge = createRuntimeRequestBridge({
-        send(message) {
-          sent.push(message);
-          if (message.action === "allow" && incomingPermission) {
-            const incoming = incomingPermission;
-            incomingPermission = null;
-            bridge.receive(incoming);
-          }
-        },
-        onChange: onRuntimeRequests
+        send: (message) => sent.push(message), onChange: onRuntimeRequests
       });
       let finish;
       return {
@@ -225,7 +205,7 @@ test("native Copilot prompts allow once, deny and answer choices in the same liv
       ...runtimePermissionPrompt({ kind: "shell", fullCommandText: "npm test" }), id: randomUUID()
     });
     bridge.receive(permission());
-    await openWorkflowControls(page, address.url);
+    await page.goto(address.url);
     await expect(page.locator("#job-status")).toContainText("waiting for your response");
     await expect(page.locator("#runtime-request-details")).toContainText("npm test");
     page.once("dialog", (dialog) => dialog.accept());
@@ -260,194 +240,7 @@ test("native Copilot prompts allow once, deny and answer choices in the same liv
     await expect(page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
     await page.getByRole("button", { name: "Deny", exact: true }).click();
     await expect.poll(() => sent[4]?.action).toBe("deny");
-
-    const first = { ...permission(), grantScope: "exact-test-command" };
-    const second = {
-      ...runtimePermissionPrompt({ kind: "shell", fullCommandText: "npm run build" }), id: randomUUID()
-    };
-    const unavailable = {
-      ...runtimePermissionPrompt({ kind: "unsupported-native-kind" }), id: randomUUID()
-    };
-    const question = {
-      ...runtimeQuestionPrompt({ question: "Which synthetic journey?", choices: ["First", "Second"] }), id: randomUUID()
-    };
-    for (const request of [first, second, unavailable, question]) {
-      bridge.receive(request);
-    }
-    await expect(page.locator("#runtime-batch-summary")).toHaveText("Review all 2 pending permissions");
-    await page.locator("#runtime-batch-summary").click();
-    await expect(page.locator("#runtime-batch-requests")).toContainText("npm test");
-    await expect(page.locator("#runtime-batch-requests")).toContainText("npm run build");
-    await expect(page.locator("#runtime-batch-requests article")).toHaveCount(2);
-    page.once("dialog", (dialog) => dialog.dismiss());
-    await page.locator("#runtime-allow-pending").click();
-    expect(sent).toHaveLength(5);
-
-    const arriving = permission();
-    incomingPermission = arriving;
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#runtime-allow-pending").click();
-    await expect(page.locator("#runtime-batch-result")).toHaveText(
-      "Allowed 2 reviewed permission requests once. New requests still require approval."
-    );
-    expect(sent.slice(5)).toEqual([
-      { type: "response", id: first.id, action: "allow" },
-      { type: "response", id: second.id, action: "allow" }
-    ]);
-    const remaining = await (await page.request.get(`${address.url}/api/job`)).json();
-    expect(remaining.job.runtimeRequests.map((request) => request.id)).toEqual([
-      unavailable.id, question.id, arriving.id
-    ]);
     expect(launches).toBe(1);
-    bridge.cancel(false);
-    for (const [grantScope, label] of [
-      ["exact-test-command", "Allow this test command for this job"],
-      ["repository-reads", "Allow repository-file reads for this job"]
-    ]) {
-      const request = {
-        ...runtimePermissionPrompt(grantScope === "repository-reads"
-          ? { kind: "read", path: "src/example.ts" }
-          : { kind: "shell", fullCommandText: "npm test" }),
-        id: randomUUID(), grantScope
-      };
-      bridge.receive(request);
-      const count = sent.length;
-      page.once("dialog", (dialog) => dialog.dismiss());
-      await page.getByRole("button", { name: label, exact: true }).click();
-      expect(sent).toHaveLength(count);
-      page.once("dialog", (dialog) => dialog.accept());
-      await page.getByRole("button", { name: label, exact: true }).click();
-      await expect.poll(() => sent.at(-1)?.scope).toBe(grantScope);
-      expect(sent.at(-1)).toEqual({
-        type: "response", id: request.id, action: "allow", scope: grantScope
-      });
-    }
-  } finally {
-    await instance.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("Copilot file trust requires a stopped exact job and a separate confirmation without resuming", async ({ page }) => {
-  const directory = mkdtempSync(join(tmpdir(), "fixlab-file-trust-ui-"));
-  mkdirSync(join(directory, ".github", "fixlab"), { recursive: true });
-  writeFileSync(join(directory, ".github", "fixlab", "repository-profile.json"),
-    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
-  let finish;
-  let launches = 0;
-  const instance = createDashboardServer({
-    repository: directory, packageRoot, runtime: "copilot", browserOpener() {},
-    executor() {
-      launches++;
-      return {
-        completion: new Promise((resolve) => { finish = resolve; }),
-        terminate() { finish({ code: 130 }); }, hasStopped: () => true
-      };
-    }
-  });
-  try {
-    const address = await instance.listen({ port: await availablePort() });
-    await openWorkflowControls(page, address.url);
-    await page.locator("#request").fill("Synthetic reviewed source file trust.");
-    await page.locator("#start-button").click();
-    await expect(page.locator("#job-file-access-mode")).toHaveValue("manual");
-    await expect(page.locator("#job-file-access-save")).toBeDisabled();
-    finish({ code: 1 });
-    await expect(page.locator("#job-file-access-save")).toBeEnabled();
-    await page.locator("#job-file-access-mode").selectOption("source-read-write");
-    await page.locator("#job-file-access-gates").check();
-    page.once("dialog", (dialog) => dialog.dismiss());
-    await page.locator("#job-file-access-save").click();
-    expect((await (await page.request.get(`${address.url}/api/job`)).json()).job.fileAccess).toBeNull();
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#job-file-access-save").click();
-    await expect(page.locator("#job-file-access-message")).toContainText("this job only");
-    await expect(page.locator("#job-file-access-summary")).toContainText("including resumes");
-    expect((await (await page.request.get(`${address.url}/api/job`)).json()).job.fileAccess.mode).toBe("source-read-write");
-    expect((await (await page.request.get(`${address.url}/api/job`)).json()).job.fileAccess.allowValidationGates).toBe(true);
-    expect(launches).toBe(1);
-    await page.reload();
-    await openWorkflowControls(page, address.url);
-    await expect(page.locator("#job-file-access-mode")).toHaveValue("source-read-write");
-    await expect(page.locator("#job-file-access-gates")).toBeChecked();
-    await page.locator("#job-file-access-mode").selectOption("manual");
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#job-file-access-save").click();
-    await expect(page.locator("#job-file-access-summary")).toContainText("Individual file approvals");
-  } finally {
-    await instance.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("Show budget is unchecked by default and reveals usage and stopped-job controls without changing limits", async ({ page }) => {
-  const directory = mkdtempSync(join(tmpdir(), "fixlab-budget-ui-"));
-  mkdirSync(join(directory, ".github", "fixlab"), { recursive: true });
-  writeFileSync(join(directory, ".github", "fixlab", "repository-profile.json"),
-    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
-  let finish;
-  let launches = 0;
-  let selectedLimit;
-  const instance = createDashboardServer({
-    repository: directory, packageRoot, runtime: "copilot", browserOpener() {},
-    executor(input) {
-      launches++;
-      selectedLimit = input.inputTokenLimit;
-      input.onUsage({
-        inputTokens: 110, cachedInputTokens: 90, cacheWriteTokens: 20,
-        outputTokens: 5, cacheReusePercent: 90 / 110 * 100
-      });
-      input.onOutput("stdout", "Tokens \u2191 110 (90 cached, 20 written) \u2022 \u2193 5\n");
-      return {
-        completion: new Promise((resolve) => { finish = resolve; }),
-        terminate() { finish({ code: 130 }); },
-        hasStopped: () => true
-      };
-    }
-  });
-  try {
-    const address = await instance.listen({ port: await availablePort() });
-    await openWorkflowControls(page, address.url);
-    await expect(page.locator("#show-input-budget")).not.toBeChecked();
-    await expect(page.locator("#input-budget-control")).toBeHidden();
-    await expect(page.locator("#job-budget-panel")).toBeHidden();
-    await page.locator("#show-input-budget").check();
-    await expect(page.locator("#input-budget-control")).toBeVisible();
-    await expect(page.locator("#input-token-limit")).toHaveValue("0");
-    await page.locator("#request").fill("Synthetic input budget browser scenario.");
-    await page.locator("#input-token-limit").fill("100");
-    await page.locator("#start-button").click();
-    await expect.poll(() => selectedLimit).toBe(100);
-    await expect(page.locator("#job-budget-summary")).toContainText("110 input tokens (90 cached; 20 uncached)");
-    await expect(page.locator("#job-budget-save")).toBeDisabled();
-    const error = new Error("Input-token ceiling reached.");
-    error.code = "INPUT_TOKEN_LIMIT";
-    finish({ code: null, error });
-    await expect(page.locator("#job-budget-summary")).toContainText("Paused:");
-    await expect(page.locator("#job-budget-save")).toBeEnabled();
-    await page.locator("#job-budget-limit").fill("200");
-    page.once("dialog", (dialog) => dialog.dismiss());
-    await page.locator("#job-budget-save").click();
-    const unchanged = await (await page.request.get(`${address.url}/api/job`)).json();
-    expect(unchanged.job.inputTokenLimit).toBe(100);
-    expect(unchanged.job.budgetExceeded).toBe(true);
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#job-budget-save").click();
-    await expect(page.locator("#job-budget-message")).toContainText("Usage is preserved; resume separately");
-    await expect(page.locator("#job-budget-summary")).toContainText("Ceiling: 200");
-    const updated = await (await page.request.get(`${address.url}/api/job`)).json();
-    expect(updated.job.status).toBe("blocked");
-    expect(updated.job.usage.inputTokens).toBe(110);
-    expect(updated.job.inputTokenLimit).toBe(200);
-    expect(launches).toBe(1);
-    await page.locator("#show-input-budget").uncheck();
-    await expect(page.locator("#job-budget-panel")).toBeHidden();
-    await expect(page.locator("#input-budget-control")).toBeHidden();
-    const hidden = await (await page.request.get(`${address.url}/api/job`)).json();
-    expect(hidden.job.inputTokenLimit).toBe(200);
-    expect(hidden.job.usage.inputTokens).toBe(110);
-    await page.locator("#show-input-budget").check();
-    await expect(page.locator("#job-budget-summary")).toContainText("Ceiling: 200");
   } finally {
     await instance.close();
     rmSync(directory, { recursive: true, force: true });
@@ -507,7 +300,7 @@ test(`${componentPolicy ? "Component" : "API-only"} gates display not applicable
   });
   try {
     const address = await scopedDashboard.listen({ port: await availablePort() });
-    await openWorkflowControls(page, address.url);
+    await page.goto(address.url);
     await page.getByRole("radio", { name: "Validate only", exact: true }).check();
     const start = async (coverage) => {
       await page.getByLabel("Bug or required enhancement").fill("Verify internal API validation.");
@@ -576,7 +369,7 @@ test("pre-launch folder review starts no executor until the user explicitly appr
   });
   try {
     const address = await preflightDashboard.listen({ port: await availablePort() });
-    await openWorkflowControls(page, address.url);
+    await page.goto(address.url);
     await page.getByRole("radio", { name: "Validate only", exact: true }).check();
     await page.getByLabel("Warm React in parallel when a local job starts").uncheck();
     await page.getByLabel("Review required external-folder access before starting the executor").check();
@@ -636,7 +429,7 @@ test("runtime folder approval is reviewed and confirmed in the browser without a
     await page.request.post(`${address.url}/api/jobs`, {
       data: { request: "Verify browser-only scoped runtime approval.", mode: "validate-only" }
     });
-    await openWorkflowControls(page, address.url);
+    await page.goto(address.url);
     await expect(page.getByRole("heading", { name: "Copilot permission required" })).toBeVisible();
     await expect(page.locator("#job-input-submit")).toBeHidden();
     await expect(page.locator("#permission-review")).toBeEnabled();
@@ -707,7 +500,7 @@ test("Copilot model control honors configured defaults and explicit per-job sele
   });
   try {
     const address = await modelDashboard.listen({ port: await availablePort() });
-    await openWorkflowControls(page, address.url);
+    await page.goto(address.url);
     await expect(page.locator("#model-control")).toBeVisible();
     await expect(page.locator("#model")).toHaveValue("claude-sonnet-4.5");
     await page.locator("#model").selectOption("hydrafusion");
@@ -768,7 +561,7 @@ test("session controls reconnect, confirm another owner and resume its stopped j
     });
     expect(started.status).toBe(202);
     const identity = await (await fetch(`${ownerUrl}/api/session`)).json();
-    await test.step("Opening the session observer", () => openWorkflowControls(page, observerUrl));
+    await test.step("Opening the session observer", () => page.goto(observerUrl));
     const row = page.locator("#sessions-list article").filter({ hasText: identity.id });
     await expect(row).toContainText("Other FixLab dashboard");
     await expect(row.getByRole("link", { name: "Reconnect to live dashboard" }))
@@ -821,7 +614,7 @@ test("dashboard exposes repository readiness through the running server", async 
   expect(body.readiness.profileName).toBe("E2E repository");
   expect(body.readiness.environments).toEqual(["local", "dev", "sit"]);
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   await expect(page.locator("#target-environment option")).toHaveText([
     "Profile default",
     "LOCAL",
@@ -836,13 +629,13 @@ test("dashboard exposes repository readiness through the running server", async 
 test("dashboard exposes multi-bug intake and resumable user input", async ({
   page
 }) => {
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
 
   await expect(
     page.getByRole("heading", { name: "Playwright authentication" })
   ).toBeVisible();
   await expect(
-    page.getByRole("heading", { name: "Azure DevOps intake (optional)", exact: true })
+    page.getByRole("heading", { name: "Repository onboarding" })
   ).toBeVisible();
   await page
     .getByLabel("Azure DevOps organization")
@@ -869,7 +662,7 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     page.getByRole("button", { name: "Refresh evidence" })
   ).toBeVisible();
   await expect(
-    page.getByLabel("Browser reproduction / result check only")
+    page.getByLabel("Playwright validation only")
   ).toBeVisible();
   await expect(page.getByLabel("Create a separate PR per bug")).not.toBeChecked();
   await expect(
@@ -897,7 +690,7 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
   page,
   request
 }) => {
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   const requestField = page.getByLabel("Bug or required enhancement");
   const textPastePrevented = await requestField.evaluate((element) => {
     const transfer = new DataTransfer();
@@ -941,7 +734,8 @@ test("dashboard accepts pasted images and records exact usage metrics", async ({
 
   await requestField.fill("Validate pasted screenshot");
   await page.getByRole("button", { name: "Start job" }).click();
-  await expect(page.locator(".stage.inferred")).toContainText(/diagnosis\s*active now/);
+  await expect(page.locator(".stage.inferred strong")).toHaveText("diagnosis");
+  await expect(page.locator(".stage.inferred")).toContainText("active now");
   await expect(page.locator("#job-status")).toContainText(
     "passed · bug-fix"
   );
@@ -1133,7 +927,7 @@ test("dashboard lets users select active and queued job roadmaps", async ({
     });
   });
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   const queuedText = page.locator(".job-row").filter({
     has: page.getByRole("button", { name: /Waiting #1/ })
   });
@@ -1236,7 +1030,7 @@ test("dashboard clears the bug input after adding a job to the queue", async ({
     });
   });
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   const requestField = page.getByLabel("Bug or required enhancement");
   await requestField.fill("Queue this bug and clear the form.");
   await page.getByRole("button", { name: "Add to queue" }).click();
@@ -1271,7 +1065,6 @@ test("dashboard explains how to resume a failed job and release the queue", asyn
     await route.fulfill({
       contentType: "application/json",
       body: JSON.stringify({
-        instanceId: "recovery-owner",
         readiness: {
           repository: "C:\\repo",
           repositoryReady: true,
@@ -1324,7 +1117,7 @@ test("dashboard explains how to resume a failed job and release the queue", asyn
     });
   });
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
 
   await expect(page.getByRole("heading", { name: "Retry or correct this job" })).toBeVisible();
   await expect(page.locator("#job-input-guidance")).toContainText(
@@ -1334,62 +1127,6 @@ test("dashboard explains how to resume a failed job and release the queue", asyn
     "dismiss it as failed"
   );
   await expect(page.getByRole("button", { name: "Resume FixLab" })).toBeVisible();
-  const mutations = [];
-  const review = {
-    branch: "users/test/fixlab-existing", fingerprint: "review-one",
-    freshBranch: { remote: "origin", baseBranch: "develop",
-      files: ["e2e/preserved.auth.spec.ts"], available: true, reason: "" }
-  };
-  failedJob.status = "blocked";
-  failedJob.workspaceReview = review;
-  await page.route("**/api/conversation", (route) => route.fulfill({
-    contentType: "application/json", body: JSON.stringify({
-      instanceId: "recovery-owner", repository: "C:\\repo",
-      job: failedJob, question: { kind: "workspace" }, workspaceReview: review
-    })
-  }));
-  await page.route("**/api/jobs/restart", async (route) => {
-    mutations.push(route.request().postDataJSON());
-    if (mutations.length === 1) {
-      return route.fulfill({ status: 409, contentType: "application/json",
-        body: JSON.stringify({ error: "The workspace changed since review. Review again." }) });
-    }
-    failedJob.id = "fresh-job";
-    failedJob.status = "failed";
-    failedJob.workspaceReview = null;
-    failedJob.workspaceStash = { stashRef: "b".repeat(40) };
-    return route.fulfill({ status: 202, contentType: "application/json",
-      body: JSON.stringify({ job: failedJob, restartedJob: failedJob }) });
-  });
-  await expect(page.locator("#workspace-recovery-panel")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Resume FixLab", exact: true })).toBeHidden();
-  await page.locator("#workspace-recovery-review").click();
-  await expect(page.locator("#workspace-recovery-summary")).toContainText("origin/develop");
-  await expect(page.locator("#workspace-recovery-summary")).toContainText("e2e/preserved.auth.spec.ts");
-  expect(mutations).toEqual([]);
-  await page.locator("#workspace-recovery-cancel").click();
-  await expect(page.locator("#workspace-recovery-start")).toBeHidden();
-  expect(mutations).toEqual([]);
-  await page.locator("#workspace-recovery-review").click();
-  await expect(page.locator("#workspace-recovery-start")).toBeEnabled();
-  page.once("dialog", (dialog) => dialog.dismiss());
-  await page.locator("#workspace-recovery-start").click();
-  expect(mutations).toEqual([]);
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.locator("#workspace-recovery-start").click();
-  await expect(page.locator("#workspace-recovery-message")).toContainText("changed since review");
-  await expect(page.locator("#workspace-recovery-start")).toBeHidden();
-  review.fingerprint = "review-two";
-  await page.locator("#workspace-recovery-review").click();
-  await expect(page.locator("#workspace-recovery-start")).toBeEnabled();
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.locator("#workspace-recovery-start").click();
-  await expect.poll(() => mutations.length).toBe(2);
-  expect(mutations[1]).toMatchObject({
-    confirmed: true, instanceId: "recovery-owner", jobId: "failed-job",
-    repository: "C:\\repo", workspaceRecovery: { fingerprint: "review-two", branch: review.branch }
-  });
-  await expect(page.locator("#workspace-stash-result")).toContainText("b".repeat(40));
   const dismissButton = page.getByRole("button", {
     name: "Dismiss failed job and continue queue"
   });
@@ -1457,7 +1194,7 @@ test("dashboard resumes a failed job without requiring extra details", async ({
     });
   });
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   await page.getByRole("button", { name: "Resume FixLab" }).click();
 
   await expect.poll(() => submittedInput?.action).toBe("continue");
@@ -1543,7 +1280,7 @@ test("dashboard retries a blocked Playwright gate without shell input", async ({
     });
   });
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   await expect(
     page.getByRole("button", { name: "Skip Playwright live test" })
   ).toBeVisible();
@@ -1628,17 +1365,17 @@ test("dashboard requires explicit manual localhost confirmation", async ({
     });
   });
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   await expect(
     page.getByRole("button", { name: "Open React localhost" })
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Passed", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Failed", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Passed" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Failed" })).toBeVisible();
   await expect(page.locator("#job-input-guidance")).toContainText(
     "confirm Passed or Failed"
   );
 
-  await page.getByRole("button", { name: "Passed", exact: true }).click();
+  await page.getByRole("button", { name: "Passed" }).click();
   expect(submittedInput).toEqual({ action: "manual-pass" });
 });
 
@@ -1723,7 +1460,7 @@ test("dashboard exposes explicit pull-request approval when validation is comple
     });
   });
 
-  await openWorkflowControls(page, baseUrl);
+  await page.goto(baseUrl);
   await expect(
     page.getByRole("button", { name: "Approve and create PR" })
   ).toBeVisible();
@@ -1734,381 +1471,4 @@ test("dashboard exposes explicit pull-request approval when validation is comple
   await expect.poll(() => submittedInput).toBeTruthy();
   expect(submittedInput.action).toBe("continue");
   expect(submittedInput.details).toContain("explicitly approve");
-});
-
-async function mockChatWorkspace(page, { job = null, queue = [], history = [] } = {}) {
-  await page.route("**/api/status", (route) => route.fulfill({
-    contentType: "application/json",
-    body: JSON.stringify({
-      instanceId: "workspace-owner",
-      readiness: { repositoryReady: true, profileReady: true,
-        repository: "C:\\code\\alpha", profileName: "Alpha workspace" },
-      runtime: { name: "copilot", supportsModelSelection: true, defaultModel: "" },
-      job, queue, held: [], history
-    })
-  }));
-  await page.route("**/api/repositories", (route) => route.fulfill({
-    contentType: "application/json",
-    body: JSON.stringify({ repositories: [
-      { id: "workspace-owner", repository: "C:\\code\\alpha", url: baseUrl, status: "idle" },
-      { id: "other-owner", repository: "C:\\code\\beta", url: "http://127.0.0.1:48555", status: "blocked" }
-    ], unavailableCount: 0 })
-  }));
-}
-
-test("chat workspace defaults to a compact composer and local repository navigation", async ({ page }) => {
-  const mutations = [];
-  page.on("request", (request) => {
-    if (request.method() === "POST") {
-      mutations.push(request.url());
-    }
-  });
-  await mockChatWorkspace(page);
-  await page.setViewportSize({ width: 1500, height: 1000 });
-  await page.goto(baseUrl);
-  await expect(page.locator("#workspace-title")).toHaveText("Alpha workspace");
-  await expect(page.locator("#chat-welcome")).toBeVisible();
-  await expect(page.locator("#run-options")).not.toHaveAttribute("open");
-  await expect(page.locator("#details-group")).not.toHaveAttribute("open");
-  await expect(page.locator("#connections-group")).not.toHaveAttribute("open");
-  await expect(page.locator("#settings-group")).not.toHaveAttribute("open");
-  await expect(page.locator("#workspace-tools")).toBeHidden();
-  await expect(page.locator("#memory-group")).not.toHaveAttribute("open");
-  await expect(page.locator("#repository-list a")).toHaveCount(2);
-  await expect(page.locator("#repository-list a").first()).toHaveAttribute("aria-current", "page");
-  await expect(page.locator("#repository-list a").last()).toHaveAttribute("href", "http://127.0.0.1:48555/");
-  await page.getByRole("button", { name: "Validate a browser workflow", exact: true }).click();
-  await expect(page.locator("#request")).toHaveValue("Validate this browser workflow: ");
-  await expect(page.locator("input[name=mode][value=playwright-only]")).toBeChecked();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await expect(page.locator("#workspace-tools")).toBeVisible();
-  await expect(page.locator("#settings-group")).toHaveAttribute("open", "");
-  await page.getByRole("button", { name: "Back to chat", exact: true }).click();
-  await expect(page.locator("#workspace-tools")).toBeHidden();
-  await expect(page.locator("#request")).toBeFocused();
-  await expect(page.locator("#request")).toHaveValue("Validate this browser workflow: ");
-  await page.screenshot({ path: test.info().outputPath("chat-workspace-desktop.png"), fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator("#repository-navigation")).toBeHidden();
-  await expect(page.locator("#start-button")).toBeInViewport();
-  await page.locator("#navigation-toggle").click();
-  await expect(page.locator("#navigation-toggle")).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator("#repository-list")).toBeVisible();
-  await page.locator('.workspace-navigation [data-open="settings-group"]').click();
-  await expect(page.locator("#navigation-toggle")).toHaveAttribute("aria-expanded", "false");
-  await expect(page.locator("#settings-group")).toHaveAttribute("open", "");
-  await page.locator("#close-workspace-tools").click();
-  await expect(page.locator("#request")).toBeFocused();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect(mutations).toEqual([]);
-  await page.screenshot({ path: test.info().outputPath("chat-workspace-mobile-composer.png"), fullPage: true });
-});
-
-test("repository memory shows saved outcomes safely and selecting one never resumes it", async ({ page }) => {
-  let posts = 0;
-  page.on("request", (request) => { if (request.method() === "POST") { posts++; } });
-  const saved = {
-    id: "saved-chat", request: "<img src=x onerror=alert(1)> Synthetic remembered work",
-    status: "blocked", requestType: "bug-fix", targetEnvironment: "dev",
-    stages: { diagnosis: { status: "passed", message: "Synthetic diagnosis complete" } },
-    bugs: [], logs: [], activity: [], canResume: false, canComment: false
-  };
-  await mockChatWorkspace(page, { history: [saved] });
-  await page.goto(baseUrl);
-  await page.locator('.workspace-navigation [data-open="memory-group"]').click();
-  await expect(page.locator("#repository-memory-list")).toContainText("Synthetic remembered work");
-  await expect(page.locator("#repository-memory-list")).toContainText("1 passed stage(s)");
-  await page.locator("#repository-memory-list button").click();
-  await expect(page.locator("#chat-thread .user-message")).toContainText(saved.request);
-  await expect(page.locator("#chat-thread img")).toHaveCount(0);
-  await expect(page.locator("#job-input-panel")).toBeHidden();
-  await page.locator("#request").fill("Keep this unsent draft");
-  await page.locator("#new-conversation").click();
-  await expect(page.locator("#chat-welcome")).toBeVisible();
-  await expect(page.locator("#chat-thread")).toBeEmpty();
-  await expect(page.locator("#request")).toHaveValue("Keep this unsent draft");
-  expect(posts).toBe(0);
-});
-
-test("chat keeps manual permissions inline and mobile layout within the viewport", async ({ page }) => {
-  let grants = 0;
-  page.on("request", (request) => {
-    if (request.method() === "POST") { grants++; }
-  });
-  await mockChatWorkspace(page, { job: {
-    id: "waiting-chat", request: "Synthetic browser validation",
-    requestType: "bug-fix", mode: "playwright-only", status: "running",
-    stages: {}, bugs: [], logs: [], activity: [],
-    runtimeRequests: [{ id: "manual-read", kind: "permission", canApprove: true,
-      title: "Read synthetic source", details: "Read the selected synthetic file once." }]
-  } });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto(baseUrl);
-  await expect(page.locator("#conversation-state-title")).toHaveText("Waiting for your permission");
-  await page.locator("#needs-response").click();
-  await expect(page.locator("#runtime-request-panel")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeFocused();
-  await expect(page.getByRole("button", { name: "Deny", exact: true })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-  expect(grants).toBe(0);
-  await page.screenshot({ path: test.info().outputPath("chat-workspace-mobile.png"), fullPage: true });
-});
-
-test("queue navigation opens the inspector at the first card without changing jobs", async ({ page }) => {
-  let posts = 0;
-  page.on("request", (request) => { if (request.method() === "POST") { posts++; } });
-  const job = { id: "queue-current", request: "Synthetic blocked browser check",
-    requestType: "bug-fix", mode: "playwright-only", status: "blocked",
-    stages: {}, bugs: [], logs: [], activity: [], canResume: false };
-  await mockChatWorkspace(page, { job, queue: [{
-    id: "queue-next", request: "Synthetic next bug", requestType: "bug-fix",
-    mode: "playwright-only", status: "queued", position: 1, bugCount: 1
-  }] });
-  await page.goto(baseUrl);
-  await expect(page.locator("#queue-nav-count")).toHaveText("1");
-  await expect(page.locator("#details-group")).not.toHaveAttribute("open");
-  await page.locator("[data-open=queue-panel]").click();
-  await expect(page.locator("#details-group")).toHaveAttribute("open", "");
-  await expect(page.locator("#queue-panel")).toBeInViewport();
-  await expect(page.locator("#details-view > :first-child")).toHaveAttribute("id", "queue-panel");
-  await expect(page.locator("#queue-list")).toContainText("Waiting #1");
-  await expect(page.locator("#queue-list")).toContainText("Synthetic next bug");
-  expect(posts).toBe(0);
-});
-
-test("browser-only retry preserves browser scope and makes its prerequisite blocker visible", async ({ page }) => {
-  const job = { id: "browser-busy-chat", request: "Synthetic browser-only check",
-    requestType: "bug-fix", mode: "playwright-only", status: "blocked",
-    stages: { "live-test": { status: "blocked", message: "Synthetic browser is busy" } },
-    bugs: [], logs: [], activity: [], canResume: true, canComment: false,
-    browserBlocker: { kind: "browser-profile-busy", pids: [777],
-      message: "Synthetic profile is in use by browser PID 777. Preserve unsaved data before closing it." } };
-  let submitted;
-  await mockChatWorkspace(page, { job });
-  await page.route("**/api/job/input", async (route) => {
-    submitted = route.request().postDataJSON();
-    await route.fulfill({ status: 409, contentType: "application/json",
-      body: JSON.stringify({ error: job.browserBlocker.message }) });
-  });
-  await page.goto(baseUrl);
-  await expect(page.locator("#conversation-state-title")).toHaveText("Browser launch blocked; no retry running");
-  await expect(page.locator("#conversation-state-detail")).toContainText("Preserve unsaved data");
-  await page.locator("#retry-live-test").click();
-  await expect(page.locator("#form-error")).toContainText("browser PID 777");
-  expect(submitted.action).toBe("retry");
-  expect(submitted.details).toContain("retained same-job script");
-  expect(submitted.details).toContain("Do not retry an unchanged profile lock");
-  expect(submitted.details).not.toContain("continue to pull-request creation");
-});
-
-function pendingApprovalJob(commands) {
-  return {
-    id: "synthetic-pending-batch", request: "Synthetic pending permission review",
-    requestType: "bug-fix", mode: "playwright-only", status: "running",
-    stages: {}, bugs: [], logs: [], activity: [], canResume: false,
-    runtimeRequests: commands.map((command) => ({
-      ...runtimePermissionPrompt({ kind: "shell", fullCommandText: command }), id: randomUUID()
-    }))
-  };
-}
-
-test("current-job full screen ignores historical selection, follows the live job and restores the prior view", async ({ page }) => {
-  const posts = [];
-  let historicalEvidence;
-  page.on("request", (request) => { if (request.method() === "POST") { posts.push(request.url()); } });
-  const longRequest = "Detailed expected behavior and evidence. ".repeat(80) +
-    "https://example.test/" + "long-path".repeat(40);
-  const job = { id: "fullscreen-current", request: `Current synthetic live journey ${longRequest}`,
-    requestType: "bug-fix", mode: "playwright-only", status: "running",
-    stages: { "live-test": { status: "running", message: "Current stage sentinel" } },
-    bugs: [], logs: [], activity: [] };
-  const saved = { ...job, id: "fullscreen-history", request: "Historical synthetic journey", status: "passed" };
-  await mockChatWorkspace(page, { job, history: [saved] });
-  await page.route(/\/api\/playwright\/artifacts\?jobId=/, (route) => {
-    const id = new URL(route.request().url()).searchParams.get("jobId");
-    if (id === saved.id && !historicalEvidence) {
-      historicalEvidence = route;
-      return;
-    }
-    return route.fulfill({ contentType: "application/json", body: JSON.stringify({ artifacts: [{
-      kind: "screenshot", name: `${id}.png`, relativePath: `test-results/${id}.png`, url: `/synthetic-${id}.png`
-    }] }) });
-  });
-  await page.route("**/synthetic-*.png", (route) => route.fulfill({
-    contentType: "image/png", body: Buffer.from(loadedPng, "base64")
-  }));
-  await page.goto(baseUrl);
-  await page.locator('.workspace-navigation [data-open="memory-group"]').click();
-  await page.locator("#repository-memory-list button").click();
-  await expect(page.locator("#chat-thread .user-message")).toContainText(saved.request);
-  await expect.poll(() => Boolean(historicalEvidence)).toBe(true);
-  await page.locator("#current-job-fullscreen").click();
-  await expect(page.locator("#current-job-dialog")).toBeVisible();
-  await expect(page.locator("#current-job-dialog-title")).toContainText(job.request);
-  const expectCompactHeader = async () => {
-    const title = page.locator("#current-job-dialog-title");
-    await expect(title).toHaveAttribute("title", `Current job: ${job.request}`);
-    const layout = await title.evaluate((element) => {
-      const bounds = element.getBoundingClientRect();
-      const exit = document.querySelector("#current-job-fullscreen-close").getBoundingClientRect();
-      return {
-        height: bounds.height, lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
-        scrollHeight: element.scrollHeight, titleRight: bounds.right,
-        exitLeft: exit.left, exitRight: exit.right, viewportWidth: window.innerWidth
-      };
-    });
-    expect(layout.height).toBeLessThanOrEqual(layout.lineHeight * 2 + 1);
-    expect(layout.scrollHeight).toBeGreaterThan(layout.height);
-    expect(layout.exitLeft).toBeGreaterThanOrEqual(layout.titleRight);
-    expect(layout.exitRight).toBeLessThanOrEqual(layout.viewportWidth);
-    await expect(page.locator("#current-job-fullscreen-close")).toBeVisible();
-  };
-  await expectCompactHeader();
-  await expect(page.locator("#current-job-dialog #details-view")).toHaveCount(1);
-  await expect(page.locator("#current-job-dialog #stages")).toContainText("Current stage sentinel");
-  await expect(page.locator("#current-job-dialog img").first()).toHaveAttribute("src", "/synthetic-fullscreen-current.png");
-  await historicalEvidence.fulfill({ status: 400, contentType: "application/json",
-    body: JSON.stringify({ error: "Stale historical evidence sentinel" }) });
-  await expect(page.locator("#playwright-evidence-guidance")).toContainText("1 evidence artifact(s)");
-  job.id = "fullscreen-next";
-  job.request = `Next synthetic live journey ${longRequest}`;
-  await expect(page.locator("#current-job-dialog-title")).toContainText(job.request);
-  await expect(page.locator("#current-job-dialog img").first()).toHaveAttribute("src", "/synthetic-fullscreen-next.png");
-  await page.setViewportSize({ width: 390, height: 844 });
-  const dimensions = await page.locator("#current-job-dialog").evaluate((element) => ({
-    width: element.getBoundingClientRect().width, overflow: element.scrollWidth > element.clientWidth
-  }));
-  expect(dimensions.width).toBe(390);
-  expect(dimensions.overflow).toBe(false);
-  await expectCompactHeader();
-  await page.keyboard.press("Escape");
-  await expect(page.locator("#current-job-dialog")).not.toBeVisible();
-  await expect(page.locator("#details-group #details-view")).toHaveCount(1);
-  await expect(page.locator("#chat-thread .user-message")).toContainText(saved.request);
-  await expect(page.locator("#current-job-fullscreen")).toBeFocused();
-  expect(posts).toEqual([]);
-});
-
-test("local repository chat onboarding and settings require a reviewed apply and never start a job", async ({ page }) => {
-  test.setTimeout(90_000);
-  const directory = mkdtempSync(join(tmpdir(), "fixlab-chat-onboarding-"));
-  const git = spawnSync("git", ["init", "--quiet"], { cwd: directory, windowsHide: true, encoding: "utf8" });
-  expect(git.status).toBe(0);
-  let launches = 0;
-  const instance = createDashboardServer({
-    repository: directory, packageRoot, browserOpener() {},
-    executor() { launches++; throw new Error("Setup must not start an executor"); }
-  });
-  const startedJobs = [];
-  page.on("request", (request) => {
-    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/jobs") { startedJobs.push(request.url()); }
-  });
-  const { REPOSITORY_SETTING_FIELDS } = await import(pathToFileURL(join(packageRoot, "dashboard", "repository-settings.js")).href);
-  try {
-    const address = await instance.listen({ port: 0 });
-    await page.goto(address.url);
-    await page.locator("#add-local-repository").click();
-    await page.locator("#repository-onboarding-answer").fill(directory);
-    await page.locator("#repository-onboarding-form button[type=submit]").click();
-    for (const field of REPOSITORY_SETTING_FIELDS.filter((entry) => !entry.when)) {
-      await expect(page.locator("#repository-onboarding-label")).toHaveText(field.label);
-      if (field.key === "name" || field.key === "branchUserId") {
-        await page.locator("#repository-onboarding-answer").fill(field.key === "name" ? "Configured in chat" : "synthetic-user");
-        await page.locator("#repository-onboarding-form button[type=submit]").click();
-      } else {
-        await page.locator("#repository-onboarding-suggested").click();
-      }
-    }
-    await expect(page.locator("#repository-onboarding-review")).toBeVisible();
-    await expect(page.locator("#repository-onboarding-plan")).toContainText("Configured in chat");
-    const profilePath = join(directory, ".github", "fixlab", "repository-profile.json");
-    expect(() => readFileSync(profilePath)).toThrow();
-    page.once("dialog", (dialog) => dialog.dismiss());
-    await page.locator("#repository-onboarding-apply").click();
-    expect(() => readFileSync(profilePath)).toThrow();
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#repository-onboarding-apply").click();
-    await expect(page.locator("#repository-onboarding-open")).toBeVisible();
-    expect(JSON.parse(readFileSync(profilePath, "utf8")).name).toBe("Configured in chat");
-    await page.locator("#repository-onboarding-close").click();
-    await page.locator("[data-open=settings-group]").click();
-    await page.locator("#repository-settings-load").click();
-    await page.locator("#repository-settings-fields input[name=name]").fill("Updated repository settings");
-    let releasePreview;
-    const previewReady = new Promise((resolve) => { releasePreview = resolve; });
-    await page.route("**/api/repository/configuration", async (route) => {
-      const body = route.request().postDataJSON();
-      if (body.action === "preview" && body.install === false) { await previewReady; }
-      await route.continue();
-    });
-    await page.locator("#repository-settings-form button[type=submit]").click();
-    try {
-      await expect(page.locator("#repository-settings-fields input[name=name]")).toBeDisabled();
-      await expect(page.locator("#repository-settings-load")).toBeDisabled();
-      await expect(page.locator("#repository-settings-apply")).toBeDisabled();
-    } finally {
-      releasePreview();
-    }
-    await expect(page.locator("#repository-settings-review")).toBeVisible();
-    await expect(page.locator("#repository-settings-fields input[name=name]")).toBeEnabled();
-    expect(JSON.parse(readFileSync(profilePath, "utf8")).name).toBe("Configured in chat");
-    page.once("dialog", (dialog) => dialog.accept());
-    await page.locator("#repository-settings-apply").click();
-    await expect(page.locator("#repository-settings-message")).toContainText("Repository settings saved");
-    expect(JSON.parse(readFileSync(profilePath, "utf8")).name).toBe("Updated repository settings");
-    expect(launches).toBe(0);
-    expect(startedJobs).toEqual([]);
-  } finally {
-    await instance.close();
-    rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("pending approval batch sends nothing when the reviewed snapshot becomes stale", async ({ page }) => {
-  const job = pendingApprovalJob(['echo "<img src=x onerror=alert(1)>"', "npm run build"]);
-  const posts = [];
-  await mockChatWorkspace(page, { job });
-  await page.route("**/api/job/runtime-response", (route) => {
-    posts.push(route.request().postDataJSON());
-    return route.fulfill({ status: 409, contentType: "application/json",
-      body: JSON.stringify({ error: "No stale approval should have been sent." }) });
-  });
-  await page.goto(baseUrl);
-  await page.locator("#runtime-batch-summary").click();
-  await expect(page.locator("#runtime-batch-requests")).toContainText("<img src=x onerror=alert(1)>");
-  await expect(page.locator("#runtime-batch-requests img")).toHaveCount(0);
-  page.once("dialog", async (dialog) => {
-    job.runtimeRequests = [job.runtimeRequests[0]];
-    await dialog.accept();
-  });
-  await page.locator("#runtime-allow-pending").click();
-  await expect(page.locator("#runtime-batch-result")).toContainText("No approvals were sent.");
-  await expect(page.locator("#runtime-batch-result")).toContainText("permissions or live job changed");
-  expect(posts).toEqual([]);
-});
-
-test("pending approval batch reports partial failure and never retries or sends the remaining request", async ({ page }) => {
-  const job = pendingApprovalJob(["npm test", "npm run build", "npm run lint"]);
-  const reviewedIds = job.runtimeRequests.map((request) => request.id);
-  const posts = [];
-  await mockChatWorkspace(page, { job });
-  await page.route("**/api/job/runtime-response", async (route) => {
-    posts.push(route.request().postDataJSON());
-    if (posts.length === 1) {
-      job.runtimeRequests = job.runtimeRequests.filter((request) => request.id !== reviewedIds[0]);
-      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ job }) });
-    } else {
-      await route.fulfill({ status: 409, contentType: "application/json",
-        body: JSON.stringify({ error: "Synthetic second request became stale." }) });
-    }
-  });
-  await page.goto(baseUrl);
-  await page.locator("#runtime-batch-summary").click();
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.locator("#runtime-allow-pending").click();
-  await expect(page.locator("#runtime-batch-result")).toContainText("Batch stopped after 1 confirmed approval(s) out of 3");
-  await expect(page.locator("#runtime-batch-result")).toContainText("No automatic retry was made");
-  expect(posts).toEqual(reviewedIds.slice(0, 2).map((requestId) => ({
-    instanceId: "workspace-owner", jobId: job.id, requestId, action: "allow", confirmed: true
-  })));
 });

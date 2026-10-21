@@ -1,11 +1,5 @@
 {
   "version": 1,
-  "workflow": {
-    "mode": "efficient",
-    "unitTestsAfterPr": false,
-    "publication": "draft",
-    "optionalBuilds": false
-  },
   "name": "Example React and .NET repository",
   "architecture": "React frontend with ASP.NET Core backend",
   "components": [

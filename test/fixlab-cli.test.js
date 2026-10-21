@@ -712,10 +712,8 @@ test("authenticate runs the repository-owned command from the configured directo
     assert.equal(executed.status, 0);
     assert.match(
       executed.stdout,
-      /Browser authentication helper completed and required state is present; this does not prove sign-in/
+      /Browser authentication completed and required state is ready/
     );
-    assert.match(executed.stdout, /authenticated browser proof for the selected job and environment/);
-    assert.doesNotMatch(executed.stdout, /required state is ready/);
     assert.equal(
       readFileSync(
         join(frontendDirectory, "e2e", ".auth", "user.json"),
@@ -805,8 +803,6 @@ test("doctor launches the configured Playwright browser", () => {
     const result = run(["doctor", repository], repository);
 
     assert.match(result.stdout, /PASS  Playwright package/);
-    assert.doesNotMatch(result.stdout, /FixLab is ready for/);
-    assert.match(result.stdout, /does not prove an authenticated browser session/);
     assert.match(
       result.stdout,
       /PASS  Playwright browser \(chromium channel msedge launched successfully\)/
@@ -1091,7 +1087,6 @@ test("run launches the Agency-resolved FixLab agent", () => {
     const profile = JSON.parse(readFileSync(profilePath, "utf8"));
     profile.browserAutomation.testSynthesis.defaultDataSource =
       "non-production-read-only";
-    profile.workflow.publication = "ready";
     writeFileSync(profilePath, JSON.stringify(profile));
     mkdirSync(executableDirectory);
     const executable = join(
@@ -1274,10 +1269,9 @@ test("run launches the FixLab plugin directly through Copilot", () => {
     );
     assert.match(result.stdout, /--autopilot/);
     assert.match(result.stdout, /transient validation artifacts/);
-    assert.match(result.stdout, /authorized DRAFT pull request now/);
-    assert.match(result.stdout, /read back provider isDraft=true before reporting publication passed/);
-    assert.match(result.stdout, /Marking ready requires a separate reviewed decision/);
-    assert.doesNotMatch(result.stdout, /gh pr ready|az repos pr update/);
+    assert.match(result.stdout, /publish the authorized PR by marking it ready for review/);
+    assert.match(result.stdout, /Do not wait for remote PR CI or build completion before publication/);
+    assert.match(result.stdout, /Verify the PR is no longer draft before reporting the PR stage passed/);
     assert.match(result.stdout, /\*\.auth\.spec\.ts/);
     assert.match(result.stdout, /Request: repair the defect/);
     assert.doesNotMatch(result.stdout, /--interactive repair the defect/);
@@ -1434,12 +1428,6 @@ test("run without a request keeps Copilot environment guidance interactive", () 
       result.stdout,
       /Use development as the user-selected validation environment/
     );
-    assert.match(result.stdout, /authorized DRAFT pull request now/);
-    assert.match(result.stdout, /Broader local unit tests are optional and are not automatically requested/);
-    assert.match(result.stdout, /Optional builds are not automatically requested/);
-    assert.match(result.stdout, /Leave their status not run\/pending/);
-    assert.doesNotMatch(result.stdout, /READY-FOR-REVIEW|After creating the PR, run the broader local unit-test/);
-    assert.doesNotMatch(result.stdout, /delivery policy[^:\r\n]*:\r?\n/);
     assert.doesNotMatch(result.stdout, /--session-id/);
     assert.doesNotMatch(result.stdout, /--no-ask-user/);
     assert.doesNotMatch(result.stdout, /--autopilot/);

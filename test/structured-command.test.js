@@ -3,48 +3,20 @@ import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import {
   existsSync,
-  cpSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   writeFileSync
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
-import test, { after } from "node:test";
+import test from "node:test";
 import {
   executeStructuredCommand,
-  resolveWindowsAzureCommand,
   parseStructuredCommandArguments
 } from "../bin/structured-command.js";
-
-test("Windows Azure launcher uses only the canonical CLI2 Python and preserves argv without a shell", (t) => {
-  const directory = mkdtempSync(join(tmpdir(), "fixlab-azure-"));
-  t.after(() => rmSync(directory, { recursive: true, force: true }));
-  const cli = join(directory, "CLI2");
-  const wbin = join(cli, "wbin");
-  mkdirSync(wbin, { recursive: true });
-  const wrapper = join(wbin, "az.cmd");
-  const python = join(cli, "python.exe");
-  writeFileSync(wrapper, "@echo off\n");
-  writeFileSync(python, "synthetic fixture, never executed");
-  const args = ["repos", "pr", "show", "--id", "1", "--query", "title | length(@)", "--output", "json"];
-  assert.deepEqual(resolveWindowsAzureCommand("az", args, "win32", wbin),
-    { command: python, args: ["-m", "azure.cli", ...args] });
-  assert.deepEqual(resolveWindowsAzureCommand(wrapper, args, "win32", ""),
-    { command: python, args: ["-m", "azure.cli", ...args] });
-  for (const [command, platform, path] of [
-    ["az", "linux", wbin], ["other", "win32", wbin],
-    [join("relative", "az.cmd"), "win32", wbin], ["az", "win32", directory]
-  ]) {
-    assert.equal(resolveWindowsAzureCommand(command, args, platform, path), null);
-  }
-  rmSync(python);
-  assert.equal(resolveWindowsAzureCommand("az", args, "win32", wbin), null);
-});
 
 function git(repository, args) {
   const result = spawnSync("git", args, {
@@ -55,24 +27,21 @@ function git(repository, args) {
   assert.equal(result.status, 0, result.stderr);
 }
 
-let repositoryTemplate;
-after(() => {
-  if (repositoryTemplate) {
-    rmSync(repositoryTemplate, { recursive: true, force: true });
-  }
-});
-
 function createRepository() {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-structured-"));
-  if (!repositoryTemplate) {
-    repositoryTemplate = mkdtempSync(join(tmpdir(), "fixlab-structured-template-"));
-    git(repositoryTemplate, ["init", "--quiet"]);
-    writeFileSync(join(repositoryTemplate, "tracked.txt"), "initial\n");
-    git(repositoryTemplate, ["add", "tracked.txt"]);
-    git(repositoryTemplate, ["-c", "user.name=FixLab Test", "-c",
-      "user.email=fixlab@example.test", "commit", "--quiet", "-m", "initial"]);
-  }
-  cpSync(repositoryTemplate, repository, { recursive: true });
+  git(repository, ["init", "--quiet"]);
+  writeFileSync(join(repository, "tracked.txt"), "initial\n");
+  git(repository, ["add", "tracked.txt"]);
+  git(repository, [
+    "-c",
+    "user.name=FixLab Test",
+    "-c",
+    "user.email=fixlab@example.test",
+    "commit",
+    "--quiet",
+    "-m",
+    "initial"
+  ]);
   return repository;
 }
 
@@ -212,11 +181,8 @@ test("oversized lines remain bounded and never expose partial credentials", asyn
   }
 });
 
-test("external worktree validation reuses only identical state and valid owned metadata", async () => {
-  const primary = createRepository();
-  const external = mkdtempSync(join(tmpdir(), "fixlab-external-worktree-"));
-  const repository = join(external, "checkout");
-  git(primary, ["worktree", "add", "--quiet", "--detach", repository, "HEAD"]);
+test("successful deterministic validation is reused only for identical repository state", async () => {
+  const repository = createRepository();
   let executions = 0;
   const spawn = () => {
     executions += 1;
@@ -273,19 +239,6 @@ test("external worktree validation reuses only identical state and valid owned m
     );
     assert.match(secondOutput.text(), /^REUSED fixlab exec/mu);
     assert.equal(executions, 1);
-    const evidenceRoot = join(primary, ".git", "worktrees", "checkout", "fixlab", "command-evidence");
-    assert.equal(existsSync(evidenceRoot), true, "evidence belongs to the real external worktree Git directory");
-    assert.equal(existsSync(join(repository, ".git", "fixlab")), false);
-    const cachePath = join(evidenceRoot, "cache", readdirSync(join(evidenceRoot, "cache"))[0]);
-    for (const malformed of ["{", JSON.stringify({ status: 0, evidenceDirectory: primary })]) {
-      writeFileSync(cachePath, malformed);
-      const malformedErrors = capture();
-      assert.equal(await executeStructuredCommand(options, {
-        stdout: capture().stream, stderr: malformedErrors.stream, spawn
-      }), 0);
-      assert.match(malformedErrors.text(), /Ignored (?:malformed|invalid)/);
-    }
-    assert.equal(executions, 3);
 
     writeFileSync(join(repository, "tracked.txt"), "changed\n");
     const changedOutput = capture();
@@ -298,7 +251,7 @@ test("external worktree validation reuses only identical state and valid owned m
       0
     );
     assert.match(changedOutput.text(), /^PASS fixlab exec/mu);
-    assert.equal(executions, 4);
+    assert.equal(executions, 2);
 
     writeFileSync(join(repository, "tracked.txt"), "changed again\n");
     const changedAgainOutput = capture();
@@ -311,10 +264,9 @@ test("external worktree validation reuses only identical state and valid owned m
       0
     );
     assert.match(changedAgainOutput.text(), /^PASS fixlab exec/mu);
-    assert.equal(executions, 5);
+    assert.equal(executions, 3);
   } finally {
-    rmSync(external, { recursive: true, force: true });
-    rmSync(primary, { recursive: true, force: true });
+    rmSync(repository, { recursive: true, force: true });
   }
 });
 
@@ -508,7 +460,6 @@ test("timed out commands return exit code 124", async () => {
   const repository = createRepository();
   const errors = capture();
   let spawnedAt;
-  let result;
   const spawn = () => {
     spawnedAt = Date.now();
     const child = new EventEmitter();
@@ -533,93 +484,12 @@ test("timed out commands return exit code 124", async () => {
         stdout: capture().stream,
         stderr: errors.stream,
         spawn,
-        onResult(value) { result = value; },
         terminationGraceMs: 10
       }
     );
     assert.equal(status, 124);
-    assert.equal(result.terminationVerified, false);
     assert.equal(Date.now() - spawnedAt < 2000, true);
-    assert.match(errors.text(), /exceeded.*requesting owned-tree termination/is);
-  } finally {
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("owned Windows settlement failures never report success", { skip: process.platform !== "win32" }, async () => {
-  const repository = createRepository();
-  try {
-    for (const failure of ["proof", "descendants", "terminate", "post-spawn", "missing-close"]) {
-      const errors = capture();
-      const controller = new AbortController();
-      let result;
-      let stops = 0;
-      const status = await executeStructuredCommand({
-        repository, cwd: repository, stage: "test", reuse: false,
-        timeoutSeconds: 0, command: process.execPath, commandArgs: ["--version"]
-      }, {
-        ownProcessTree: true, signal: controller.signal, terminationGraceMs: 5,
-        stdout: capture().stream, stderr: errors.stream,
-        onResult(value) { result = value; },
-        spawnWindowsExecutor() {
-          const child = new EventEmitter();
-          child.pid = 12345; // Synthetic PID; only the injected containment handles it.
-          child.stdout = new PassThrough();
-          child.stderr = new PassThrough();
-          queueMicrotask(() => {
-            if (["terminate", "missing-close"].includes(failure)) {
-              controller.abort();
-            } else if (failure === "post-spawn") {
-              child.emit("error", new Error("Synthetic post-spawn failure"));
-            }
-            if (failure !== "missing-close") { child.emit("close", 0, null); }
-          });
-          return {
-            child,
-            terminate() {
-              stops++;
-              if (failure === "terminate") { throw new Error("Synthetic stop failure"); }
-            },
-            hasStopped() {
-              if (failure === "proof") { throw new Error("Synthetic invalid proof"); }
-              return failure !== "descendants";
-            }
-          };
-        }
-      });
-      assert.notEqual(status, 0, failure);
-      assert.equal(result.terminationVerified, ["terminate", "post-spawn", "missing-close"].includes(failure), failure);
-      assert.match(errors.text(), /lease must remain held|command failure retained/);
-      if (result.terminationVerified) {
-        assert.match(result.stderr.tail.join("\n"), /stopped proof verified/);
-      }
-      assert.equal(stops, ["terminate", "post-spawn", "missing-close"].includes(failure) ? 1 : 0);
-    }
-    for (const failure of ["false", "throw"]) {
-      const controller = new AbortController();
-      let result;
-      const status = await executeStructuredCommand({
-        repository, cwd: repository, stage: "test", reuse: false,
-        timeoutSeconds: 0, command: process.execPath, commandArgs: ["--version"]
-      }, {
-        signal: controller.signal, terminationGraceMs: 5,
-        stdout: capture().stream, stderr: capture().stream,
-        onResult(value) { result = value; },
-        spawn() {
-          const child = new EventEmitter();
-          child.stdout = new PassThrough();
-          child.stderr = new PassThrough();
-          child.kill = () => {
-            if (failure === "throw") { throw new Error("Synthetic signal failure"); }
-            return false;
-          };
-          queueMicrotask(() => { controller.abort(); child.emit("close", 0, null); });
-          return child;
-        }
-      });
-      assert.equal(status, 130);
-      assert.equal(result.terminationVerified, false);
-    }
+    assert.match(errors.text(), /exceeded.*terminated/is);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }

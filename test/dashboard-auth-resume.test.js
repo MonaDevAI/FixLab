@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { runInNewContext } from "node:vm";
 
 const appSource = readFileSync(
   new URL("../dashboard/public/app.js", import.meta.url),
@@ -39,46 +38,17 @@ test("connecting Playwright starts the frontend first", () => {
   assert.match(appSource, /\/api\/frontend\/start/u);
 });
 
-test("the live test is retried only after successful authentication", async () => {
+test("the live test is retried only after successful authentication", () => {
   const start = appSource.indexOf("async function resumeAfterConnect");
   const body = appSource.slice(
     start,
-    appSource.indexOf("\nfunction renderFrontendStatus", start)
+    appSource.indexOf("async function refreshPlaywrightStatus")
   );
-  assert.ok(start >= 0 && body.includes("await retryLiveTest()"));
-  for (const scenario of [
-    { running: true, ready: true, ok: true, expected: 0, pending: "job" },
-    { ready: true, ok: false, expected: 0 },
-    { ready: false, ok: true, expected: 0 },
-    { ready: true, ok: true, jobId: "other", expected: 0 },
-    { ready: true, ok: true, jobStatus: "completed", expected: 0 },
-    { ready: true, ok: true, expected: 1 }
-  ]) {
-    let retries = 0;
-    const context = {
-      pendingRetryAfterConnectJobId: "job",
-      activeJob: {
-        id: scenario.jobId ?? "job",
-        status: scenario.jobStatus ?? "blocked"
-      },
-      formError: { textContent: "" },
-      retryLiveTest: async () => {
-        retries += 1;
-      }
-    };
-    const resume = runInNewContext(`(${body})`, context);
-    await resume({
-      running: scenario.running ?? false,
-      ready: scenario.ready,
-      lastResult: { ok: scenario.ok, message: "Authentication finished." }
-    });
-    assert.equal(retries, scenario.expected, JSON.stringify(scenario));
-    assert.equal(
-      context.pendingRetryAfterConnectJobId,
-      scenario.pending ?? null
-    );
-    if (!scenario.ok || !scenario.ready) {
-      assert.match(context.formError.textContent, /readiness is unverified/u);
-    }
-  }
+  assert.match(body, /status\.running/u);
+  assert.match(body, /if \(!result\.ok\)/u);
+  assert.match(body, /activeJob\?\.id === jobId/u);
+  assert.match(body, /activeJob\.status === "blocked"/u);
+  assert.ok(
+    body.indexOf("if (!result.ok)") < body.indexOf("await retryLiveTest()")
+  );
 });
