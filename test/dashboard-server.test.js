@@ -370,6 +370,120 @@ test("dashboard readiness blocks a missing explicit Playwright configuration", (
   }
 });
 
+function apiProfile() {
+  const profile = validProfile({
+    applications: {
+      backend: {
+        workingDirectory: ".",
+        command: "dotnet run",
+        port: 5087,
+        healthUrl: "http://127.0.0.1:5087/health"
+      }
+    }
+  });
+  delete profile.browserAutomation.browser;
+  profile.browserAutomation.mode = "api";
+  profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+  profile.browserAutomation.testSynthesis.mutationMode = "none";
+  profile.browserAutomation.dataSafety.allowedOrigins = ["http://127.0.0.1:5087"];
+  profile.browserAutomation.dataSafety.allowedMethods = ["GET", "HEAD"];
+  return profile;
+}
+
+test("API-only readiness requires backend, authentication and read-only safety without a frontend", () => {
+  const repository = createRepository();
+  const path = join(repository, ".github", "fixlab", "repository-profile.json");
+  const inspect = (profile) => {
+    writeFileSync(path, JSON.stringify(profile));
+    return inspectRepository(repository);
+  };
+  try {
+    const ready = inspect(apiProfile());
+    assert.equal(ready.profileReady, true, ready.error);
+    assert.equal(ready.playwrightMode, "api");
+    for (const [change, message] of [
+      [(p) => { delete p.applications.backend; }, /applications\.backend/],
+      [(p) => { p.applications.backend.port = 0; }, /applications\.backend\.port/],
+      [(p) => { p.applications.backend.healthUrl = "https://example.invalid/health"; }, /credential-free loopback/],
+      [(p) => { p.browserAutomation.mode = "unknown"; }, /browserAutomation\.mode/],
+      [(p) => { p.browserAutomation.authentication.required = true; }, /authentication\.command/],
+      [(p) => { p.browserAutomation.dataSafety.productionAllowed = true; }, /productionAllowed=false/],
+      [(p) => { p.browserAutomation.dataSafety.allowedOrigins = []; }, /allowedOrigins/],
+      [(p) => { p.browserAutomation.dataSafety.allowedOrigins = ["http://example.invalid"]; }, /allowedOrigins/],
+      [(p) => { p.browserAutomation.dataSafety.allowedOrigins = ["https://example.invalid/path"]; }, /allowedOrigins/],
+      [(p) => { p.browserAutomation.dataSafety.allowedMethods = ["POST"]; }, /allowedMethods/],
+      [(p) => { p.browserAutomation.testSynthesis.mutationMode = "intercepted"; }, /mutationMode=none/],
+      [(p) => { delete p.browserAutomation.testCommand; }, /testCommand/]
+    ]) {
+      const profile = apiProfile();
+      change(profile);
+      const readiness = inspect(profile);
+      assert.equal(readiness.profileReady, false, String(message));
+      assert.match(readiness.error, message);
+    }
+    const browser = validProfile();
+    delete browser.applications.frontend;
+    assert.match(inspect(browser).error, /applications\.frontend/);
+    const fixture = apiProfile();
+    fixture.browserAutomation.testSynthesis.defaultDataSource = "local-fixture";
+    assert.equal(configuredTestSynthesis(fixture, "none").mutationMode, "none");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("API-only jobs bypass browser ownership but reject UI options and require live scenario evidence", async () => {
+  const repository = createRepository();
+  const profile = apiProfile();
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  let ownershipCalls = 0;
+  let prompt;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    for (const stage of FIXLAB_STAGES) {
+      input.onOutput("stdout", `FIXLAB_STAGE|${stage}|${["intake", "local-stack", "live-test"].includes(stage) ? "passed" : "skipped"}|API fixture\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  }, undefined, {
+    autoTestEvidence: false,
+    browserOwnership: () => { ownershipCalls += 1; throw new Error("API tests must not inspect browser profiles"); }
+  });
+  try {
+    for (const option of ["manualLocalhostTest", "prestartFrontend", "recordPlaywrightVideo", "runAllUiScenarios"]) {
+      const result = await jsonRequest(url, "/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Read the API.", mode: "playwright-only", [option]: true })
+      });
+      assert.equal(result.response.status, 400);
+      assert.match(result.body.error, /API-only Playwright validation/);
+    }
+    const intercepted = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Read the API.", mode: "playwright-only", testMutationMode: "intercepted" })
+    });
+    assert.equal(intercepted.response.status, 400);
+    assert.match(intercepted.body.error, /page interception does not protect APIRequestContext/);
+    const result = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Read the API.", mode: "playwright-only" })
+    });
+    assert.equal(result.response.status, 202);
+    const state = await jsonRequest(url, "/api/job");
+    assert.equal(ownershipCalls, 0);
+    assert.match(prompt, /Playwright-only mode: API validation/);
+    assert.match(prompt, /APIRequestContext/);
+    assert.match(prompt, /does not inherit page\.route interception/);
+    assert.equal(state.body.job.stages["live-test"].status, "failed");
+    assert.match(state.body.job.error, /FIXLAB_TEST scenario evidence/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("dashboard readiness blocks an incomplete live-test profile", () => {
   const repository = createRepository();
   const profilePath = join(
@@ -6868,6 +6982,35 @@ test("browser-only instructions are bounded and retain request, policy and execu
   assert.match(browser, /FIXLAB_TEST/);
   assert.match(browser, /FIXLAB_BUG/);
   assert.doesNotMatch(browser, /early-draft|commit and push|--draft false/);
+});
+
+test("API-only guidance retains safety and evidence across runtime and initialized agent entry points", () => {
+  const prompt = buildJobPrompt({
+    request: "Validate the read-only API.", mode: "playwright-only",
+    testEvidence: configuredTestSynthesis(apiProfile())
+  });
+  assert.match(prompt, /APIRequestContext/);
+  assert.match(prompt, /synthetic responses never prove a live API passed/);
+  for (const path of [
+    "../agents/fixlab.md",
+    "../com.github.copilot/agents/fixlab.agent.md",
+    "../templates/fixlab-autofix.agent.md",
+    "../.github/agents/fixlab-autofix.agent.md",
+    "../.github/agents/fixlab.agent.md"
+  ]) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    for (const phrase of ["APIRequestContext", "dataSafety.allowedOrigins", "allowedMethods", "page.route", "FIXLAB_TEST", "at most 120 words", "required headings/fields"]) {
+      assert.ok(source.includes(phrase), `${path} must include ${phrase}`);
+    }
+  }
+  const cliSource = readFileSync(new URL("../bin/fixlab.js", import.meta.url), "utf8");
+  assert.match(cliSource, /profile\.browserAutomation\?\.mode === "api" \? \[API_ONLY_PLAYWRIGHT_GUIDANCE\]/);
+  assert.match(cliSource, /!readOnly \? \[CONCISE_PR_GUIDANCE\]/);
+  const editingPrompt = buildJobPrompt({ request: "Fix a defect.", mode: "fix-and-validate" });
+  assert.match(editingPrompt, /Keep PR descriptions concise, normally at most 120 words/);
+  assert.match(editingPrompt, /Preserve every required template heading\/field/);
+  assert.match(editingPrompt, /Keep failed, skipped, pending and not-run checks explicit/);
+  assert.match(readFileSync(new URL("../prompts/fixlab.pr.prompt.md", import.meta.url), "utf8"), /at most 120 words/);
 });
 
 test("small-enhancement prompt uses the risk-scaled fast path", () => {

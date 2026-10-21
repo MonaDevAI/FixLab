@@ -103,6 +103,38 @@ test("repository settings reject stale plans and never replace an active executo
   }
 });
 
+test("API-only repository settings never add a frontend or browser and retain backend safety", () => {
+  const repository = fixture();
+  try {
+    applyRepositorySettings(plan(repository), "synthetic-settings-owner");
+    const path = join(repository, SETUP_PROFILE_PATH);
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    delete profile.applications.frontend;
+    profile.applications.backend = {
+      command: "dotnet run", workingDirectory: ".", port: 5087,
+      healthUrl: "http://127.0.0.1:5087/health"
+    };
+    delete profile.browserAutomation.browser;
+    profile.browserAutomation.mode = "api";
+    profile.browserAutomation.dataSafety.allowedOrigins = ["http://127.0.0.1:5087"];
+    profile.browserAutomation.dataSafety.allowedMethods = ["GET"];
+    profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+    profile.browserAutomation.testSynthesis.mutationMode = "none";
+    writeFileSync(path, JSON.stringify(profile));
+    assert.equal(inspectRepositorySettings(repository).fields.some((field) => field.key.startsWith("frontend")), false);
+    const preview = plan(repository, { name: "Updated API workspace" }, false);
+    assert.equal(preview.profile.applications.frontend, undefined);
+    assert.equal(preview.profile.browserAutomation.browser, undefined);
+    assert.equal(preview.profile.browserAutomation.mode, "api");
+    assert.deepEqual(preview.profile.browserAutomation.dataSafety, profile.browserAutomation.dataSafety);
+    assert.throws(() => plan(repository, { backendEnabled: false }, false), /requires a configured backend/);
+    applyRepositorySettings(preview, "synthetic-settings-owner");
+    assert.equal(validateLiveTestProfile(JSON.parse(readFileSync(path, "utf8"))).ok, true);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("repository configuration rejects traversal, credential commands and unsafe health or environment settings", () => {
   const repository = fixture();
   try {

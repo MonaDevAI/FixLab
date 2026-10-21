@@ -1110,9 +1110,23 @@ function renderReadiness(readiness) {
   document.querySelector("#workspace-title").textContent = readiness.profileName || "FixLab";
   document.querySelector("#workspace-repository").textContent = readiness.repository;
   const ready = readiness.repositoryReady && readiness.profileReady;
+  const apiOnly = readiness.playwrightMode === "api";
+  for (const name of ["prestartFrontend", "manualLocalhostTest", "recordPlaywrightVideo", "runAllUiScenarios"]) {
+    const input = document.querySelector(`[name="${name}"]`);
+    if (input) {
+      input.disabled = apiOnly;
+      if (apiOnly) { input.checked = false; }
+    }
+  }
+  const mutationSelect = document.querySelector('[name="testMutationMode"]');
+  const interceptedOption = mutationSelect?.querySelector('option[value="intercepted"]');
+  if (interceptedOption) { interceptedOption.disabled = apiOnly; }
+  if (apiOnly && mutationSelect?.value === "intercepted") {
+    mutationSelect.value = "";
+  }
   document.querySelector("#welcome-add-repository").hidden = ready;
   document.querySelector("#welcome-guidance").textContent = ready
-    ? "Describe a bug, change, or browser check."
+    ? `Describe a bug, change, or ${apiOnly ? "API" : "browser"} check.`
     : "Set up a repository to get started.";
   readinessElement.className = `readiness ${ready ? "ready" : "blocked"}`;
   readinessElement.textContent = ready

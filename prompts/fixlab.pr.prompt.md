@@ -12,6 +12,12 @@ completed and running checks, browser evidence, skipped gates, and remaining
 risks. Never mark the PR ready or complete the PR stage until every required
 local gate passes or repository policy records an explicitly accepted outcome.
 
+Keep the description short, normally at most 120 words unless required template
+fields or material risks need more. Preserve required headings, a brief
+problem/change summary, compact actual validation outcomes and material
+risks/blockers. Keep failed, skipped, pending and not-run checks explicit.
+Link evidence instead of pasting logs, command transcripts or stage narration.
+
 After required local validation and approval gates pass or have an explicitly
 accepted outcome, publish the authorized PR by marking it ready for review.
 Do not wait for remote PR CI or build completion before publication; publication

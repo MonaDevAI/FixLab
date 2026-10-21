@@ -150,6 +150,67 @@ FixLab replaces `{userId}` with the configured value and instructs the agent to
 create branches beneath the resolved prefix. It never substitutes `copilot`,
 `fixlab`, or another runtime name for the repository user's ID.
 
+## API-only Playwright validation
+
+For a backend-only repository, keep its real `applications.backend` startup
+command, working directory, loopback health URL and port. Do not add a dummy
+frontend. Use an isolated repository-local Playwright workspace and configure:
+
+```json
+{
+  "browserAutomation": {
+    "mode": "api",
+    "workingDirectory": "api-tests",
+    "package": "@playwright/test",
+    "testCommand": "npm test",
+    "authentication": {
+      "required": false
+    },
+    "dataSafety": {
+      "policy": "Only reviewed read-only API paths on the allowlisted local backend.",
+      "productionAllowed": false,
+      "allowedOrigins": ["http://127.0.0.1:5087"],
+      "allowedMethods": ["GET", "HEAD", "OPTIONS"]
+    },
+    "testSynthesis": {
+      "enabled": true,
+      "defaultDataSource": "non-production-read-only",
+      "mutationMode": "none",
+      "requireScenarioEvidence": true
+    }
+  }
+}
+```
+
+Set `authentication.required: true` for protected APIs, with the real
+repository-owned authentication `command`, fresh read-only API `proofCommand`,
+and `statusPaths`. Status files can be non-sensitive authentication receipts;
+never fabricate them or put tokens, cookies or browser state into copied
+worktree configuration. A helper exit, receipt or Azure CLI login is not proof
+of a valid API token for the intended audience. Obtain credentials through
+the approved human-controlled flow and verify authenticated API access afresh.
+
+Run `fixlab setup-playwright <repository>` to review the package-only plan;
+`--yes` installs the package when missing, never a browser in API mode.
+`fixlab doctor` verifies the API request runtime without contacting the backend.
+It does not prove the backend is healthy or authenticated. Existing profiles
+without `mode` retain browser validation.
+
+Use the normal `playwright-only` job mode for read-only API validation.
+The repository runner must use `APIRequestContext` and enforce the origin and
+read-only operation allowlists before every request. Reject or disable
+redirects (`maxRedirects: 0`) so credentials cannot reach another origin.
+`page.route` interception does not apply to API requests. This initial API mode
+does not authorize mutation testing or UI-intercepted simulation. Safe local
+API fixtures may use `defaultDataSource: "local-fixture"`; they must not be
+reported as validation of a deployed backend.
+
+Preserve sanitized method/path/status and schema assertions with `FIXLAB_TEST`
+scenario evidence. Do not retain authorization headers, cookies, sensitive
+bodies or credential-bearing traces. API-only jobs need no screenshots,
+browser profile, video or manual React gate. Missing startup, configuration,
+permissions or API authentication blocks live testing, not a synthetic pass.
+
 ## Worktree setup
 
 ### Reusing one checkout for sequential jobs

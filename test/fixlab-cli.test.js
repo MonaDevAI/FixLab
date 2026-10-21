@@ -512,6 +512,58 @@ test("doctor blocks when Playwright is unavailable", () => {
   }
 });
 
+test("API-only Doctor initializes request contexts without launching a browser or proving sign-in", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-api-"));
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const path = join(repository, ".github", "fixlab", "repository-profile.json");
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    profile.applications = { backend: {
+      workingDirectory: ".", command: "dotnet run", port: 5087,
+      healthUrl: "http://127.0.0.1:5087/health"
+    } };
+    profile.browserAutomation.mode = "api";
+    profile.browserAutomation.workingDirectory = ".";
+    delete profile.browserAutomation.browser;
+    profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+    profile.browserAutomation.testSynthesis.mutationMode = "none";
+    profile.browserAutomation.dataSafety.allowedOrigins = ["http://127.0.0.1:5087"];
+    profile.browserAutomation.dataSafety.allowedMethods = ["GET"];
+    delete profile.validation.commands.frontendRestore;
+    writeFileSync(path, JSON.stringify(profile));
+    const packageDirectory = join(repository, "node_modules", "@playwright", "test");
+    mkdirSync(packageDirectory, { recursive: true });
+    const modulePath = join(packageDirectory, "index.js");
+    writeFileSync(modulePath,
+      "exports.request = { newContext: async () => ({ dispose: async () => {} }) }; exports.chromium = { launch: () => { throw Error('browser-must-not-launch'); } };");
+    const result = run(["doctor", repository], repository);
+    assert.match(result.stdout, /PASS  Live-test profile/);
+    assert.match(result.stdout, /PASS  Playwright API \(APIRequestContext initialized without a browser\)/);
+    assert.match(result.stdout, /Doctor does not prove API health or API authentication/);
+    assert.doesNotMatch(result.stdout + result.stderr, /Playwright browser|browser-must-not-launch/);
+    const ready = run(["setup-playwright", repository], repository);
+    assert.equal(ready.status, 0, ready.stderr);
+    assert.match(ready.stdout, /Playwright is already ready/);
+    writeFileSync(modulePath, "exports.request = { newContext: async () => { throw Error('fixture-sensitive-detail'); } };");
+    const failed = run(["doctor", repository], repository);
+    assert.equal(failed.status, 1);
+    assert.match(failed.stdout, /FAIL  Playwright API/);
+    assert.doesNotMatch(failed.stdout + failed.stderr, /fixture-sensitive-detail/);
+    rmSync(join(repository, "node_modules"), { recursive: true, force: true });
+    const plan = run(["setup-playwright", repository], repository);
+    assert.equal(plan.status, 0, plan.stderr);
+    assert.match(plan.stdout, /npm install --save-dev @playwright\/test/);
+    assert.doesNotMatch(plan.stdout, /playwright install/);
+    profile.browserAutomation.mode = "unsupported";
+    writeFileSync(path, JSON.stringify(profile));
+    const invalid = run(["setup-playwright", repository, "--yes"], repository);
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /browserAutomation.mode must be browser or api/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("doctor and prepare block a broken frontend package manager", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
   const executableDirectory = join(repository, "bin");

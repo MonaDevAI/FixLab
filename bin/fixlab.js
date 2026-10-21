@@ -47,7 +47,7 @@ import {
 } from "../dashboard/repository-setup.js";
 import { runValidationGate } from "./validation-gate-client.js";
 import { installNotifications } from "./notifications.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE } from "../dashboard/workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE } from "../dashboard/workflow-policy.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -108,9 +108,9 @@ Commands:
   prepare   Plan or run repository-owned frontend and backend restore commands.
   doctor    Check required tools and repository configuration.
   setup-playwright
-            Plan or install the repository-local Playwright package and browser.
+            Plan or install Playwright; API-only profiles need no browser.
   authenticate
-            Plan or run the repository-owned browser authentication command.
+            Plan or run the repository-owned browser or API authentication command.
   exec      Run a command with compact structured output and private evidence.
   gate      Run a profile-defined validation gate owned by a dashboard job.
   run       Launch the FixLab agent for a request.
@@ -304,6 +304,8 @@ function loadProfile(repository) {
 
 function checkPlaywright(repository, profile) {
   const configuration = profile?.browserAutomation ?? {};
+  const apiOnly = configuration.mode === "api";
+  const runtimeName = apiOnly ? "Playwright API" : "Playwright browser";
   const workingDirectory = resolve(
     repository,
     configuration.workingDirectory ??
@@ -323,7 +325,7 @@ function checkPlaywright(repository, profile) {
     const detail = `working directory is missing: ${workingDirectory}`;
     return {
       packageCheck: { name: "Playwright package", ok: false, detail },
-      browserCheck: { name: "Playwright browser", ok: false, detail }
+      browserCheck: { name: runtimeName, ok: false, detail }
     };
   }
 
@@ -360,9 +362,40 @@ function checkPlaywright(repository, profile) {
     return {
       packageCheck,
       browserCheck: {
-        name: "Playwright browser",
+        name: runtimeName,
         ok: false,
         detail: "not checked because the Playwright package is unavailable"
+      }
+    };
+  }
+
+  if (apiOnly) {
+    const apiProbe = `
+      const { request } = require(${JSON.stringify(resolvedPackage)});
+      (async () => {
+        const context = await request.newContext();
+        await context.dispose();
+        process.stdout.write("APIRequestContext initialized without a browser");
+      })().catch(() => {
+        process.stderr.write("Playwright APIRequestContext initialization failed");
+        process.exit(1);
+      });
+    `;
+    const apiResult = spawnSync(process.execPath, ["-e", apiProbe], {
+      cwd: workingDirectory,
+      encoding: "utf8",
+      timeout: 15000,
+      windowsHide: true
+    });
+    const expected = "APIRequestContext initialized without a browser";
+    return {
+      packageCheck,
+      browserCheck: {
+        name: runtimeName,
+        ok: apiResult.status === 0 && apiResult.stdout === expected,
+        detail: apiResult.status === 0 && apiResult.stdout === expected
+          ? expected
+          : "Playwright APIRequestContext initialization failed; verify the configured package"
       }
     };
   }
@@ -609,7 +642,9 @@ function doctor(repository, runtime) {
     console.log(`${check.ok ? "PASS" : "FAIL"}  ${check.name} (${check.detail})`);
   }
 
-  console.log("Doctor does not prove an authenticated browser session. Required sign-in needs the owning job's fresh authentication proof.");
+  console.log(profile?.browserAutomation?.mode === "api"
+    ? "Doctor does not prove API health or API authentication. Live validation needs the owning job's fresh API proof."
+    : "Doctor does not prove an authenticated browser session. Required sign-in needs the owning job's fresh authentication proof.");
   const failed = checks.filter((check) => !check.ok);
   if (failed.length > 0) {
     console.error(`FixLab doctor found ${failed.length} blocking check(s).`);
@@ -789,6 +824,10 @@ function setupPlaywright(repository, approved) {
   }
 
   const configuration = profile.browserAutomation ?? {};
+  if (configuration.mode !== undefined && !["browser", "api"].includes(configuration.mode)) {
+    console.error("browserAutomation.mode must be browser or api before Playwright setup.");
+    return 1;
+  }
   const workingDirectory = resolve(
     repository,
     configuration.workingDirectory ??
@@ -820,7 +859,9 @@ function setupPlaywright(repository, approved) {
     packageManager,
     packageName,
     browserTarget
-  ).filter((_, index) => index > 0 || !current.packageCheck.ok);
+  ).filter((_, index) => index === 0
+    ? !current.packageCheck.ok
+    : configuration.mode !== "api");
 
   console.log(`Playwright setup directory: ${workingDirectory}`);
   console.log(`Detected package manager: ${packageManager}`);
@@ -856,7 +897,9 @@ function setupPlaywright(repository, approved) {
     return 1;
   }
 
-  console.log("Playwright setup and browser launch verification completed.");
+  console.log(configuration.mode === "api"
+    ? "Playwright API setup and request-context verification completed; no browser installed."
+    : "Playwright setup and browser launch verification completed.");
   return 0;
 }
 
@@ -871,6 +914,7 @@ function authenticate(repository, approved) {
   }
 
   const browserAutomation = profile.browserAutomation ?? {};
+  const authenticationLabel = browserAutomation.mode === "api" ? "API" : "Browser";
   const authentication = browserAutomation.authentication ?? {};
   if (
     authentication.required !== true ||
@@ -878,7 +922,7 @@ function authenticate(repository, approved) {
     !authentication.command.trim()
   ) {
     console.error(
-      "Repository profile does not define a required browser authentication command."
+      `Repository profile does not define a required ${authenticationLabel.toLowerCase()} authentication command.`
     );
     printTroubleshooting();
     return 1;
@@ -892,7 +936,7 @@ function authenticate(repository, approved) {
   );
   if (!existsSync(workingDirectory)) {
     console.error(
-      `Browser authentication working directory is missing: ${workingDirectory}`
+      `${authenticationLabel} authentication working directory is missing: ${workingDirectory}`
     );
     printTroubleshooting();
     return 1;
@@ -900,7 +944,7 @@ function authenticate(repository, approved) {
 
   const command = authentication.command.trim();
   const authenticationEnvironment = authentication.environment ?? {};
-  console.log("Browser authentication plan:");
+  console.log(`${authenticationLabel} authentication plan:`);
   console.log(`  command: ${redactCommandForDisplay(command)}`);
   console.log(`  working directory: ${workingDirectory}`);
   const environmentNames = Object.keys(authenticationEnvironment);
@@ -923,7 +967,7 @@ function authenticate(repository, approved) {
     windowsHide: true
   });
   if (result.status !== 0) {
-    console.error(`Browser authentication failed with exit code ${result.status ?? 1}.`);
+    console.error(`${authenticationLabel} authentication failed with exit code ${result.status ?? 1}.`);
     printTroubleshooting();
     return result.status ?? 1;
   }
@@ -933,13 +977,15 @@ function authenticate(repository, approved) {
     .filter((statusPath) => !existsSync(statusPath));
   if (missingStatusPaths.length > 0) {
     console.error(
-      `Browser authentication command completed, but required state is missing: ${missingStatusPaths.join(", ")}`
+      `${authenticationLabel} authentication command completed, but required state is missing: ${missingStatusPaths.join(", ")}`
     );
     printTroubleshooting();
     return 1;
   }
 
-  console.log("Browser authentication helper completed and required state is present; this does not prove sign-in. Run the repository-owned authenticated browser proof for the selected job and environment.");
+  console.log(browserAutomation.mode === "api"
+    ? "API authentication helper completed and its status is present; this does not replace the owning job's fresh API proof."
+    : "Browser authentication helper completed and required state is present; this does not prove sign-in. Run the repository-owned authenticated browser proof for the selected job and environment.");
   return 0;
 }
 
@@ -980,6 +1026,8 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
 
   const guidance = [
     COPILOT_EXECUTION_GUIDANCE,
+    ...(!readOnly ? [CONCISE_PR_GUIDANCE] : []),
+    ...(profile.browserAutomation?.mode === "api" ? [API_ONLY_PLAYWRIGHT_GUIDANCE] : []),
     "For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.",
     "Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For 'test this PR', verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.",
     "For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed; in strict workflow PR readiness stays blocked. Efficient delivery permits publication after focused checks and explicitly required pre-publication gates. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.",
