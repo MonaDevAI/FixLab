@@ -17,6 +17,8 @@ fields or material risks need more. Preserve required headings, a brief
 problem/change summary, compact actual validation outcomes and material
 risks/blockers. Keep failed, skipped, pending and not-run checks explicit.
 Link evidence instead of pasting logs, command transcripts or stage narration.
+Exclude token/cache counts, AI-credit totals and model-cost summaries from PR
+descriptions.
 
 After required local validation and approval gates pass or have an explicitly
 accepted outcome, publish the authorized PR by marking it ready for review.

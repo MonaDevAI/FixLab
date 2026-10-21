@@ -34,6 +34,8 @@ template or material risk requires more. Preserve required headings/fields,
 compact actual validation outcomes and material risks/blockers. Keep failed,
 skipped, pending and not-run checks explicit. Link evidence instead of pasting
 logs; omit repeated stage narration, full transcripts and redundant file lists.
+Exclude token/cache counts, AI-credit totals and model-cost summaries from PR
+descriptions.
 
 ## Copilot-first execution
 

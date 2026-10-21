@@ -195,6 +195,10 @@ Run `fixlab setup-playwright <repository>` to review the package-only plan;
 `fixlab doctor` verifies the API request runtime without contacting the backend.
 It does not prove the backend is healthy or authenticated. Existing profiles
 without `mode` retain browser validation.
+API-only jobs retain their mode across dashboard restart and resume, including
+older saved contexts restored against an explicitly API-only profile. Selecting
+a CLI environment preserves the same read-only API contract; it does not enable
+browser mutation interception or synthetic UI fallback.
 
 Use the normal `playwright-only` job mode for read-only API validation.
 The repository runner must use `APIRequestContext` and enforce the origin and

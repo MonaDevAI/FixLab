@@ -1208,6 +1208,47 @@ test("run launches the Agency-resolved FixLab agent", () => {
   }
 });
 
+for (const runtime of ["agency", "copilot"]) {
+  test(`${runtime} API-only CLI guidance never offers browser interception or synthetic fallback`, () => {
+    const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-api-"));
+    try {
+      assert.equal(run(["init", repository], repository).status, 0);
+      const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+      const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+      profile.browserAutomation.mode = "api";
+      profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+      profile.browserAutomation.testSynthesis.mutationMode = "none";
+      writeFileSync(profilePath, JSON.stringify(profile));
+      const executableDirectory = join(repository, "bin");
+      mkdirSync(executableDirectory);
+      const executable = join(executableDirectory, process.platform === "win32" ? `${runtime}.cmd` : runtime);
+      writeFileSync(executable, process.platform === "win32"
+        ? "@echo off\r\nmore\r\n" : "#!/bin/sh\ncat\n");
+      if (process.platform !== "win32") {
+        chmodSync(executable, 0o755);
+      }
+      const environment = {
+        PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+      };
+      for (const readOnly of [false, true]) {
+        const result = run(readOnly
+          ? ["validate", repository, "--pr", "123", "--runtime", runtime]
+          : ["run", repository, "--runtime", runtime, "--environment", "development", "--", "Check the API."],
+        repository, environment);
+        assert.equal(result.status, 0, result.stderr);
+        assert.match(result.stdout, /APIRequestContext/);
+        assert.match(result.stdout, /synthetic responses never prove a live API passed/);
+        if (!readOnly) {
+          assert.match(result.stdout, /Use development as the user-selected validation environment/);
+        }
+        assert.doesNotMatch(result.stdout, /intercept every mutating request|Fall back to synthetic-intercepted data|When fallback occurs, emit|synthetic pass proves the UI behavior only/);
+      }
+    } finally {
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
+
 test("Agency backend-first guidance requires both environment and read-only source", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
   const executableDirectory = join(repository, "bin");

@@ -557,6 +557,7 @@ function dashboardSnapshot(job) {
     manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: {
       enabled: job.testEvidence.enabled,
+      ...(job.testEvidence.apiOnly === true ? { apiOnly: true } : {}),
       source: job.testEvidence.source,
       mutationMode: job.testEvidence.mutationMode,
       ...(job.testEvidence.selectedMutationMode
@@ -650,6 +651,9 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    ...(profile.browserAutomation?.mode === "api"
+      ? { testEvidence: { ...snapshot.testEvidence, apiOnly: true } }
+      : {}),
     validationRecovered: true,
     permissionRequest: snapshot.permissionBlocked
       ? newPermissionRequest({ preflight: snapshot.permissionPreflightPending === true })
@@ -1328,7 +1332,7 @@ function parseTokenCount(value) {
 
 function parseUsageLine(line) {
   const match = line.match(
-    /Tokens\s+↑\s*([\d.]+\s*[kmb]?)\s+\(([\d.]+\s*[kmb]?)\s+cached,\s*([\d.]+\s*[kmb]?)\s+written\)\s+•\s+↓\s*([\d.]+\s*[kmb]?)/i
+    /^\s*Tokens\s+↑\s*([\d.]+\s*[kmb]?)\s+\(([\d.]+\s*[kmb]?)\s+cached,\s*([\d.]+\s*[kmb]?)\s+written\)\s+•\s+↓\s*([\d.]+\s*[kmb]?)\s*$/i
   );
   if (!match) {
     return null;
@@ -2474,16 +2478,19 @@ function splitRenderedMarkers(line) {
 }
 
 function appendLine(job, stream, line) {
+  const usage = parseUsageLine(line);
+  if (usage) {
+    if (job.runtime !== "copilot") {
+      job.usage = usage;
+    }
+    return;
+  }
   pushLog(job, {
     index: job.nextLogIndex,
     timestamp: new Date().toISOString(),
     stream,
     message: line
   });
-  const usage = parseUsageLine(line);
-  if (usage && job.runtime !== "copilot") {
-    job.usage = usage;
-  }
   if (runtimePermissionDenialLine(line)) {
     job.permissionRequest ??= newPermissionRequest();
   }
@@ -3960,6 +3967,8 @@ export function createDashboardServer({
         mode: job.mode,
         onUsage(usage) {
           job.usage = usage;
+          job.lastActivityAt = new Date().toISOString();
+          armIdleWatchdog();
         },
         onRuntimeRequests(requests) {
           job.runtimeRequests = requests;

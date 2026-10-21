@@ -1046,7 +1046,8 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
     ...(selectedEnvironment
       ? [
         `Use ${selectedEnvironment} as the user-selected validation environment for profile-defined application startup and Playwright live testing. Do not silently fall back to another environment; block with the exact prerequisite if ${selectedEnvironment} is unavailable or unsafe.`,
-        ...(profile.browserAutomation?.testSynthesis?.defaultDataSource ===
+        ...(profile.browserAutomation?.mode !== "api" &&
+        profile.browserAutomation?.testSynthesis?.defaultDataSource ===
         "non-production-read-only"
           ? [
               `Use the selected ${selectedEnvironment} backend and API as the primary business-data source. Keep backend access read-only and intercept every mutating request.`,

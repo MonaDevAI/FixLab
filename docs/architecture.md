@@ -54,6 +54,9 @@ with required repository-template fields, a brief summary, compact actual
 validation outcomes and material risks/blockers. Failed, skipped, pending and
 not-run checks remain explicit; evidence is linked rather than pasted as logs.
 Required templates and material risks can justify additional detail.
+PR descriptions exclude token/cache counts, AI-credit totals and model-cost
+summaries. Repeated runtime token meters are omitted from activity logs;
+structured usage metrics, persistence and input-token limits remain active.
 
 `dashboard/workflow-policy.js` supplies product-wide defaults for new jobs:
 `workflow: { mode: "efficient", publication: "draft", unitTestsAfterPr: false, optionalBuilds: false }`.
