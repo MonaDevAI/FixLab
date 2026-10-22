@@ -86,6 +86,7 @@ export function inspectRepositorySettings(repository) {
   const f = p.applications?.frontend ?? {};
   const b = p.applications?.backend ?? {};
   const browser = p.browserAutomation ?? {};
+  const apiOnly = browser.mode === "api";
   const auth = browser.authentication ?? {};
   const workflow = configuredWorkflow(p);
   const values = {
@@ -118,15 +119,19 @@ export function inspectRepositorySettings(repository) {
     }
   }
   return { repository: info.root, revision: info.revision, exists: info.exists,
-    fields: REPOSITORY_SETTING_FIELDS, values };
+    fields: apiOnly
+      ? REPOSITORY_SETTING_FIELDS.filter((field) => !field.key.startsWith("frontend"))
+      : REPOSITORY_SETTING_FIELDS, values };
 }
 
 function configuredProfile(root, original, values) {
+  const apiOnly = original.browserAutomation?.mode === "api";
   if (!values || typeof values !== "object" || Array.isArray(values) ||
       Object.keys(values).some((key) => !REPOSITORY_SETTING_FIELDS.some((field) => field.key === key))) {
     throw new Error("Only the displayed repository settings may be updated.");
   }
   for (const field of REPOSITORY_SETTING_FIELDS) {
+    if (apiOnly && field.key.startsWith("frontend")) { continue; }
     if (field.when && values[field.when] === false) { continue; }
     const value = values[field.key];
     if (field.type === "boolean" ? typeof value !== "boolean"
@@ -180,7 +185,11 @@ function configuredProfile(root, original, values) {
     throw new Error("Authenticated browser setup requires 1 to 8 relative status paths.");
   }
   for (const path of statusPaths) { setupPath(setupPath(root, browserDirectory), path); }
-  const applications = { ...original.applications, frontend: application("frontend", original.applications?.frontend) };
+  const applications = { ...original.applications };
+  if (!apiOnly) { applications.frontend = application("frontend", original.applications?.frontend); }
+  if (apiOnly && !values.backendEnabled) {
+    throw new Error("API-only Playwright validation requires a configured backend.");
+  }
   if (values.backendEnabled) { applications.backend = application("backend", original.applications?.backend); }
   else { delete applications.backend; }
   return {
@@ -192,7 +201,7 @@ function configuredProfile(root, original, values) {
     } }),
     validation: { ...original.validation, agentIdleTimeoutMinutes: values.idleTimeoutMinutes },
     browserAutomation: {
-      package: "@playwright/test", browser: "chromium", ...original.browserAutomation,
+      package: "@playwright/test", ...(!apiOnly ? { browser: "chromium" } : {}), ...original.browserAutomation,
       workingDirectory: browserDirectory, testCommand: values.browserCommand,
       testSynthesis: original.browserAutomation?.testSynthesis ?? {
         enabled: true, defaultDataSource: "synthetic-intercepted", mutationMode: "intercepted", requireScenarioEvidence: true

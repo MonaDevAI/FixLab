@@ -41,7 +41,7 @@ import { canonicalExecutionRepository, createExecutorLease } from "./executor-le
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, EXISTING_APPLICATION_GUIDANCE } from "./workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "./repository-settings.js";
 import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, stashReviewedSharedWorktree, verifySharedWorktreeBranch } from "./shared-worktree.js";
@@ -230,8 +230,10 @@ export function validateLiveTestProfile(profile, repository) {
   } catch (error) {
     missing.push(error.message);
   }
-  const frontend = profile?.applications?.frontend;
   const browserAutomation = profile?.browserAutomation;
+  const apiOnly = browserAutomation?.mode === "api";
+  const applicationName = apiOnly ? "backend" : "frontend";
+  const application = profile?.applications?.[applicationName];
   const authentication = browserAutomation?.authentication;
   const dataSafety = browserAutomation?.dataSafety;
   const testSynthesis = browserAutomation?.testSynthesis;
@@ -251,30 +253,35 @@ export function validateLiveTestProfile(profile, repository) {
     );
   }
 
-  if (!frontend || typeof frontend !== "object") {
-    missing.push("applications.frontend");
+  if (browserAutomation?.mode !== undefined &&
+      !["browser", "api"].includes(browserAutomation.mode)) {
+    missing.push("browserAutomation.mode (browser or api)");
+  }
+
+  if (!application || typeof application !== "object" || Array.isArray(application)) {
+    missing.push(`applications.${applicationName}`);
   } else {
-    if (!requiredString(frontend.workingDirectory)) {
-      missing.push("applications.frontend.workingDirectory");
+    if (!requiredString(application.workingDirectory)) {
+      missing.push(`applications.${applicationName}.workingDirectory`);
     }
-    if (!requiredString(frontend.command)) {
-      missing.push("applications.frontend.command");
+    if (!requiredString(application.command)) {
+      missing.push(`applications.${applicationName}.command`);
     }
     if (
-      !Number.isInteger(frontend.port) ||
-      frontend.port < 1 ||
-      frontend.port > 65535
+      !Number.isInteger(application.port) ||
+      application.port < 1 ||
+      application.port > 65535
     ) {
-      missing.push("applications.frontend.port");
+      missing.push(`applications.${applicationName}.port`);
     }
-    if (!requiredString(frontend.healthUrl)) {
-      missing.push("applications.frontend.healthUrl");
+    if (!requiredString(application.healthUrl)) {
+      missing.push(`applications.${applicationName}.healthUrl`);
     } else {
       try {
-        validatedManualLocalhostUrl(frontend.healthUrl);
+        validatedManualLocalhostUrl(application.healthUrl);
       } catch {
         missing.push(
-          "applications.frontend.healthUrl (credential-free loopback URL required)"
+          `applications.${applicationName}.healthUrl (credential-free loopback URL required)`
         );
       }
     }
@@ -283,7 +290,7 @@ export function validateLiveTestProfile(profile, repository) {
   if (!browserAutomation || typeof browserAutomation !== "object") {
     missing.push("browserAutomation");
   } else {
-    for (const field of ["workingDirectory", "package", "browser", "testCommand"]) {
+    for (const field of ["workingDirectory", "package", ...(!apiOnly ? ["browser"] : []), "testCommand"]) {
       if (!requiredString(browserAutomation[field])) {
         missing.push(`browserAutomation.${field}`);
       }
@@ -294,6 +301,9 @@ export function validateLiveTestProfile(profile, repository) {
     } else if (authentication.required) {
       if (!requiredString(authentication.command)) {
         missing.push("browserAutomation.authentication.command");
+      }
+      if (apiOnly && !requiredString(authentication.proofCommand)) {
+        missing.push("browserAutomation.authentication.proofCommand (fresh API proof required)");
       }
       if (
         !Array.isArray(authentication.statusPaths) ||
@@ -323,6 +333,31 @@ export function validateLiveTestProfile(profile, repository) {
     if (dataSafety?.productionAllowed !== false) {
       missing.push("browserAutomation.dataSafety.productionAllowed=false");
     }
+    if (apiOnly) {
+      const origins = dataSafety?.allowedOrigins;
+      if (!Array.isArray(origins) || origins.length < 1 || origins.length > 16 ||
+          origins.some((value) => {
+            try {
+              const url = new URL(value);
+              return typeof value !== "string" || url.origin !== value ||
+                !(url.protocol === "https:" ||
+                  (url.protocol === "http:" && ["127.0.0.1", "localhost"].includes(url.hostname)));
+            } catch {
+              return true;
+            }
+          })) {
+        missing.push("browserAutomation.dataSafety.allowedOrigins (1-16 credential-free HTTPS or loopback HTTP origins)");
+      }
+      const methods = dataSafety?.allowedMethods;
+      if (!Array.isArray(methods) || methods.length < 1 ||
+          methods.some((value) => !["GET", "HEAD", "OPTIONS"].includes(value))) {
+        missing.push("browserAutomation.dataSafety.allowedMethods (read-only GET, HEAD, OPTIONS)");
+      }
+      if (!["non-production-read-only", "local-fixture"].includes(testSynthesis?.defaultDataSource) ||
+          testSynthesis?.mutationMode !== "none") {
+        missing.push("API-only validation requires non-production-read-only or local-fixture data and mutationMode=none");
+      }
+    }
     if (testSynthesis === undefined) {
       missing.push("browserAutomation.testSynthesis");
     } else {
@@ -349,7 +384,7 @@ export function validateLiveTestProfile(profile, repository) {
     ok: missing.length === 0,
     detail:
       missing.length === 0
-        ? "startup, health, Playwright, authentication, and data-safety settings configured"
+        ? `${apiOnly ? "API-only backend" : "startup"}, health, Playwright, authentication, and data-safety settings configured`
         : `missing or invalid: ${missing.join(", ")}`
   };
 }
@@ -357,6 +392,7 @@ export function validateLiveTestProfile(profile, repository) {
 export function configuredTestSynthesis(profile, selectedMutationMode = "") {
   const configuration = profile?.browserAutomation?.testSynthesis;
   const result = {
+    ...(profile?.browserAutomation?.mode === "api" ? { apiOnly: true } : {}),
     enabled: configuration?.enabled !== false,
     source: testDataSources.has(configuration?.defaultDataSource)
       ? configuration.defaultDataSource
@@ -373,6 +409,9 @@ export function configuredTestSynthesis(profile, selectedMutationMode = "") {
   if (!["", "intercepted", "none"].includes(selectedMutationMode)) {
     throw new Error("testMutationMode must be empty, intercepted or none. This selector never authorizes real writes.");
   }
+  if (result.apiOnly && selectedMutationMode === "intercepted") {
+    throw new Error("API-only Playwright validation requires read-only requests; page interception does not protect APIRequestContext.");
+  }
   if (selectedMutationMode) {
     const allowed = configuration?.allowedMutationModes;
     if (allowed !== undefined &&
@@ -380,7 +419,7 @@ export function configuredTestSynthesis(profile, selectedMutationMode = "") {
       throw new Error("The repository profile does not allow the selected per-run mutation mode.");
     }
     if (selectedMutationMode === "none" &&
-        !["non-production-read-only", "non-production-approved"].includes(result.source)) {
+        !["non-production-read-only", "non-production-approved", ...(result.apiOnly ? ["local-fixture"] : [])].includes(result.source)) {
       throw new Error("Live read-only mode requires a profile that permits non-production backend reads.");
     }
     result.mutationMode = selectedMutationMode;
@@ -518,6 +557,7 @@ function dashboardSnapshot(job) {
     manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: {
       enabled: job.testEvidence.enabled,
+      ...(job.testEvidence.apiOnly === true ? { apiOnly: true } : {}),
       source: job.testEvidence.source,
       mutationMode: job.testEvidence.mutationMode,
       ...(job.testEvidence.selectedMutationMode
@@ -611,6 +651,9 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    ...(profile.browserAutomation?.mode === "api"
+      ? { testEvidence: { ...snapshot.testEvidence, apiOnly: true } }
+      : {}),
     validationRecovered: true,
     permissionRequest: snapshot.permissionBlocked
       ? newPermissionRequest({ preflight: snapshot.permissionPreflightPending === true })
@@ -895,6 +938,7 @@ export function inspectRepository(repository) {
         repository: resolvedRepository,
         repositoryReady: true,
         profileReady: false,
+        playwrightMode: profile.browserAutomation?.mode ?? "browser",
         profilePath,
         profileName:
           typeof profile.name === "string" && profile.name.trim()
@@ -907,6 +951,7 @@ export function inspectRepository(repository) {
       repository: resolvedRepository,
       repositoryReady: true,
       profileReady: true,
+      playwrightMode: profile.browserAutomation?.mode ?? "browser",
       profilePath,
       environments: configuredValidationEnvironments(profile),
       profileName:
@@ -954,6 +999,7 @@ export function buildJobPrompt({
   const validateOnly = mode === "validate-only";
   const playwrightOnly = mode === "playwright-only";
   const readOnly = validateOnly || playwrightOnly;
+  const apiOnly = testEvidence.apiOnly === true;
   const efficient = !readOnly && workflow?.mode === "efficient";
   const smallEnhancement = requestType === "small-enhancement";
   const intakeWorkItems =
@@ -992,7 +1038,9 @@ export function buildJobPrompt({
 - After one bug's scoped fix and smallest focused regression pass, remove transient validation artifacts, self-review its diff, and create or update its authorized draft PR before running remaining independent validation. Keep that PR draft until every required local gate for that bug reaches an accepted outcome, then publish it without waiting for remote CI. Never combine unrelated bug changes in one PR.`
       : `- Treat all selected bugs as one common-PR batch. Diagnose and implement every required fix, then run the smallest focused regression checks that protect the combined change.
 - After those focused checks pass, remove transient validation artifacts, self-review the combined diff, and create or update one authorized draft PR. Continue shared tests, builds, application startup, and browser scenarios while that draft is open.`;
-  const uiScenarioGuidance = runAllUiScenarios
+  const uiScenarioGuidance = apiOnly
+    ? "- Run the smallest repository-defined Playwright API journey that proves the selected behavior."
+    : runAllUiScenarios
     ? `- After implementation and non-browser validation are complete, run every repository-defined Playwright/UI scenario at the end, not only the focused defect journey.
 - Start the required applications once when safe, preserve each scenario result, and attach non-sensitive screenshot evidence for the complete UI run.`
     : "- Run the smallest repository-defined Playwright journey that proves the selected behavior.";
@@ -1001,8 +1049,9 @@ export function buildJobPrompt({
 - Do not silently fall back to local or another environment. If ${targetEnvironment} is unavailable, unauthenticated, or cannot be used safely, block the affected stage with the exact prerequisite.
 - Focused tests, type-checks, and builds still run locally unless the repository profile explicitly defines otherwise.`
     : "- No environment override was selected. Use the repository profile's safe default and never select production.";
-  const testDataGuidance =
-    targetEnvironment &&
+  const testDataGuidance = apiOnly
+    ? "- Use only allowlisted read-only API operations and real approved data for live validation. No synthetic fallback, redirected request outside the allowlist, or business-data write is authorized."
+    : targetEnvironment &&
     testEvidence.source === "non-production-read-only"
       ? `- Use the selected ${targetEnvironment} backend and API as the primary business-data source. Keep all backend access read-only and intercept every mutating request.
 - Do not fulfill or intercept business-data reads while the selected backend is available and returns safe records that can prove the required assertions.
@@ -1010,7 +1059,9 @@ export function buildJobPrompt({
 - Do not replace an expected empty-state assertion with synthetic data. Use fallback only when records are required to exercise the reported behavior and the selected backend cannot supply them.
 - When fallback occurs, emit a FIXLAB_ACTIVITY line explaining why, intercept all mutations, and emit FIXLAB_TEST with source synthetic-intercepted and mutation mode intercepted. A synthetic pass proves the UI behavior only; do not claim the selected backend or its data was validated.`
       : "- Use the configured test data source and mutation mode. For synthetic-intercepted tests, fulfill business-data reads locally, intercept every mutating request, and assert the intended request count and payload without changing an external record.";
-  const videoGuidance = recordPlaywrightVideo
+  const videoGuidance = apiOnly
+    ? "- Preserve sanitized API assertion results, not browser screenshots, videos or credential-bearing traces."
+    : recordPlaywrightVideo
     ? `- Record the focused Playwright journey as non-sensitive video evidence using repository-supported Playwright video recording.
 - Save the recording as WebM or MP4 under the repository-owned test-results, playwright-report, or artifacts directory. Keep it under 50 MiB and capture only the application surface: no credentials, browser profiles, personal windows, or unrelated data.
 - Keep the required screenshot evidence as the lightweight review artifact. If recording is unavailable, report that limitation explicitly instead of claiming video evidence exists.`
@@ -1052,7 +1103,7 @@ ${process.platform === "win32" ? "- Windows executor children are job-contained 
 - Expected bug IDs: ${bugResults.map((bug) => bug.id).join(", ") || "none"}. For each, emit FIXLAB_BUG|id|outcome|owner|summary before finishing. Outcomes: ${[...bugOutcomeStatuses].join(", ")}. Attribute upstream limitations honestly.
 
 Run a FixLab playwright-only job.
-Playwright-only mode: browser validation, not implementation.
+Playwright-only mode: ${apiOnly ? "API" : "browser"} validation, not implementation.
 Request type: ${requestType}
 Selected validation environment: ${targetEnvironment || "profile-defined"}
 Record Playwright video evidence: ${recordPlaywrightVideo ? "yes" : "no"}
@@ -1066,7 +1117,7 @@ ${intakeSummary.length ? `Loaded work items: ${JSON.stringify(intakeSummary)}\n`
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all applicable repository instructions; preserve their safety, authentication, environment and process-ownership requirements.
 ${COPILOT_EXECUTION_GUIDANCE}
-${EXISTING_APPLICATION_GUIDANCE}
+${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : EXISTING_APPLICATION_GUIDANCE}
 ${requestGuidance}
 - Skip source diagnosis, separate reproduction, implementation, diff review and unrelated non-browser gates. The diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped unless their own required prerequisite fails.
 - Do not edit files other than an authorized transient browser-validation artifact. Do not commit, push, create or update pull requests, or change repository configuration.
@@ -1081,7 +1132,7 @@ ${testDataGuidance}
 - Profile safety rules remain authoritative. Read-only POST searches are not mutations merely because of their method. No Save, Submit, Approve, autosave or other external write is authorized by this validation request or its interception selector.
 ${videoGuidance}
 ${manualLocalhostGuidance}
-- Save at least one non-sensitive screenshot under repository-owned test-results. Preserve exact assertions, request counts, errors and evidence paths. Do not fabricate execution or claim intercepted payloads prove backend writes.
+- For browser journeys, save at least one non-sensitive screenshot under repository-owned test-results. API-only journeys preserve sanitized API assertion evidence instead. Preserve exact assertions, request counts, errors and evidence paths. Do not fabricate execution or claim intercepted payloads prove backend writes.
 - Run verbose commands through fixlab exec --stage live-test -- <command> [args...]; quote '--' in Windows PowerShell. Keep compact results in context, inspecting only a bounded diagnostic on failure. Never reuse cached live-browser, authentication or external-data results.
 - Continue independent safe browser steps when an unrelated check fails; do not bypass a failed prerequisite. Report required full regression as deferred, not passed.
 - Do not delegate one continuous browser journey or repeatedly enumerate the repository. Keep command output bounded and batch independent reads.
@@ -1127,6 +1178,7 @@ Use this concise metadata only to avoid repeated discovery. Verify task-specific
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all repository-owned instructions before acting.
 ${COPILOT_EXECUTION_GUIDANCE}
+${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : ""}
 - For a fix request, begin with the smallest known reproduction, using an approved existing application when appropriate; prepare the local stack only when needed to exercise changed code. Do not claim a deployed baseline proves an unpublished fix.
 - Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
 - For repeat work, inspect the current git status and effective diff first, then search task-relevant symbols and files instead of rescanning the whole repository.
@@ -1164,12 +1216,13 @@ ${efficient ? efficientWorkflowGuidance(workflow) : `- Once the scoped productio
 - Keep the pull request draft and clearly marked validation-in-progress while any required local validation or approval gate is pending, running, blocked, skipped with unaccepted risk, or failed. Never mark it ready for review or report the pr stage passed until all required local gates pass or repository policy records an explicitly accepted outcome.`}
 - ${readOnly ? "Do not publish a pull request or change its draft status in read-only mode." : workflow?.publication === "draft" ? "Keep the published PR draft and read back provider isDraft=true before reporting publication passed. Marking ready requires a separate reviewed decision. Strict required checks remain mandatory." : "After required local validation and approval gates pass or have an explicitly accepted outcome, publish the authorized PR by marking it ready for review. Do not wait for remote PR CI or build completion before publication; publication can trigger those checks. Verify the PR is no longer draft before reporting the PR stage passed. Report remote checks as pending, not passed, and leave merge policies intact. Use `gh pr ready <number>` for GitHub or `az repos pr update --id <id> --draft false` for Azure DevOps, then read back `isDraft` from the provider to confirm it is false. If publication or state verification fails, report the PR stage blocked or failed, not passed."}
 - Prefix FixLab-created pull-request titles with FLAB: followed by a concise description of the coding change. Format the body with the repository's PR template, clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.
+${readOnly ? "" : CONCISE_PR_GUIDANCE}
 - Emit one browser evidence line after the scenario is selected and again if the actual source or mutation behavior changes:
   FIXLAB_TEST|source|mutation-mode|scenario
 - source must be one of: ${[...testDataSources].join(", ")}.
 - mutation-mode must be one of: ${[...mutationModes].join(", ")}.
 - Start only the applications defined by the repository profile, then execute the repository-defined live test against the allowed required system or environment from that profile. Do not invent or hardcode environment choices.
-- For every Playwright live test, save at least one non-sensitive screenshot under the test's repository-owned test-results directory so the dashboard can display the browser evidence.
+- For every Playwright browser live test, save at least one non-sensitive screenshot under the test's repository-owned test-results directory so the dashboard can display the browser evidence. API-only journeys preserve sanitized API assertion evidence instead.
 - ${playwrightOnly ? "Collect evidence for required setup, authentication readiness, application startup, the focused Playwright result, skipped gates, blockers, and remaining risks." : "Collect evidence for diagnosis or surface inspection, the effective diff, review, local validation, application startup, live testing, skipped gates, and remaining risks."}
 - ${readOnly ? "Report the pull-request outcome without creating or updating a pull request." : efficient ? "Create or update the authorized PR with its saved draft policy after the reviewed focused checkpoint and explicitly required local checks; then run only saved or explicitly selected post-PR checks. Do not wait for remote CI." : "Create or update an authorized draft pull request after the reviewed focused checkpoint; finalize its evidence and publish it after required local validation and approval gates pass, without waiting for remote CI."}
 - Human interaction is limited to authentication, unsafe-data approval, deployment or pull-request approval, and genuine blockers that cannot be resolved from repository evidence.
@@ -1279,7 +1332,7 @@ function parseTokenCount(value) {
 
 function parseUsageLine(line) {
   const match = line.match(
-    /Tokens\s+↑\s*([\d.]+\s*[kmb]?)\s+\(([\d.]+\s*[kmb]?)\s+cached,\s*([\d.]+\s*[kmb]?)\s+written\)\s+•\s+↓\s*([\d.]+\s*[kmb]?)/i
+    /^\s*Tokens\s+↑\s*([\d.]+\s*[kmb]?)\s+\(([\d.]+\s*[kmb]?)\s+cached,\s*([\d.]+\s*[kmb]?)\s+written\)\s+•\s+↓\s*([\d.]+\s*[kmb]?)\s*$/i
   );
   if (!match) {
     return null;
@@ -2425,16 +2478,19 @@ function splitRenderedMarkers(line) {
 }
 
 function appendLine(job, stream, line) {
+  const usage = parseUsageLine(line);
+  if (usage) {
+    if (job.runtime !== "copilot") {
+      job.usage = usage;
+    }
+    return;
+  }
   pushLog(job, {
     index: job.nextLogIndex,
     timestamp: new Date().toISOString(),
     stream,
     message: line
   });
-  const usage = parseUsageLine(line);
-  if (usage && job.runtime !== "copilot") {
-    job.usage = usage;
-  }
   if (runtimePermissionDenialLine(line)) {
     job.permissionRequest ??= newPermissionRequest();
   }
@@ -2497,6 +2553,17 @@ function appendLine(job, stream, line) {
       return;
     }
     const selectedMode = job.testEvidence.selectedMutationMode;
+    if (job.testEvidence.apiOnly &&
+        (mutationMode !== "none" || !["non-production-read-only", "local-fixture"].includes(source))) {
+      job.testEvidence.modeViolation = true;
+      pushLog(job, {
+        index: job.nextLogIndex,
+        timestamp: new Date().toISOString(),
+        stream: "dashboard",
+        message: "Rejected API-only evidence that claims synthetic interception or mutations."
+      });
+      return;
+    }
     if (selectedMode && (mutationMode !== selectedMode ||
         (selectedMode === "none" && source === "synthetic-intercepted"))) {
       job.testEvidence.modeViolation = true;
@@ -2615,7 +2682,9 @@ function finishJob(job, result) {
   if (job.testEvidence.modeViolation) {
     job.stages["live-test"] = {
       status: "failed",
-      message: "Browser evidence conflicts with the explicitly selected per-run mutation mode."
+      message: job.testEvidence.apiOnly
+        ? "API-only evidence must report real read-only API validation, not synthetic interception or mutations."
+        : "Browser evidence conflicts with the explicitly selected per-run mutation mode."
     };
     job.error = job.stages["live-test"].message;
   }
@@ -2883,6 +2952,7 @@ function playwrightAuthenticationConfig(repository) {
   );
   return {
     command,
+    mode: browserAutomation.mode ?? "browser",
     proofCommand: typeof authentication.proofCommand === "string" ? authentication.proofCommand.trim() : "",
     environment,
     statusPaths,
@@ -3058,6 +3128,7 @@ function authenticationProofIdentity(configuration, job) {
     throw new Error("Authentication proof requires at least one regular status file.");
   }
   return JSON.stringify({
+    mode: configuration.mode,
     command: configuration.command,
     proofCommand: configuration.proofCommand,
     workingDirectory: configuration.workingDirectory,
@@ -3630,7 +3701,8 @@ export function createDashboardServer({
     const protectedPaths = authentication?.statusPaths.map((path) =>
       resolveContainedPath(authentication.workingDirectory, path, "browserAutomation.authentication.statusPaths entry")
     ) ?? [];
-    if (job.mode === "playwright-only" && !job.manualLocalhostTest) {
+    if (job.mode === "playwright-only" && !job.manualLocalhostTest &&
+        loadRepositoryProfile(resolvedRepository).browserAutomation?.mode !== "api") {
       let blocker;
       try {
         blocker = browserOwnership(playwrightAuthenticationConfig(resolvedRepository));
@@ -3895,6 +3967,8 @@ export function createDashboardServer({
         mode: job.mode,
         onUsage(usage) {
           job.usage = usage;
+          job.lastActivityAt = new Date().toISOString();
+          armIdleWatchdog();
         },
         onRuntimeRequests(requests) {
           job.runtimeRequests = requests;
@@ -6101,6 +6175,13 @@ export function createDashboardServer({
         });
         return;
       }
+      if (repositoryProfile.browserAutomation?.mode === "api" &&
+          (manualLocalhostTest || prestartFrontend || recordPlaywrightVideo || runAllUiScenarios)) {
+        sendJson(response, 400, {
+          error: "API-only Playwright validation does not support React startup, manual UI validation, video, or UI scenarios."
+        });
+        return;
+      }
       const manualLocalhostUrl =
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       let testEvidence;
@@ -6484,7 +6565,7 @@ export function createDashboardServer({
         return;
       }
       try {
-        const blocker = browserOwnership(configuration);
+        const blocker = configuration.mode === "api" ? null : browserOwnership(configuration);
         if (blocker) {
           sendJson(response, 409, { error: blocker.message, blocker });
           return;

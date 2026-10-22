@@ -239,6 +239,7 @@ test("SDK denial, cancelled questions and shutdown errors are not approvals", as
 test("SDK output preserves final messages and cumulative usage on resume", async () => {
   let listener;
   const output = [];
+  const usageSnapshots = [];
   const client = {
     async start() {},
     async resumeSession() {
@@ -258,9 +259,15 @@ test("SDK output preserves final messages and cumulative usage on resume", async
   await runCopilotSession({
     resume: true,
     usage: { inputTokens: 100, cachedInputTokens: 20, cacheWriteTokens: 3, outputTokens: 10 }
-  }, { client, ask() {}, output: (stream, text) => output.push(text) });
+  }, {
+    client, ask() {}, output: (stream, text) => output.push(text),
+    onUsage(usage) { usageSnapshots.push(usage); }
+  });
   assert.equal(output[0], "Final message without streaming.");
-  assert.match(output.at(-1), /130 \(32 cached, 8 written\).*17/);
+  assert.deepEqual(usageSnapshots.at(-1), {
+    inputTokens: 130, cachedInputTokens: 32, cacheWriteTokens: 8, outputTokens: 17
+  });
+  assert.doesNotMatch(output.join(""), /Tokens\s+\u2191/);
 });
 
 test("SDK extension discovery retains the official bootstrap within owned containment", async () => {
@@ -322,6 +329,7 @@ test(`oversized ${mode} resumes compact retained history once before executing, 
         const calls = [];
         let listener;
         const output = [];
+        const usageSnapshots = [];
         const session = {
           rpc: {
             ...managedPolicyRpc(),
@@ -355,13 +363,15 @@ test(`oversized ${mode} resumes compact retained history once before executing, 
         await runCopilotSession({
           mode, resume: true, usage: { inputTokens: 500 }
         }, { client, ask() { assert.fail("Compaction cannot grant permission"); },
-          output(stream, text) { output.push(text); } });
+          output(stream, text) { output.push(text); },
+          onUsage(usage) { usageSnapshots.push(usage); } });
         assert.deepEqual(calls, messagesTokenCount > 24000
           ? ["compact", "send", "stop"] : ["send", "stop"]);
         if (messagesTokenCount > 24000) {
           assert.match(output.join(""), /18000 context tokens removed/);
-          assert.match(output.join(""), /Tokens.*600/);
         }
+        assert.equal(usageSnapshots.at(-1).inputTokens, messagesTokenCount > 24000 ? 600 : 500);
+        assert.doesNotMatch(output.join(""), /Tokens\s+\u2191/);
       }
     });
 }
@@ -420,6 +430,7 @@ for (const inputTokenLimit of [0, 129, 130, 131]) {
     let stopped = false;
     let sent = false;
     const output = [];
+    const usageSnapshots = [];
     const client = {
       async start() {},
       async createSession(options) {
@@ -445,7 +456,10 @@ for (const inputTokenLimit of [0, 129, 130, 131]) {
     const run = runCopilotSession({
       inputTokenLimit, mode: "fix-and-validate",
       usage: { inputTokens: 100, cachedInputTokens: 80, cacheWriteTokens: 3, outputTokens: 10 }
-    }, { client, ask() {}, output(stream, text) { output.push(text); } });
+    }, {
+      client, ask() {}, output(stream, text) { output.push(text); },
+      onUsage(usage) { usageSnapshots.push(usage); }
+    });
     if (inputTokenLimit && inputTokenLimit <= 130) {
       await assert.rejects(run, (error) => error.code === "INPUT_TOKEN_LIMIT");
     } else {
@@ -453,7 +467,10 @@ for (const inputTokenLimit of [0, 129, 130, 131]) {
     }
     assert.equal(sent, true);
     assert.equal(stopped, true);
-    assert.match(output.join(""), /130 \(105 cached, 8 written\).*17/);
+    assert.deepEqual(usageSnapshots.at(-1), {
+      inputTokens: 130, cachedInputTokens: 105, cacheWriteTokens: 8, outputTokens: 17
+    });
+    assert.doesNotMatch(output.join(""), /Tokens\s+\u2191/);
   });
 }
 
@@ -475,6 +492,7 @@ test("SDK exhausted resumed budgets block before opening a runtime and invalid c
 test("compaction usage counts toward the ceiling before any continuation is sent", async () => {
   let listener;
   const output = [];
+  const usageSnapshots = [];
   const client = {
     async start() {},
     async resumeSession() {
@@ -495,9 +513,15 @@ test("compaction usage counts toward the ceiling before any continuation is sent
   };
   await assert.rejects(runCopilotSession({
     resume: true, mode: "validate-only", inputTokenLimit: 200, usage: { inputTokens: 100 }
-  }, { client, ask() {}, output(stream, text) { output.push(text); } }),
+  }, {
+    client, ask() {}, output(stream, text) { output.push(text); },
+    onUsage(usage) { usageSnapshots.push(usage); }
+  }),
   (error) => error.code === "INPUT_TOKEN_LIMIT");
-  assert.match(output.join(""), /Tokens.*210 \(90 cached/);
+  assert.deepEqual(usageSnapshots.at(-1), {
+    inputTokens: 210, cachedInputTokens: 90, cacheWriteTokens: 0, outputTokens: 0
+  });
+  assert.doesNotMatch(output.join(""), /Tokens\s+\u2191/);
 });
 
 test("a pending human permission is not approved after the input ceiling is reached", async () => {

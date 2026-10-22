@@ -49,6 +49,15 @@ Result, evidence, and pull request status
 
 ### Delivery policy
 
+Generated PR descriptions are concise by default (normally at most 120 words),
+with required repository-template fields, a brief summary, compact actual
+validation outcomes and material risks/blockers. Failed, skipped, pending and
+not-run checks remain explicit; evidence is linked rather than pasted as logs.
+Required templates and material risks can justify additional detail.
+PR descriptions exclude token/cache counts, AI-credit totals and model-cost
+summaries. Repeated runtime token meters are omitted from activity logs;
+structured usage metrics, persistence and input-token limits remain active.
+
 `dashboard/workflow-policy.js` supplies product-wide defaults for new jobs:
 `workflow: { mode: "efficient", publication: "draft", unitTestsAfterPr: false, optionalBuilds: false }`.
 Repository Settings persists overrides once. The reviewed focused checkpoint
@@ -108,6 +117,18 @@ scope, safety, evidence and continuity guidance, not a separate cut-down coding
 model. The selected model and environment still affect speed and results.
 
 ### Dashboard or CLI
+
+`browserAutomation.mode` defaults to `browser` for existing profiles. Explicit
+`api` mode requires backend startup/loopback health, a Playwright package and
+test command, authentication intent and a read-only origin/method allowlist.
+Doctor creates and disposes an `APIRequestContext` without launching or
+installing a browser; that offline probe does not prove API access or sign-in.
+API jobs do not inspect browser-profile ownership. React startup, manual UI,
+video and full-UI options are rejected. Live scenario evidence remains mandatory
+and cannot claim intercepted/synthetic API success. The repository-owned runner
+must enforce request/redirect safety, fresh authentication and sanitized API
+assertions. Missing live prerequisites remain blocked. Browser profiles keep
+their existing frontend, browser, ownership and screenshot requirements.
 
 Collects defect details, screenshots, repository selection, validation mode,
 environment choice, and blocker policy. It displays stages, evidence, and

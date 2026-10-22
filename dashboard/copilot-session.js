@@ -215,7 +215,6 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
           }
         }
         onUsage({ ...usage });
-        output("stdout", `\nTokens \u2191 ${usage.inputTokens} (${usage.cachedInputTokens} cached, ${usage.cacheWriteTokens} written) \u2022 \u2193 ${usage.outputTokens}\n`);
         if (inputTokenLimit > 0 && usage.inputTokens >= inputTokenLimit) {
           budgetReached = true;
           interruptForBudget();

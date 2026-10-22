@@ -13,7 +13,10 @@ repairing software defects. It combines repository-aware diagnosis, isolated
 worktrees, focused tests, local application startup, Playwright browser
 journeys, and review evidence in one visible workflow.
 
-FixLab is designed for applications with a **React frontend and .NET backend**.
+FixLab supports applications with a **React frontend and .NET backend**, or
+**backend-only APIs** using Playwright `APIRequestContext`. API-only profiles
+explicitly select `browserAutomation.mode: "api"`; no frontend or browser binary
+is required. See [API-only onboarding](docs/repository-onboarding.md#api-only-playwright-validation).
 Application-specific commands, paths, environments, and browser journeys stay
 in a small repository-owned profile, so FixLab remains product-neutral.
 
@@ -25,7 +28,7 @@ FixLab runs through **Agency Copilot** or directly through
 | | |
 | --- | --- |
 | **Use cases** | Bug fixes, small enhancements, pull-request validation, and focused Playwright validation |
-| **Primary scope** | React frontends with .NET backends |
+| **Primary scope** | React frontends with .NET backends, or backend-only Playwright API validation |
 | **Execution** | Local developer or registered runner machine |
 | **Runtimes** | Agency Copilot or GitHub Copilot CLI |
 | **Output** | Test results, logs, screenshots, blockers, risks, and a review-ready pull request |

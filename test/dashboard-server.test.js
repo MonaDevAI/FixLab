@@ -370,6 +370,179 @@ test("dashboard readiness blocks a missing explicit Playwright configuration", (
   }
 });
 
+function apiProfile() {
+  const profile = validProfile({
+    applications: {
+      backend: {
+        workingDirectory: ".",
+        command: "dotnet run",
+        port: 5087,
+        healthUrl: "http://127.0.0.1:5087/health"
+      }
+    }
+  });
+  delete profile.browserAutomation.browser;
+  profile.browserAutomation.mode = "api";
+  profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+  profile.browserAutomation.testSynthesis.mutationMode = "none";
+  profile.browserAutomation.dataSafety.allowedOrigins = ["http://127.0.0.1:5087"];
+  profile.browserAutomation.dataSafety.allowedMethods = ["GET", "HEAD"];
+  return profile;
+}
+
+test("API-only readiness requires backend, authentication and read-only safety without a frontend", () => {
+  const repository = createRepository();
+  const path = join(repository, ".github", "fixlab", "repository-profile.json");
+  const inspect = (profile) => {
+    writeFileSync(path, JSON.stringify(profile));
+    return inspectRepository(repository);
+  };
+  try {
+    const ready = inspect(apiProfile());
+    assert.equal(ready.profileReady, true, ready.error);
+    assert.equal(ready.playwrightMode, "api");
+    for (const [change, message] of [
+      [(p) => { delete p.applications.backend; }, /applications\.backend/],
+      [(p) => { p.applications.backend.port = 0; }, /applications\.backend\.port/],
+      [(p) => { p.applications.backend.healthUrl = "https://example.invalid/health"; }, /credential-free loopback/],
+      [(p) => { p.browserAutomation.mode = "unknown"; }, /browserAutomation\.mode/],
+      [(p) => { p.browserAutomation.authentication.required = true; }, /authentication\.command/],
+      [(p) => { p.browserAutomation.dataSafety.productionAllowed = true; }, /productionAllowed=false/],
+      [(p) => { p.browserAutomation.dataSafety.allowedOrigins = []; }, /allowedOrigins/],
+      [(p) => { p.browserAutomation.dataSafety.allowedOrigins = ["http://example.invalid"]; }, /allowedOrigins/],
+      [(p) => { p.browserAutomation.dataSafety.allowedOrigins = ["https://example.invalid/path"]; }, /allowedOrigins/],
+      [(p) => { p.browserAutomation.dataSafety.allowedMethods = ["POST"]; }, /allowedMethods/],
+      [(p) => { p.browserAutomation.testSynthesis.mutationMode = "intercepted"; }, /mutationMode=none/],
+      [(p) => { delete p.browserAutomation.testCommand; }, /testCommand/]
+    ]) {
+      const profile = apiProfile();
+      change(profile);
+      const readiness = inspect(profile);
+      assert.equal(readiness.profileReady, false, String(message));
+      assert.match(readiness.error, message);
+    }
+    const browser = validProfile();
+    delete browser.applications.frontend;
+    assert.match(inspect(browser).error, /applications\.frontend/);
+    const fixture = apiProfile();
+    fixture.browserAutomation.testSynthesis.defaultDataSource = "local-fixture";
+    assert.equal(configuredTestSynthesis(fixture, "none").mutationMode, "none");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("API-only jobs bypass browser ownership but reject UI options and require live scenario evidence", async () => {
+  const repository = createRepository();
+  const profile = apiProfile();
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  let ownershipCalls = 0;
+  let prompt;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    for (const stage of FIXLAB_STAGES) {
+      input.onOutput("stdout", `FIXLAB_STAGE|${stage}|${["intake", "local-stack", "live-test"].includes(stage) ? "passed" : "skipped"}|API fixture\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  }, undefined, {
+    autoTestEvidence: false,
+    browserOwnership: () => { ownershipCalls += 1; throw new Error("API tests must not inspect browser profiles"); }
+  });
+  try {
+    for (const option of ["manualLocalhostTest", "prestartFrontend", "recordPlaywrightVideo", "runAllUiScenarios"]) {
+      const result = await jsonRequest(url, "/api/jobs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Read the API.", mode: "playwright-only", [option]: true })
+      });
+      assert.equal(result.response.status, 400);
+      assert.match(result.body.error, /API-only Playwright validation/);
+    }
+    const intercepted = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Read the API.", mode: "playwright-only", testMutationMode: "intercepted" })
+    });
+    assert.equal(intercepted.response.status, 400);
+    assert.match(intercepted.body.error, /page interception does not protect APIRequestContext/);
+    const result = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Read the API.", mode: "playwright-only" })
+    });
+    assert.equal(result.response.status, 202);
+    const state = await jsonRequest(url, "/api/job");
+    assert.equal(ownershipCalls, 0);
+    assert.match(prompt, /Playwright-only mode: API validation/);
+    assert.match(prompt, /APIRequestContext/);
+    assert.match(prompt, /does not inherit page\.route interception/);
+    assert.equal(state.body.job.stages["live-test"].status, "failed");
+    assert.match(state.body.job.error, /FIXLAB_TEST scenario evidence/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+for (const legacy of [false, true]) {
+  test(`API-only ${legacy ? "legacy" : "current"} snapshots retain API guidance and reject synthetic evidence on resume`, async () => {
+    const repository = createGitRepository();
+    let current;
+    try {
+      writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(apiProfile()));
+      current = await startDashboard(repository, ({ onOutput }) => {
+        for (const stage of FIXLAB_STAGES) {
+          onOutput("stdout", `FIXLAB_STAGE|${stage}|${stage === "live-test" ? "blocked" : "skipped"}|Awaiting API prerequisites.\n`);
+        }
+        return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+      }, undefined, { autoTestEvidence: false });
+      const created = await jsonRequest(current.url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Read the approved API.", mode: "playwright-only" })
+      });
+      assert.equal(created.response.status, 202);
+      const jobId = created.body.job.id;
+      await current.dashboard.close();
+      current = null;
+      const historyPath = join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json");
+      const history = JSON.parse(readFileSync(historyPath, "utf8"));
+      const saved = history.jobs.find((job) => job.id === jobId);
+      assert.equal(saved.testEvidence.apiOnly, true);
+      if (legacy) {
+        delete saved.testEvidence.apiOnly;
+        writeFileSync(historyPath, JSON.stringify(history));
+      }
+      let prompt;
+      current = await startDashboard(repository, (input) => {
+        prompt = input.prompt;
+        input.onOutput("stdout", "FIXLAB_TEST|synthetic-intercepted|intercepted|Not real API evidence.\n");
+        for (const stage of FIXLAB_STAGES) {
+          input.onOutput("stdout", `FIXLAB_STAGE|${stage}|${["intake", "local-stack", "live-test"].includes(stage) ? "passed" : "skipped"}|API fixture.\n`);
+        }
+        return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+      }, undefined, { autoTestEvidence: false });
+      const restored = await jsonRequest(current.url, "/api/status");
+      assert.equal(restored.body.job.id, jobId);
+      assert.equal(restored.body.job.testEvidence.apiOnly, true);
+      const resumed = await jsonRequest(current.url, "/api/job/input", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "continue", details: "Continue read-only API validation." })
+      });
+      assert.equal(resumed.response.status, 202);
+      assert.match(prompt, /Playwright-only mode: API validation/);
+      assert.match(prompt, /APIRequestContext/);
+      const result = await jsonRequest(current.url, "/api/status");
+      assert.equal(result.body.job.testEvidence.apiOnly, true);
+      assert.equal(result.body.job.testEvidence.modeViolation, true);
+      assert.equal(result.body.job.testEvidence.reported, false);
+      assert.equal(result.body.job.stages["live-test"].status, "failed");
+    } finally {
+      await current?.dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
+
 test("dashboard readiness blocks an incomplete live-test profile", () => {
   const repository = createRepository();
   const profilePath = join(
@@ -4398,6 +4571,8 @@ test("dashboard dismisses a failed job and starts the next queued job", async ()
 test("dashboard persists privacy-safe token and duration metrics", async () => {
   const repository = createGitRepository();
   const executor = ({ onOutput }) => {
+    onOutput("stdout", "Token budget remains enabled.\n");
+    onOutput("stdout", "Example only: Tokens \u2191 1 (0 cached, 0 written) \u2022 \u2193 0; not a runtime meter.\n");
     for (const stage of FIXLAB_STAGES) {
       onOutput("stdout", `FIXLAB_STAGE|${stage}|passed|completed\n`);
     }
@@ -4434,6 +4609,11 @@ test("dashboard persists privacy-safe token and duration metrics", async () => {
     assert.equal(metrics.body.metrics.totalCacheWriteTokens, 367_400);
     assert.equal(metrics.body.metrics.totalOutputTokens, 14_800);
     assert.equal(metrics.body.metrics.cacheReusePercent, 79.2);
+    const status = await jsonRequest(first.url, "/api/status");
+    const messages = status.body.job.logs.map((entry) => entry.message);
+    assert.ok(messages.includes("Token budget remains enabled."));
+    assert.ok(messages.some((message) => message.startsWith("Example only: Tokens")));
+    assert.equal(messages.some((message) => /^\s*Tokens\s+\u2191/.test(message)), false);
 
     const context = createCacheContext(repository);
     const metricsPath = join(
@@ -4858,6 +5038,44 @@ test("dashboard disables an unsafe restored manual localhost gate", async () => 
     assert.match(resumed.body.error, /cannot be resumed safely/);
   } finally {
     await second.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("structured usage keeps a quiet executor active without token-meter output", async () => {
+  const repository = createRepository();
+  let heartbeat;
+  let finish;
+  let count = 0;
+  const { dashboard, url } = await startDashboard(repository, ({ onUsage }) => {
+    heartbeat = setInterval(() => onUsage({
+      inputTokens: ++count, cachedInputTokens: 0, cacheWriteTokens: 0, outputTokens: 0
+    }), 20);
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: null, signal: "SIGTERM" }); }
+    };
+  }, undefined, { runtime: "copilot", executionIdleTimeoutMs: 500 });
+  try {
+    await jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Synthetic quiet usage heartbeat.", mode: "validate-only" })
+    });
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    let status = await jsonRequest(url, "/api/status");
+    assert.equal(status.body.job.status, "running");
+    assert.ok(status.body.job.usage.inputTokens > 0);
+    assert.equal(status.body.job.logs.some((entry) => /^\s*Tokens\s+\u2191/.test(entry.message)), false);
+    clearInterval(heartbeat);
+    for (let attempt = 0; attempt < 40 && status.body.job.status === "running"; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      status = await jsonRequest(url, "/api/status");
+    }
+    assert.equal(status.body.job.status, "failed", "idle detection still runs when usage stops");
+    assert.match(status.body.job.error, /produced no output/);
+  } finally {
+    clearInterval(heartbeat);
+    await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -6868,6 +7086,51 @@ test("browser-only instructions are bounded and retain request, policy and execu
   assert.match(browser, /FIXLAB_TEST/);
   assert.match(browser, /FIXLAB_BUG/);
   assert.doesNotMatch(browser, /early-draft|commit and push|--draft false/);
+});
+
+test("API-only guidance retains safety and evidence across runtime and initialized agent entry points", () => {
+  const prompt = buildJobPrompt({
+    request: "Validate the read-only API.", mode: "playwright-only",
+    testEvidence: configuredTestSynthesis(apiProfile())
+  });
+  assert.match(prompt, /APIRequestContext/);
+  assert.match(prompt, /synthetic responses never prove a live API passed/);
+  for (const path of [
+    "../agents/fixlab.md",
+    "../com.github.copilot/agents/fixlab.agent.md",
+    "../templates/fixlab-autofix.agent.md",
+    "../.github/agents/fixlab-autofix.agent.md",
+    "../.github/agents/fixlab.agent.md"
+  ]) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    for (const phrase of ["APIRequestContext", "dataSafety.allowedOrigins", "allowedMethods", "page.route", "FIXLAB_TEST", "at most 120 words", "required headings/fields"]) {
+      assert.ok(source.includes(phrase), `${path} must include ${phrase}`);
+    }
+  }
+  const cliSource = readFileSync(new URL("../bin/fixlab.js", import.meta.url), "utf8");
+  assert.match(cliSource, /profile\.browserAutomation\?\.mode === "api" \? \[API_ONLY_PLAYWRIGHT_GUIDANCE\]/);
+  assert.match(cliSource, /!readOnly \? \[CONCISE_PR_GUIDANCE\]/);
+  const editingPrompt = buildJobPrompt({ request: "Fix a defect.", mode: "fix-and-validate" });
+  assert.match(editingPrompt, /Keep PR descriptions concise, normally at most 120 words/);
+  assert.match(editingPrompt, /Preserve every required template heading\/field/);
+  assert.match(editingPrompt, /Keep failed, skipped, pending and not-run checks explicit/);
+  assert.match(readFileSync(new URL("../prompts/fixlab.pr.prompt.md", import.meta.url), "utf8"), /at most 120 words/);
+});
+
+test("PR guidance excludes usage statistics across generated and packaged entry points", () => {
+  const prompt = buildJobPrompt({ request: "Fix a defect.", mode: "fix-and-validate" });
+  const guidance = /Exclude token\/cache counts, AI-credit totals and model-cost summaries from PR\s+descriptions/;
+  assert.match(prompt, guidance);
+  for (const path of [
+    "../agents/fixlab.md",
+    "../com.github.copilot/agents/fixlab.agent.md",
+    "../templates/fixlab-autofix.agent.md",
+    "../.github/agents/fixlab-autofix.agent.md",
+    "../.github/agents/fixlab.agent.md",
+    "../prompts/fixlab.pr.prompt.md"
+  ]) {
+    assert.match(readFileSync(new URL(path, import.meta.url), "utf8"), guidance, path);
+  }
 });
 
 test("small-enhancement prompt uses the risk-scaled fast path", () => {
