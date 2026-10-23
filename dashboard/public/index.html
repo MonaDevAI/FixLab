@@ -187,8 +187,10 @@
       <section class="panel composer-panel" data-area="chat-panels" id="new-job-panel">
         <div class="composer-heading"><h2>Message FixLab</h2><span>New job</span></div>
         <form id="job-form">
+          <p id="composer-question" class="guidance" hidden></p>
           <label for="request" class="visually-hidden">Bug or required enhancement</label>
           <textarea id="request" name="request" rows="3" maxlength="10000" required
+            aria-describedby="composer-question composer-reply-result"
             placeholder="Describe what you want to fix or check."></textarea>
           <label for="screenshots">Images (optional)</label>
           <input id="screenshots" name="screenshots" type="file"
@@ -211,10 +213,6 @@
           <label class="checkbox-row">
             <input name="prestartFrontend" type="checkbox" checked>
             Warm React in parallel when a local job starts
-          </label>
-          <label class="checkbox-row">
-            <input name="permissionPreflight" type="checkbox">
-            Review required external-folder access before starting the executor
           </label>
           <label class="checkbox-row">
             <input name="allowAllTools" type="checkbox">
@@ -296,6 +294,7 @@
             <p class="guidance">FixLab proceeds autonomously and asks for authentication, unsafe-data approval, deployment or PR approval, or a genuine blocker.</p>
           </details>
           <button id="start-button" type="submit">Start job</button>
+          <p id="composer-reply-result" class="guidance" role="status" aria-live="polite" hidden></p>
           <p id="form-error" class="error" role="alert"></p>
         </form>
       </section>
@@ -428,7 +427,7 @@
 
       <section id="runtime-request-panel" class="panel intervention" data-area="chat-panels" aria-labelledby="runtime-request-heading" hidden>
         <h2 id="runtime-request-heading">Copilot needs your response</h2>
-        <p class="guidance">Review the request below. Allow once approves only this request.</p>
+        <p id="runtime-request-guidance" class="guidance">Review the request below. Allow once approves only this request.</p>
         <pre id="runtime-request-details"></pre>
         <div id="runtime-request-choices"></div>
         <label id="runtime-request-answer-label" for="runtime-request-answer">Answer (never enter passwords, tokens or MFA codes)</label>

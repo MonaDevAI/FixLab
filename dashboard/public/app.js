@@ -239,7 +239,11 @@ let dashboardInstanceId = null;
 let dashboardRepository = "";
 let runtimeSelection = null;
 let runtimeBusy = false;
+let composerQuestionSelection = null;
+const composerQuestion = document.querySelector("#composer-question");
+const composerReplyResult = document.querySelector("#composer-reply-result");
 const runtimePanel = document.querySelector("#runtime-request-panel");
+const runtimeGuidance = document.querySelector("#runtime-request-guidance");
 const runtimeDetails = document.querySelector("#runtime-request-details");
 const runtimeChoices = document.querySelector("#runtime-request-choices");
 const runtimeAnswer = document.querySelector("#runtime-request-answer");
@@ -402,6 +406,9 @@ function setRuntimeBusy(busy) {
   runtimePanel.querySelectorAll("button, textarea").forEach((element) => {
     element.disabled = busy;
   });
+  if (composerQuestionSelection) {
+    startButton.disabled = busy;
+  }
 }
 
 function renderRuntimeBatch(job, isActive) {
@@ -492,10 +499,10 @@ async function allowPendingPermissions() {
 
 runtimeBatchAllow.addEventListener("click", () => void allowPendingPermissions());
 
-async function respondToRuntime(action, choice, scope) {
+async function respondToRuntime(action, choice, scope, answer = runtimeAnswer.value) {
   const selection = runtimeSelection;
   if (!selection || runtimeBusy) {
-    return;
+    return false;
   }
   if (action === "allow" && !window.confirm(scope === "all-tools"
     ? "Allow all reviewable tool commands for this executor? Commands can access or change files and contact services without individual approval prompts. This is privileged execution, not a sandbox. Organization policy, sensitive/escalated requests, sign-in, publication consent and required checks remain separate. The choice expires when the executor stops."
@@ -507,7 +514,7 @@ async function respondToRuntime(action, choice, scope) {
         ? "Allow the reviewed staged checkpoint's routine commit, non-force origin push and explicit-provider PR creation for this executor? Review every listed path (including deletions), destination, source/target and draft policy above. Only one unchanged tree and its single-parent commit transition qualify. Untracked scratch is not staged or published. Changed content, destinations, required readiness, managed approvals, merge and deployment remain outside this grant."
       : "Allow only this exact Copilot permission request once? Review its command, files, URLs and any sandbox escalation above. This does not override organization policy."
   )) {
-    return;
+    return false;
   }
   setRuntimeBusy(true);
   try {
@@ -515,23 +522,53 @@ async function respondToRuntime(action, choice, scope) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        instanceId: dashboardInstanceId,
+        instanceId: selection.instanceId,
         jobId: selection.jobId,
         requestId: selection.requestId,
         confirmed: true,
         action,
         ...(scope ? { scope } : {}),
-        ...(choice === undefined ? { answer: runtimeAnswer.value } : { choice })
+        ...(choice === undefined ? { answer } : { choice })
       })
     });
     activeJob = body.job;
     observedJobs.set(body.job.id, body.job);
     runtimeAnswer.value = "";
     renderJob(body.job, body.job);
+    return true;
   } catch (error) {
     runtimeMessage.textContent = error.message;
+    return false;
   } finally {
     setRuntimeBusy(false);
+  }
+}
+
+function renderComposerQuestion(job, isActive) {
+  const pending = isActive ? job?.runtimeRequests?.[0] : null;
+  const question = pending?.kind === "question" && pending.allowFreeform ? pending : null;
+  const key = question ? `${dashboardInstanceId}:${job.id}:${question.id}` : null;
+  if (composerQuestionSelection && composerQuestionSelection.key !== key && requestInput.value) {
+    requestInput.value = "";
+    composerReplyResult.hidden = false;
+    composerReplyResult.classList.remove("error");
+    composerReplyResult.textContent = "The question context changed. Its unsent reply was cleared; review the current question before answering.";
+  }
+  composerQuestionSelection = question ? {
+    key, instanceId: dashboardInstanceId, jobId: job.id, requestId: question.id
+  } : null;
+  composerQuestion.hidden = !question;
+  composerQuestion.textContent = question?.details ?? "";
+  document.querySelector('label[for="request"]').textContent = question
+    ? "Reply to Copilot's question" : "Bug or required enhancement";
+  requestInput.maxLength = question ? 4000 : 10000;
+  requestInput.placeholder = question
+    ? "Reply to the question above. Never enter passwords, tokens or MFA codes."
+    : "Describe what you want to fix or check.";
+  if (question) {
+    document.querySelector(".composer-heading span").textContent = "Reply to current job";
+    startButton.textContent = "Send reply";
+    startButton.disabled = runtimeBusy;
   }
 }
 
@@ -544,11 +581,18 @@ function renderRuntimeRequest(job, isActive) {
     runtimeAnswer.value = "";
     return;
   }
-  const key = `${job.id}:${pending.id}`;
+  runtimeGuidance.textContent = pending.kind === "question"
+    ? "This is a question, not a tool permission. Choose an answer below or reply from Message FixLab when freeform input is available. Allow all never supplies answers for you."
+    : job.toolApprovalMode === "allow-all"
+      ? pending.canAllowAll === true
+        ? "Allow all is active for this executor. Review this pending request; future eligible requests use that choice."
+        : "Allow all is active for this executor, but this request is not eligible for automatic approval. Review this exact request; approving once does not disable Allow all."
+      : "Individual approvals are active. Allow once approves only this request. Eligible requests also offer Allow all for this run with a separate confirmation.";
+  const key = `${dashboardInstanceId}:${job.id}:${pending.id}`;
   if (runtimeSelection?.key === key) {
     return;
   }
-  runtimeSelection = { key, jobId: job.id, requestId: pending.id };
+  runtimeSelection = { key, instanceId: dashboardInstanceId, jobId: job.id, requestId: pending.id };
   runtimeAnswer.value = "";
   runtimeMessage.textContent = "";
   document.querySelector("#runtime-request-heading").textContent = pending.title;
@@ -1250,6 +1294,7 @@ function renderJob(job, currentActiveJob = job) {
     activeNeedsQueue
       ? "Add to queue"
       : "Start job";
+  renderComposerQuestion(job, isActive);
   const lastActivityAge =
     running && job?.lastActivityAt
       ? Date.now() - Date.parse(job.lastActivityAt)
@@ -2356,7 +2401,26 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   formError.textContent = "";
   startButton.disabled = true;
+  const replySelection = composerQuestionSelection;
   try {
+    if (replySelection) {
+      if (runtimeSelection?.key !== replySelection.key ||
+          dashboardInstanceId !== replySelection.instanceId ||
+          activeJob?.id !== replySelection.jobId) {
+        throw new Error("The question changed. Review the current request before replying.");
+      }
+      if (selectedScreenshots.length) {
+        throw new Error("Question replies support text only. Remove the images before replying, or choose New conversation to start a separate job.");
+      }
+      composerReplyResult.hidden = true;
+      if (!await respondToRuntime("answer", undefined, undefined, requestInput.value)) {
+        throw new Error(runtimeMessage.textContent || "The reply was not accepted. Review the current question before retrying.");
+      }
+      composerReplyResult.classList.remove("error");
+      composerReplyResult.textContent = "Reply sent to the current run. No new job was created.";
+      composerReplyResult.hidden = false;
+      return;
+    }
     const data = new FormData(form);
     const allowAllTools = data.get("allowAllTools") === "on";
     if (allowAllTools && !window.confirm(
@@ -2381,7 +2445,6 @@ form.addEventListener("submit", async (event) => {
         model: data.get("model") ?? "",
         mode: data.get("mode"),
         validationIntent: data.get("validationIntent") || undefined,
-        permissionPreflight: data.get("permissionPreflight") === "on",
         toolApprovalMode: allowAllTools ? "allow-all" : "ask",
         allowAllConfirmed: allowAllTools,
         routineFileAccess: data.get("routineFileAccess") === "on",
@@ -2417,6 +2480,11 @@ form.addEventListener("submit", async (event) => {
     await refreshMetrics();
   } catch (error) {
     formError.textContent = error.message;
+    if (replySelection) {
+      composerReplyResult.textContent = error.message;
+      composerReplyResult.classList.add("error");
+      composerReplyResult.hidden = false;
+    }
     startButton.disabled = false;
   }
 });
