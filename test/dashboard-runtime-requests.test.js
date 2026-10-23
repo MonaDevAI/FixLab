@@ -50,6 +50,146 @@ test("runtime permission approval is exact, single-use and never session-wide", 
   assert.equal(state.requests.length, 0);
 });
 
+test("Allow all transport requires an explicitly offered live capability", () => {
+  const state = fixture();
+  const ordinary = state.permission();
+  state.bridge.receive(ordinary);
+  assert.throws(() => state.bridge.respond(ordinary.id, { action: "allow", scope: "all-tools" }), /not available/);
+  const offered = { ...state.permission(), canAllowAll: true };
+  state.bridge.receive(offered);
+  assert.throws(() => state.bridge.respond(offered.id, { action: "deny", scope: "all-tools" }), /not available/);
+  state.bridge.respond(offered.id, { action: "allow", scope: "all-tools" });
+  assert.equal(state.sent[0].scope, "all-tools");
+  assert.throws(() => state.bridge.respond(offered.id, { action: "allow", scope: "all-tools" }), /stale/);
+  assert.throws(() => state.bridge.receive({
+    ...state.permission(), canApprove: false, canAllowAll: true
+  }), /invalid/);
+  assert.throws(() => state.bridge.receive({
+    ...runtimeQuestionPrompt({ question: "Continue?" }), id: randomUUID(), canAllowAll: true
+  }), /invalid/);
+});
+
+for (const selection of ["ask", "allow-all", "live-grant"]) {
+  test(`SDK Allow all ${selection} preserves manual boundaries`, async () => {
+    let options;
+    let prompts = 0;
+    const output = [];
+    const routine = { kind: "shell", fullCommandText: "npm test" };
+    const manual = [
+      { ...routine, managedApprovalRequired: true },
+      { ...routine, requestSandboxBypass: true },
+      { ...routine, requestSandboxPermissive: true },
+      { ...routine, sandboxPathGrant: { path: "synthetic" } },
+      { ...routine, warning: "Review this warning" },
+      { ...routine, hasWriteFileRedirection: true },
+      { ...routine, canOfferSessionApproval: false },
+      { kind: "read", path: ".auth/user.json" },
+      { kind: "unsupported" },
+      { kind: "shell", fullCommandText: 'git commit -m "Reviewed checkpoint"' }
+    ];
+    await runCopilotSession({
+      repository: "synthetic-repository", prompt: "Synthetic tool-approval choices.",
+      toolApprovalMode: selection === "allow-all" ? "allow-all" : "ask"
+    }, {
+      client: {
+        async start() {},
+        async createSession(value) {
+          options = value;
+          return {
+            rpc: managedPolicyRpc(), on() {},
+            async sendAndWait() {
+              if (selection === "live-grant") {
+                assert.deepEqual(await options.onPermissionRequest(routine), {
+                  kind: "approve-once", approvedInteractively: true
+                });
+              }
+              assert.deepEqual(await options.onPermissionRequest(routine), selection === "ask"
+                ? { kind: "reject" } : { kind: "approve-once", approvedInteractively: false });
+              for (const request of manual) {
+                assert.deepEqual(await options.onPermissionRequest(request), { kind: "reject" });
+              }
+              await assert.rejects(options.onUserInputRequest({ question: "Complete normal sign-in?" }), /cancelled/);
+            }
+          };
+        },
+        async stop() { return []; }
+      },
+      async ask(request) {
+        prompts++;
+        if (selection === "live-grant" && prompts === 1) {
+          assert.equal(request.canAllowAll, true);
+          return { action: "allow", scope: "all-tools" };
+        }
+        if (prompts > (selection === "ask" ? 1 : selection === "live-grant" ? 1 : 0)) {
+          assert.notEqual(request.canAllowAll, true);
+        }
+        return { action: "cancel" };
+      },
+      output: (stream, text) => output.push(text)
+    });
+    assert.equal(prompts, manual.length + 1 + (selection === "allow-all" ? 0 : 1));
+    assert.equal(output.some((text) => text.includes("Applied the user's Allow all")), selection !== "ask");
+  });
+}
+
+test("a live Allow all grant is never inherited by a replacement SDK executor", async () => {
+  let launches = 0;
+  let prompts = 0;
+  const client = {
+    async start() {},
+    async createSession(options) {
+      const launch = ++launches;
+      return {
+        rpc: managedPolicyRpc(), on() {},
+        async sendAndWait() {
+          const request = { kind: "shell", fullCommandText: "npm test" };
+          assert.deepEqual(await options.onPermissionRequest(request), launch === 1
+            ? { kind: "approve-once", approvedInteractively: true } : { kind: "reject" });
+          if (launch === 1) {
+            assert.deepEqual(await options.onPermissionRequest(request), {
+              kind: "approve-once", approvedInteractively: false
+            });
+          }
+        }
+      };
+    },
+    async stop() { return []; }
+  };
+  const config = { repository: "synthetic-repository", prompt: "Synthetic executor lifetime." };
+  const dependencies = {
+    client, output() {},
+    async ask() {
+      return ++prompts === 1 ? { action: "allow", scope: "all-tools" } : { action: "deny" };
+    }
+  };
+  await runCopilotSession(config, dependencies);
+  await runCopilotSession(config, dependencies);
+  assert.equal(prompts, 2);
+});
+
+test("SDK rejects invalid Allow all choices and unresolved managed policy before executing", async () => {
+  let executions = 0;
+  const client = {
+    async start() {},
+    async createSession() {
+      return {
+        rpc: managedPolicyRpc({ failClosed: true }), on() {},
+        async sendAndWait() { executions++; }
+      };
+    },
+    async stop() { return []; }
+  };
+  for (const toolApprovalMode of [true, null, {}, "all", "ALLOW-ALL"]) {
+    await assert.rejects(runCopilotSession({ toolApprovalMode }, {
+      client, ask() { throw new Error("No user request expected"); }, output() {}
+    }), /toolApprovalMode/);
+  }
+  await assert.rejects(runCopilotSession({ toolApprovalMode: "allow-all" }, {
+    client, ask() { throw new Error("No user request expected"); }, output() {}
+  }), /Enterprise policy/);
+  assert.equal(executions, 0);
+});
+
 test("structured SDK usage is monotonic, bounded and independent of rendered token summaries", () => {
   const previous = {
     inputTokens: 100, cachedInputTokens: 80, cacheWriteTokens: 10, outputTokens: 5

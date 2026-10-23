@@ -102,8 +102,32 @@ Direct Copilot jobs use the official SDK's permission and user-input callbacks.
 Human responses are scoped to the current live instance, job and one-use request.
 The endpoint requires the exact loopback Host and browser Origin, JSON and
 explicit confirmation. It is not exposed as an agent/MCP self-approval operation.
-No session-wide or permanent grant is offered, and managed organization policies
-are not overridden. Native creation and resume enable the SDK's managed-policy
+No permanent grant is offered, and managed organization policies
+are not overridden. The dashboard offers an explicit **Allow all tool commands
+for this run** opt-in, off by default, and **Allow all for this run** on eligible
+live Copilot permission requests. These authorize reviewable tool requests without
+individual prompts for the current executor only. This is privileged execution:
+commands can modify files and contact services; it is not a sandbox or a guarantee
+that arbitrary shell commands are safe. Authentication, repository instructions,
+read-only/data-safety restrictions, publication consent, required checks and
+deployment approvals remain authoritative.
+
+Native Allow all excludes sensitive/unsupported requests, managed human approval,
+sandbox escalation, warnings, and the recognized publication-checkpoint commands.
+Those requests retain their existing separate review. Questions are never answered
+automatically. Choosing Allow all requires explicit confirmation and the exact
+dashboard origin. It expires on executor termination, stop, hold, failure or
+completion; snapshots, retries, recovered queues and restarted jobs default back
+to individual approval. Fresh queued jobs retain only their explicitly selected
+choice while the current dashboard stays alive.
+
+Agency's background CLI receives `--allow-all-tools` only after this explicit
+opt-in; its CLI, not the SDK bridge, mediates requests. Without opt-in, unsupported
+interactive tool approvals can block a background Agency job. Use direct Copilot
+for native dashboard permission review. Do not use Allow all where organization
+policy prohibits broad tool authorization.
+
+Native creation and resume enable the SDK's managed-policy
 enforcement using the runtime's signed-in authentication. Before sending the
 job prompt, the host checks the session's resolved policy and blocks execution
 if policy is unresolved or the runtime cannot report it. Policy-loading errors

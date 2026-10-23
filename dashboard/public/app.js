@@ -497,7 +497,9 @@ async function respondToRuntime(action, choice, scope) {
   if (!selection || runtimeBusy) {
     return;
   }
-  if (action === "allow" && !window.confirm(scope === "repository-reads"
+  if (action === "allow" && !window.confirm(scope === "all-tools"
+    ? "Allow all reviewable tool commands for this executor? Commands can access or change files and contact services without individual approval prompts. This is privileged execution, not a sandbox. Organization policy, sensitive/escalated requests, sign-in, publication consent and required checks remain separate. The choice expires when the executor stops."
+    : scope === "repository-reads"
     ? "Allow non-sensitive source, documentation and selected project-file reads within this job's repository for this executor? Directories, hidden/sensitive files, browser state, outside paths, symbolic links, escalation and managed human approval remain manual. The grant expires when the executor ends."
     : scope === "exact-test-command"
       ? "Allow this exact reviewed test command for this executor? Its working directory, reported paths and package.json are bound to this grant. Tests can have side effects: review the script before approving. Changed commands, network requests, sandbox escalation, business writes and managed human approvals are not separately authorized. The grant expires when the executor ends."
@@ -566,6 +568,9 @@ function renderRuntimeRequest(job, isActive) {
   if (pending.kind === "permission") {
     if (pending.canApprove) {
       button(runtimeActions, "Allow once", "allow");
+      if (pending.canAllowAll === true) {
+        button(runtimeActions, "Allow all for this run", "allow", undefined, "all-tools");
+      }
       if (pending.grantScope === "repository-reads") {
         button(runtimeActions, "Allow repository-file reads for this job", "allow", undefined, pending.grantScope);
       } else if (pending.grantScope === "exact-test-command") {
@@ -2353,6 +2358,13 @@ form.addEventListener("submit", async (event) => {
   startButton.disabled = true;
   try {
     const data = new FormData(form);
+    const allowAllTools = data.get("allowAllTools") === "on";
+    if (allowAllTools && !window.confirm(
+      "Allow all reviewable tool commands for this run? Commands can access or change files and contact services without individual approval prompts. This is privileged execution, not a sandbox. Organization policy, sensitive/escalated requests, sign-in, publication consent and required checks remain separate. Retries and later jobs require a new opt-in."
+    )) {
+      startButton.disabled = false;
+      return;
+    }
     const intakeSource = data.get("intakeSource");
     if (intakeSource === "azure-devops" && loadedWorkItems.length === 0) {
       throw new Error("Load one or more Azure DevOps bugs before starting.");
@@ -2370,6 +2382,8 @@ form.addEventListener("submit", async (event) => {
         mode: data.get("mode"),
         validationIntent: data.get("validationIntent") || undefined,
         permissionPreflight: data.get("permissionPreflight") === "on",
+        toolApprovalMode: allowAllTools ? "allow-all" : "ask",
+        allowAllConfirmed: allowAllTools,
         routineFileAccess: data.get("routineFileAccess") === "on",
         inputTokenLimit: Number(data.get("inputTokenLimit") ?? 0),
         pullRequestStrategy: data.get("separatePullRequests") === "on"
@@ -2389,6 +2403,7 @@ form.addEventListener("submit", async (event) => {
       })
     });
     requestInput.value = "";
+    form.querySelector('[name="allowAllTools"]').checked = false;
     requestInput.focus();
     selectedScreenshots = [];
     renderScreenshots();
