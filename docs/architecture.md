@@ -144,6 +144,14 @@ The choice is privileged execution and expires with the executor; snapshots and
 retries return to `ask`. Agency adds its broad CLI tool flag only after opt-in;
 its non-interactive default can block on permissions that require a human.
 
+When the selected current job has a freeform runtime question, the message
+composer submits an identity-bound answer through the existing runtime-response
+route, never the new-job route. New conversation retains explicit new-job intake.
+Changed question identities clear unsent replies with a notice, and failed
+delivery preserves the reply without falling back to job creation. Runtime cards
+distinguish unanswered questions from permission requests and explain that an
+active Allow all choice does not authorize ineligible requests or supply answers.
+
 `fixlab <repository>` is the Agency-like conversational entry point. It opens
 the packaged FixLab agent directly in that repository so setup, diagnosis,
 implementation, and validation can proceed in one interactive runtime
@@ -225,8 +233,9 @@ An opt-in `validation.changeAware` policy generalizes API-only selection to
 reviewed component path-to-gate mappings. All matching scope gate sets are
 combined, with pinned-baseline and executed-history safeguards unchanged.
 Unknown, empty, unreadable and full-validation-path changes retain all gates.
-An optional job `permissionPreflight` pauses before executor admission and
-uses the existing exact-folder review/approval flow. It grants nothing by
+The dashboard job form does not request optional folder preflight. An API/control
+client can explicitly set job `permissionPreflight` to pause before executor
+admission and use the existing exact-folder review/approval flow. It grants nothing by
 itself, and the first approved invocation starts a new runtime session rather
 than resuming one that never ran. No grants persist across dashboard restart.
 Completed preflight lifecycle state does persist so a recovered session is not

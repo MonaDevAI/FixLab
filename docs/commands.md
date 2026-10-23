@@ -202,9 +202,11 @@ reviewed.
 
 ### Pre-launch permission handoff
 
-Select **Review required external-folder access before starting the executor**
-or pass `permissionPreflight: true` to the existing job-start API/control.
-The job pauses before any executor launch, workspace acquisition, or frontend
+The dashboard job form does not enable an optional pre-launch folder review.
+Normal runtime permission requests still require review when they occur.
+For a known external-folder prerequisite, an API/control client can explicitly
+pass `permissionPreflight: true` to the existing job-start API/control.
+That job pauses before any executor launch, workspace acquisition, or frontend
 warmup. Review an exact required folder, then separately confirm its resolved
 scope through the existing job/request-bound approval flow. Review is not
 approval. The first launch is fresh, not a resume of a nonexistent session.
@@ -386,6 +388,17 @@ For agent questions, choose an offered option or send a non-sensitive answer if
 freeform input is enabled. Complete sign-in in the normal browser; never paste
 passwords, tokens or MFA codes into FixLab.
 
+When the selected current job is waiting for a freeform answer, **Message FixLab**
+shows the question and **Send reply** answers that exact live request instead of
+creating another job. **New conversation** explicitly starts a separate job.
+Failed replies keep their text and report the error; changed questions clear
+unsent replies with a notice rather than delivering them to a different request.
+
+The request card distinguishes questions from tool permissions and shows whether
+**Allow all** is active. This separately confirmed choice applies only to eligible
+requests in the current executor. Ineligible requests still need an explicit
+response, and questions always need the user's answer.
+
 The same executor waits for your response, retains its repository lease, and
 suspends its idle timer. No restart or generic Resume is needed. Multiple requests
 are shown one at a time. When two or more approvable permission requests are
@@ -395,14 +408,14 @@ one-time responses only for that reviewed snapshot. Questions, requests whose
 approval is unavailable, and requests arriving afterward remain unanswered.
 The dashboard rechecks the snapshot before sending; a stale request or delivery
 failure stops the batch and reports confirmed partial progress without retrying.
-Already delivered approvals cannot be rolled back. Nothing is enabled for the
-rest of the job or for another job.
+Already delivered approvals cannot be rolled back. The batch itself creates no
+grant for future requests or another job.
 Stop/hold/shutdown cancels unanswered requests. Responses
 are live-only and are not saved in dashboard history or copied to another job.
 Unknown, sensitive or oversized permission details offer **Deny**, not approval.
 Organization policy remains authoritative; an approval is not a passed test or
 permission for unrelated production operations. The dashboard does not offer
-blanket or permanent approvals.
+permanent approvals; the separate Allow all choice expires with its executor.
 
 Native filename-only discovery in canonical, non-sensitive checkout directories
 and the exact `node <this-installed-fixlab.js> --help` command are built-in

@@ -153,7 +153,7 @@ test.afterAll(async () => {
   rmSync(repository, { recursive: true, force: true });
 });
 
-test("dashboard submits interception as a per-run option rather than a shared default", async ({ page }) => {
+test("dashboard submits per-run interception without optional folder preflight", async ({ page }) => {
   let submitted;
   await page.route("**/api/jobs", async (route) => {
     submitted = route.request().postDataJSON();
@@ -172,12 +172,14 @@ test("dashboard submits interception as a per-run option rather than a shared de
     });
   });
   await openWorkflowControls(page, baseUrl);
+  await expect(page.locator('input[name="permissionPreflight"]')).toHaveCount(0);
   await page.locator("#request").fill("Synthetic per-run interception scenario.");
   await page.locator("input[name=mode][value=playwright-only]").check();
   await page.locator("#job-test-mutation-mode").selectOption("intercepted");
   await page.locator("#start-button").click();
   await expect.poll(() => submitted?.testMutationMode).toBe("intercepted");
   expect(submitted.mode).toBe("playwright-only");
+  expect(submitted.permissionPreflight).toBeUndefined();
   await page.locator("#job-test-mutation-mode").selectOption("none");
   await expect(page.locator("#job-test-mutation-mode")).toHaveValue("none");
 });
@@ -241,6 +243,109 @@ test("live Allow all requires confirmation and is absent without an offered capa
   await page.reload();
   await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeVisible();
   await expect(allow).toHaveCount(0);
+});
+
+test("chat composer replies answer the current question instead of creating another job", async ({ page }) => {
+  const job = pendingQuestionJob("Which synthetic request should be inspected?");
+  const questionId = job.runtimeRequests[0].id;
+  const answers = [];
+  const newJobs = [];
+  await mockChatWorkspace(page, { job });
+  await page.route("**/api/jobs", async (route) => {
+    newJobs.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ job, queue: [], history: [] }) });
+  });
+  await page.route("**/api/job/runtime-response", async (route) => {
+    answers.push(route.request().postDataJSON());
+    job.runtimeRequests = [];
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ job }) });
+  });
+  await page.goto(baseUrl);
+  await expect(page.locator("#runtime-request-panel")).toBeVisible();
+  await page.locator("#request").fill("SYNTHETIC-42");
+  await page.locator("#start-button").click();
+  await expect.poll(() => answers.length + newJobs.length).toBe(1);
+  expect(newJobs).toEqual([]);
+  expect(answers).toHaveLength(1);
+  expect(answers[0]).toEqual({
+    instanceId: "workspace-owner", jobId: job.id, requestId: questionId,
+    confirmed: true, action: "answer", answer: "SYNTHETIC-42"
+  });
+  await expect(page.locator("#request")).toHaveValue("");
+  await expect(page.locator("#composer-reply-result")).toContainText("Reply sent to the current run");
+});
+
+test("chat composer keeps a rejected reply and never falls back to starting a job", async ({ page }) => {
+  const job = pendingQuestionJob("Which synthetic request should be inspected?");
+  const posts = [];
+  await mockChatWorkspace(page, { job });
+  page.on("request", (request) => { if (request.method() === "POST") { posts.push(request.url()); } });
+  await page.route("**/api/job/runtime-response", (route) => route.fulfill({
+    status: 409, contentType: "application/json",
+    body: JSON.stringify({ error: "The question changed. Review the current request." })
+  }));
+  await page.goto(baseUrl);
+  await expect(page.locator("#start-button")).toHaveText("Send reply");
+  await page.locator("#request").fill("SYNTHETIC-42");
+  await page.locator("#start-button").click();
+  await expect(page.locator("#composer-reply-result")).toContainText("The question changed");
+  await expect(page.locator("#request")).toHaveValue("SYNTHETIC-42");
+  await expect(page.locator("#start-button")).toBeEnabled();
+  expect(posts).toEqual([`${baseUrl}/api/job/runtime-response`]);
+});
+
+test("chat composer clears an unsent reply when the question identity changes", async ({ page }) => {
+  const job = pendingQuestionJob("First synthetic question?");
+  const posts = [];
+  await mockChatWorkspace(page, { job });
+  page.on("request", (request) => { if (request.method() === "POST") { posts.push(request.url()); } });
+  await page.goto(baseUrl);
+  await expect(page.locator("#start-button")).toHaveText("Send reply");
+  await page.locator("#request").fill("An answer meant only for the first question.");
+  job.runtimeRequests = pendingQuestionJob("Different synthetic question?").runtimeRequests;
+  await expect(page.locator("#composer-question")).toHaveText("Different synthetic question?");
+  await expect(page.locator("#request")).toHaveValue("");
+  await expect(page.locator("#composer-reply-result")).toContainText("unsent reply was cleared");
+  expect(posts).toEqual([]);
+});
+
+test("new conversation still queues a job rather than answering a pending question", async ({ page }) => {
+  const job = pendingQuestionJob("Which synthetic request should be inspected?");
+  const newJobs = [];
+  const answers = [];
+  await mockChatWorkspace(page, { job });
+  await page.route("**/api/jobs", async (route) => {
+    newJobs.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ job, queue: [], history: [] }) });
+  });
+  await page.route("**/api/job/runtime-response", async (route) => {
+    answers.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ job }) });
+  });
+  await page.goto(baseUrl);
+  await expect(page.locator("#start-button")).toHaveText("Send reply");
+  await page.locator("#new-conversation").click();
+  await expect(page.locator("#start-button")).toHaveText("Add to queue");
+  await expect(page.locator("#request")).toHaveAttribute("maxlength", "10000");
+  await page.locator("#request").fill("A separate synthetic investigation.");
+  await page.locator("#start-button").click();
+  await expect.poll(() => newJobs.length).toBe(1);
+  expect(newJobs[0].request).toBe("A separate synthetic investigation.");
+  expect(answers).toEqual([]);
+});
+
+test("runtime guidance distinguishes Allow all exceptions from questions", async ({ page }) => {
+  const job = pendingApprovalJob(["Synthetic prerequisite check"]);
+  job.toolApprovalMode = "allow-all";
+  await mockChatWorkspace(page, { job });
+  await page.goto(baseUrl);
+  await expect(page.locator("#runtime-request-guidance")).toContainText("Allow all is active");
+  await expect(page.locator("#runtime-request-guidance")).toContainText("not eligible for automatic approval");
+  await expect(page.getByRole("button", { name: "Allow all for this run", exact: true })).toHaveCount(0);
+  job.runtimeRequests = pendingQuestionJob("Which synthetic request should be inspected?").runtimeRequests;
+  await expect(page.locator("#runtime-request-guidance")).toContainText("question, not a tool permission");
+  await expect(page.locator("#runtime-request-guidance")).toContainText("Allow all never supplies answers");
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
 });
 
 test("native Copilot prompts allow once, deny and answer choices in the same live job", async ({ page }) => {
@@ -616,7 +721,7 @@ test(`${componentPolicy ? "Component" : "API-only"} gates display not applicable
 });
 }
 
-test("pre-launch folder review starts no executor until the user explicitly approves", async ({ page }) => {
+test("explicit API pre-launch folder review starts no executor until the user explicitly approves", async ({ page }) => {
   const preflightRepository = mkdtempSync(join(tmpdir(), "fixlab-preflight-e2e-"));
   const external = mkdtempSync(join(tmpdir(), "fixlab-preflight-folder-e2e-"));
   const directory = join(preflightRepository, ".github", "fixlab");
@@ -637,12 +742,15 @@ test("pre-launch folder review starts no executor until the user explicitly appr
   });
   try {
     const address = await preflightDashboard.listen({ port: await availablePort() });
-    await openWorkflowControls(page, address.url);
-    await page.getByRole("radio", { name: "Validate only", exact: true }).check();
-    await page.getByLabel("Warm React in parallel when a local job starts").uncheck();
-    await page.getByLabel("Review required external-folder access before starting the executor").check();
-    await page.getByLabel("Bug or required enhancement").fill("Review the required helper folder.");
-    await page.getByRole("button", { name: "Start job", exact: true }).click();
+    const created = await page.request.post(`${address.url}/api/jobs`, {
+      headers: { Origin: address.url },
+      data: {
+        request: "Review the required helper folder.", mode: "validate-only",
+        targetEnvironment: "local", permissionPreflight: true
+      }
+    });
+    expect(created.status()).toBe(202);
+    await page.goto(address.url);
     await expect(page.locator("#permission-review")).toBeEnabled();
     await expect(page.locator("#permission-helper")).toContainText("Pre-launch review");
     expect(calls).toHaveLength(0);
@@ -1971,6 +2079,12 @@ function pendingApprovalJob(commands) {
       ...runtimePermissionPrompt({ kind: "shell", fullCommandText: command }), id: randomUUID()
     }))
   };
+}
+
+function pendingQuestionJob(question) {
+  const job = pendingApprovalJob([]);
+  job.runtimeRequests = [{ ...runtimeQuestionPrompt({ question }), id: randomUUID() }];
+  return job;
 }
 
 test("current-job full screen ignores historical selection, follows the live job and restores the prior view", async ({ page }) => {
