@@ -216,6 +216,11 @@
             <input name="permissionPreflight" type="checkbox">
             Review required external-folder access before starting the executor
           </label>
+          <label class="checkbox-row">
+            <input name="allowAllTools" type="checkbox">
+            Allow all tool commands for this run
+          </label>
+          <p class="guidance">Privileged opt-in: reviewable tool requests can execute commands and change files without individual prompts. Organization policy, sensitive or escalated requests, sign-in, publication consent and required checks remain separate. This choice expires when the executor stops and is not inherited by retries or new jobs.</p>
           <fieldset>
             <legend>Intake</legend>
             <label><input type="radio" name="intakeSource" value="manual" checked> Enter manually</label>

@@ -7,10 +7,11 @@ import {
   MAX_RUNTIME_REQUESTS,
   runtimePermissionPrompt,
   runtimeQuestionPrompt,
-  runtimeRequestId
+  runtimeRequestId,
+  validateToolApprovalMode
 } from "./runtime-requests.js";
 import { createRuntimePermissionPolicy, validateJobFileAccess } from "./runtime-permission-policy.js";
-import { createPublicationPermissions } from "./publication-permissions.js";
+import { createPublicationPermissions, publicationCommand } from "./publication-permissions.js";
 
 export function extensionLaunchProvider(bootstrap) {
   return {
@@ -52,6 +53,7 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
     return response.json();
   }
 }) {
+  let allowAllTools = validateToolApprovalMode(config.toolApprovalMode) === "allow-all";
   const inputTokenLimit = config.inputTokenLimit ?? 0;
   if (!Number.isSafeInteger(inputTokenLimit) || inputTokenLimit < 0) {
     throw new Error("inputTokenLimit must be a non-negative safe integer.");
@@ -101,6 +103,11 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
       if (budgetReached) {
         return { kind: "reject" };
       }
+      const canAllowAll = policyReady && prompt.canApprove &&
+        request.canOfferSessionApproval !== false && !request.managedApprovalRequired &&
+        !request.requestSandboxBypass && !request.requestSandboxPermissive &&
+        !request.sandboxPathGrant && !request.warning && !request.hasWriteFileRedirection &&
+        !(request.kind === "shell" && publicationCommand(request.fullCommandText));
       const automatic = policyReady ? permissions.automaticApproval(request, prompt) : null;
       if (automatic) {
         output("stdout", `\nApplied a built-in read-only permission: ${automatic}. No persistent, broad shell, escalation or managed-policy grant was created.\n`);
@@ -123,6 +130,10 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
           output("stderr", `\nPublication scope unavailable: ${error.message} Review this request manually.\n`);
         }
       }
+      if (allowAllTools && canAllowAll) {
+        output("stdout", "\nApplied the user's Allow all tool-approval choice for this executor. Required policies and workflow approvals remain in effect.\n");
+        return { kind: "approve-once", approvedInteractively: false };
+      }
       const reviewedGrant = publicationReview ??
         (policyReady && request.kind !== "write" ? permissions.review(request, prompt) : null);
       const grantScope = reviewedGrant?.scope;
@@ -139,7 +150,9 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
           }
         }, null, 2);
       }
-      const response = await ask({ ...prompt, ...(grantScope ? { grantScope } : {}) });
+      const response = await ask({
+        ...prompt, ...(grantScope ? { grantScope } : {}), ...(canAllowAll ? { canAllowAll: true } : {})
+      });
       if (budgetReached) {
         return { kind: "reject" };
       }
@@ -147,10 +160,14 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
         throw new Error("An unreviewable permission request cannot be approved.");
       }
       if (response.scope !== undefined) {
-        if (response.action !== "allow" || response.scope !== grantScope) {
+        if (response.action !== "allow" || (response.scope === "all-tools"
+          ? !canAllowAll
+          : response.scope !== grantScope)) {
           throw new Error("The selected job-scoped permission was not offered.");
         }
-        if (response.scope === "publication-batch") {
+        if (response.scope === "all-tools") {
+          allowAllTools = true;
+        } else if (response.scope === "publication-batch") {
           const fresh = publication.review(request, await publicationContext(true));
           if (!fresh || fresh.key !== reviewedGrant.key) {
             throw new Error("Publication scope changed during review; no grant was created.");

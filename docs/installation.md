@@ -157,8 +157,10 @@ repository's required validation gates passed.
 For a background permission blocker, review an exact external folder only when
 that is the confirmed missing access. A workflow approval does not transfer the
 host session's permissions to a background executor. The adapter currently
-uses `--allow-all-tools`; folder approval does not make that flag acceptable to
-a policy that forbids blanket tool authorization. Keep background jobs blocked
+uses `--allow-all-tools` only when the user explicitly chooses Allow all for that
+run. Direct Copilot defaults to native dashboard permission review. Folder
+approval does not make a broad flag acceptable to a policy that forbids blanket
+tool authorization. Keep background jobs blocked
 in that case rather than widening permissions or bypassing the policy.
 Unknown tool or organization-policy denials also remain blocked;
 see [permission troubleshooting](troubleshooting.md#a-validation-command-is-denied-before-execution).

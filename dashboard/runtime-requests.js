@@ -2,6 +2,12 @@ import { randomUUID } from "node:crypto";
 
 export const MAX_RUNTIME_REQUESTS = 8;
 export const MAX_RUNTIME_FRAME_BYTES = 1024 * 1024;
+export function validateToolApprovalMode(value = "ask") {
+  if (!["ask", "allow-all"].includes(value)) {
+    throw new Error("toolApprovalMode must be ask or allow-all.");
+  }
+  return value;
+}
 const secret = /authorization|bearer\s|(?:password|passwd|secret|token|cookie|api[_-]?key)\s*["':=]|(?:gh[pousr]_|github_pat_|eyJ)[A-Za-z0-9_-]{16,}|https?:\/\/[^/\s]+:[^/\s]+@|[?&](?:sig|code|key|access_token|client_secret)=|-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
 const credentialQuestion = /(?:enter|provide|paste|type|share|input|tell|send|copy|what is|what's).{0,80}(?:password|verification code|one.time code|MFA code|access token|cookie|secret)/i;
 const credentialPath = /(?:^|[\\/])(?:\.auth|\.edge-profile|\.ssh|\.aws|\.azure|\.env(?:\.[^\\/]*)?|credentials(?:\.[^\\/]*)?)(?:[\\/]|$)/i;
@@ -110,6 +116,9 @@ export function createRuntimeRequestBridge({ send, onChange }) {
           value.choices.some((choice) => !safeRuntimeText(choice, 1000)) ||
           typeof value.canApprove !== "boolean" ||
           typeof value.allowFreeform !== "boolean" ||
+          (value.canAllowAll !== undefined &&
+            (typeof value.canAllowAll !== "boolean" ||
+              (value.canAllowAll && (value.kind !== "permission" || !value.canApprove)))) ||
           (value.grantScope !== undefined &&
             (!value.canApprove || value.kind !== "permission" ||
               !["repository-reads", "exact-test-command", "publication-batch"].includes(value.grantScope)))) {
@@ -123,6 +132,7 @@ export function createRuntimeRequestBridge({ send, onChange }) {
         choices: [...value.choices],
         canApprove: value.canApprove,
         allowFreeform: value.allowFreeform,
+        ...(value.canAllowAll === true ? { canAllowAll: true } : {}),
         ...(value.grantScope ? { grantScope: value.grantScope } : {})
       });
       publish();
@@ -135,7 +145,9 @@ export function createRuntimeRequestBridge({ send, onChange }) {
       const { action, choice, answer } = response;
       let result = { type: "response", id, action };
       if (response.scope !== undefined) {
-        if (action !== "allow" || !request.grantScope || response.scope !== request.grantScope) {
+        if (action !== "allow" || (response.scope === "all-tools"
+          ? request.canAllowAll !== true
+          : !request.grantScope || response.scope !== request.grantScope)) {
           throw new Error("This job-scoped permission decision is not available.");
         }
         result.scope = response.scope;

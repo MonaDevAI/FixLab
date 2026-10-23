@@ -134,6 +134,16 @@ Collects defect details, screenshots, repository selection, validation mode,
 environment choice, and blocker policy. It displays stages, evidence, and
 required human actions.
 
+Run options include an explicit, default-off **Allow all tool commands for this
+run** choice. It is passed to the executor, not saved as a repository default.
+Direct Copilot can also grant it from an eligible live permission card. It skips
+individual reviewable tool prompts, not user questions, managed human approvals,
+sandbox escalation, sensitive requests or recognized publication checkpoints.
+It does not waive authentication, repository/data-safety rules or validation.
+The choice is privileged execution and expires with the executor; snapshots and
+retries return to `ask`. Agency adds its broad CLI tool flag only after opt-in;
+its non-interactive default can block on permissions that require a human.
+
 `fixlab <repository>` is the Agency-like conversational entry point. It opens
 the packaged FixLab agent directly in that repository so setup, diagnosis,
 implementation, and validation can proceed in one interactive runtime

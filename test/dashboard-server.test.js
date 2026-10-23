@@ -150,6 +150,19 @@ test("Agency executor keeps long prompts out of process arguments", () => {
     sessionId: "11111111-1111-4111-8111-111111111111"
   });
 
+  test("runtime invocation adds broad tool approval only after explicit opt-in", () => {
+    for (const build of [buildAgencyInvocation, buildCopilotInvocation]) {
+      for (const resume of [false, true]) {
+        const config = { packageRoot, sessionId: randomUUID(), prompt: "Synthetic approval mode.", resume };
+        assert.equal(build(config).args.includes("--allow-all-tools"), false);
+        assert.equal(build({ ...config, toolApprovalMode: "allow-all" }).args.includes("--allow-all-tools"), true);
+        for (const toolApprovalMode of [true, null, "all", []]) {
+          assert.throws(() => build({ ...config, toolApprovalMode }), /toolApprovalMode/);
+        }
+      }
+    }
+  });
+
   assert.equal(invocation.input, prompt);
   assert.equal(invocation.args.includes(prompt), false);
   assert.equal(invocation.args.includes("--interactive"), false);
@@ -1299,6 +1312,59 @@ test("reviewed file trust is exact-job bound, persists on resume/restart and is 
   }
 });
 
+test("Allow all job consent is origin-bound, reaches the executor and is not recovered or inherited", async () => {
+  const repository = createGitRepository();
+  const launches = [];
+  let running = await startDashboard(repository, (input) => {
+    launches.push(input);
+    return { completion: new Promise(() => {}) };
+  }, undefined, { runtime: "copilot" });
+  try {
+    const post = (changes = {}, origin = running.url) => jsonRequest(running.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) },
+      body: JSON.stringify({
+        request: "Synthetic explicit Allow all.", mode: "validate-only",
+        toolApprovalMode: "allow-all", allowAllConfirmed: true, ...changes
+      })
+    });
+    for (const toolApprovalMode of [true, null, {}, "all"]) {
+      assert.equal((await post({ toolApprovalMode })).response.status, 400);
+    }
+    assert.equal((await post({ allowAllConfirmed: false })).response.status, 400);
+    assert.equal((await post({}, "")).response.status, 403);
+    assert.equal((await post({}, "https://example.invalid")).response.status, 403);
+    assert.equal(launches.length, 0);
+    const created = await post();
+    assert.equal(created.response.status, 202, created.body.error);
+    assert.equal(created.body.job.toolApprovalMode, "allow-all");
+    assert.equal(launches[0].toolApprovalMode, "allow-all");
+    const normal = await post({ toolApprovalMode: "ask", allowAllConfirmed: false });
+    assert.equal(normal.body.queue[0].toolApprovalMode, "ask");
+    const queued = await post();
+    assert.equal(queued.body.queue[1].toolApprovalMode, "allow-all");
+    const snapshot = JSON.parse(readFileSync(join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json"), "utf8"));
+    assert.doesNotMatch(JSON.stringify(snapshot), /"toolApprovalMode":"allow-all"/);
+    await running.dashboard.close();
+    running = await startDashboard(repository, (input) => {
+      launches.push(input);
+      return { completion: new Promise(() => {}) };
+    }, undefined, { runtime: "copilot" });
+    const recovered = (await jsonRequest(running.url, "/api/status")).body;
+    assert.equal(recovered.job.toolApprovalMode, "ask");
+    assert.ok(recovered.queue.every((job) => job.toolApprovalMode === "ask"));
+    const resumed = await jsonRequest(running.url, "/api/job/input", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "retry", details: "Resume without inheriting Allow all." })
+    });
+    assert.equal(resumed.response.status, 202, resumed.body.error);
+    assert.equal(launches.at(-1).toolApprovalMode, "ask");
+  } finally {
+    await running.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("input-token budgets pause without automatic continuation, preserve usage and require bound review", async () => {
   const repository = createGitRepository();
   let finish;
@@ -1559,6 +1625,7 @@ test("live native prompts require current instance/job/request, exact browser or
     assert.equal((await post(valid, "https://example.invalid")).response.status, 403);
     assert.equal((await post(valid, "")).response.status, 403);
     assert.equal((await post({ ...valid, confirmed: false })).response.status, 400);
+    assert.equal((await post({ ...valid, scope: "all-tools" })).response.status, 400);
     assert.equal((await jsonRequest(url, "/api/job/input", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "continue", details: "Do not use as approval." })
@@ -1568,6 +1635,15 @@ test("live native prompts require current instance/job/request, exact browser or
     assert.equal(sent[0].action, "allow");
     assert.equal((await post(valid)).response.status, 409);
     assert.equal(launches, 1, "responding continues the same live executor");
+    const allToolsId = randomUUID();
+    bridge.receive({
+      ...runtimePermissionPrompt({ kind: "shell", fullCommandText: "npm test" }),
+      id: allToolsId, canAllowAll: true
+    });
+    const allowed = await post({ ...valid, requestId: allToolsId, scope: "all-tools" });
+    assert.equal(allowed.response.status, 200, allowed.body.error);
+    assert.equal(allowed.body.job.toolApprovalMode, "allow-all");
+    assert.equal(sent.at(-1).scope, "all-tools");
     const questionId = randomUUID();
     bridge.receive({
       ...runtimeQuestionPrompt({ question: "Ephemeral native question marker", choices: ["Continue", "Cancel"] }),
@@ -3959,6 +4035,54 @@ test("zero exit with missing terminal markers fails as incomplete", async () => 
       true
     );
     assert.equal(result.body.job.stages.diagnosis.status, "pending");
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("restarting a failed job advances the waiting queue without changing FIFO order", async () => {
+  const repository = createRepository();
+  const executions = [];
+  const executor = () => {
+    let complete;
+    const completion = new Promise((resolve) => { complete = resolve; });
+    executions.push({ complete });
+    return { completion, terminate() { complete({ code: 1 }); } };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body)
+  });
+
+  try {
+    const first = await post("/api/jobs", {
+      request: "Synthetic first job that fails.", mode: "validate-only"
+    });
+    const second = await post("/api/jobs", {
+      request: "Synthetic oldest waiting job.", mode: "validate-only"
+    });
+    const third = await post("/api/jobs", {
+      request: "Synthetic later waiting job.", mode: "validate-only"
+    });
+    executions[0].complete({ code: 1 });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const failed = await jsonRequest(url, "/api/status");
+    assert.equal(failed.body.job.status, "failed");
+    assert.equal(executions.length, 1, "failure must not automatically release waiting jobs");
+
+    const restarted = await post("/api/jobs/restart", { jobId: first.body.job.id });
+    assert.equal(restarted.response.status, 202, restarted.body.error);
+    assert.equal(restarted.body.job?.id, second.body.queuedJob.id);
+    assert.equal(restarted.body.job.status, "running");
+    assert.equal(executions.length, 2);
+    assert.deepEqual(restarted.body.queue.map((job) => job.id), [
+      third.body.queuedJob.id, restarted.body.restartedJob.id
+    ]);
+    assert.equal(restarted.body.history.find((job) => job.id === first.body.job.id).status, "failed");
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

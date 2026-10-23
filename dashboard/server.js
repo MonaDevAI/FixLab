@@ -39,7 +39,7 @@ import { createSessionRegistry } from "./sessions.js";
 import { inspectBrowserProfileOwnership } from "./browser-ownership.js";
 import { canonicalExecutionRepository, createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
-import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage } from "./runtime-requests.js";
+import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
 import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
@@ -497,6 +497,7 @@ function publicQueue(jobs) {
     workflow: job.workflow ?? { mode: "strict" },
     prestartFrontend: job.prestartFrontend ?? false,
     inputTokenLimit: job.inputTokenLimit ?? 0,
+    toolApprovalMode: job.toolApprovalMode ?? "ask",
     fileAccess: job.fileAccess ?? null,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
@@ -588,6 +589,7 @@ function dashboardSnapshot(job) {
     usage: job.usage,
     inputTokenLimit: job.inputTokenLimit ?? 0,
     budgetExceeded: job.budgetExceeded === true,
+    toolApprovalMode: "ask",
     fileAccess: job.fileAccess ?? null,
     browserPreflightBlocked: job.browserPreflightBlocked === true,
     browserSessionNotStarted: job.browserSessionNotStarted === true,
@@ -655,6 +657,7 @@ function restoreDashboardJob(snapshot, repository) {
       ? { testEvidence: { ...snapshot.testEvidence, apiOnly: true } }
       : {}),
     validationRecovered: true,
+    toolApprovalMode: "ask",
     permissionRequest: snapshot.permissionBlocked
       ? newPermissionRequest({ preflight: snapshot.permissionPreflightPending === true })
       : permissionRequest(snapshot.stages),
@@ -1819,7 +1822,8 @@ export function buildAgencyInvocation({
   prompt,
   sessionId,
   resume = false,
-  additionalDirs = []
+  additionalDirs = [],
+  toolApprovalMode = "ask"
 }) {
   if (!sessionId) {
     throw new Error("Agency invocation requires a session ID");
@@ -1831,7 +1835,7 @@ export function buildAgencyInvocation({
       packageRoot,
       "--agent",
       "fixlab:fixlab",
-      "--allow-all-tools",
+      ...(validateToolApprovalMode(toolApprovalMode) === "allow-all" ? ["--allow-all-tools"] : []),
       ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--stream",
@@ -1848,7 +1852,8 @@ export function buildCopilotInvocation({
   sessionId,
   resume = false,
   additionalDirs = [],
-  model = ""
+  model = "",
+  toolApprovalMode = "ask"
 }) {
   if (!sessionId) {
     throw new Error("Copilot invocation requires a session ID");
@@ -1860,7 +1865,7 @@ export function buildCopilotInvocation({
       "--agent",
       "fixlab:fixlab",
       ...copilotModelArguments(model),
-      "--allow-all-tools",
+      ...(validateToolApprovalMode(toolApprovalMode) === "allow-all" ? ["--allow-all-tools"] : []),
       ...additionalDirectoryArguments(additionalDirs),
       "--no-ask-user",
       "--autopilot",
@@ -1899,6 +1904,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
     mode,
     usage,
     inputTokenLimit,
+    toolApprovalMode = "ask",
     fileAccess,
     dashboardPort,
     protectedPaths,
@@ -1921,6 +1927,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
         prompt,
         sessionId,
         resume,
+        toolApprovalMode,
         model: model ?? defaultModel,
         additionalDirs: [
           ...linkedDependencyDirectories(repository),
@@ -1936,7 +1943,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
       invocation = {
         args: [join(packageRoot, "dashboard", "copilot-session.js")],
         input: JSON.stringify({
-          type: "start", packageRoot, repository, prompt, sessionId, resume, usage, mode, inputTokenLimit, protectedPaths, fileAccess, dashboardPort,
+          type: "start", packageRoot, repository, prompt, sessionId, resume, usage, mode, inputTokenLimit, toolApprovalMode, protectedPaths, fileAccess, dashboardPort,
           model: model ?? defaultModel,
           additionalDirs: [
             ...linkedDependencyDirectories(repository), ...artifactDirectories, ...runtimeDirectories
@@ -2225,6 +2232,7 @@ function publicJob(job) {
     runtimeRequests: job.runtimeRequests ?? [],
     fileAccess: job.fileAccess ?? null,
     inputTokenLimit: job.inputTokenLimit ?? 0,
+    toolApprovalMode: job.toolApprovalMode ?? "ask",
     budgetExceeded: job.budgetExceeded === true,
     runtimeDirectoryGrants: (job.runtimeDirectoryGrants ?? []).map((scope) => scope.directory),
     canResume:
@@ -2639,6 +2647,7 @@ function pushActivity(job, entry) {
 }
 
 function finishJob(job, result) {
+  job.toolApprovalMode = "ask";
   flushPartialOutput(job);
 
   if (result.error?.workspaceReview) {
@@ -2799,6 +2808,7 @@ function flushPartialOutput(job) {
 }
 
 function holdJob(job) {
+  job.toolApprovalMode = "ask";
   flushPartialOutput(job);
   const activeStage =
     FIXLAB_STAGES.find((stage) => job.stages[stage].status === "running") ??
@@ -3285,6 +3295,7 @@ function listPlaywrightArtifacts(repository, { since = null } = {}) {
 }
 
 function resetJobForResume(job) {
+  job.toolApprovalMode = "ask";
   const restartIndex =
     job.status === "passed"
       ? FIXLAB_STAGES.indexOf("diagnosis")
@@ -3961,6 +3972,7 @@ export function createDashboardServer({
         model: job.model,
         usage: job.usage,
         inputTokenLimit: job.inputTokenLimit ?? 0,
+        toolApprovalMode: job.toolApprovalMode ?? "ask",
         fileAccess: validateJobFileAccess(job.fileAccess, resolvedRepository, job.id, job.mode),
         dashboardPort: server.address().port,
         protectedPaths,
@@ -4187,6 +4199,7 @@ export function createDashboardServer({
 
   async function startNextJob() {
     if (
+      closing || workspaceHostState.closing ||
       activeHandle || currentJob?.postValidation ||
       queuedJobs.length === 0 ||
       (currentJob && currentJob.status !== "passed")
@@ -5053,13 +5066,23 @@ export function createDashboardServer({
           sendJson(response, 400, { error: "Explicit confirmation is required." });
           return;
         }
+        if (body.scope === "all-tools" &&
+            (body.action !== "allow" || pending.kind !== "permission" || pending.canAllowAll !== true)) {
+          sendJson(response, 400, { error: "Allow all is not available for this runtime request." });
+          return;
+        }
         activeHandle.respondToRuntimeRequest(body.requestId, body);
+        if (body.scope === "all-tools") {
+          currentJob.toolApprovalMode = "allow-all";
+        }
         pushLog(currentJob, {
           index: currentJob.nextLogIndex,
           timestamp: new Date().toISOString(),
           stream: "dashboard",
           message: body.action === "allow"
-            ? body.scope
+            ? body.scope === "all-tools"
+              ? "The user explicitly enabled Allow all reviewable tool requests for this executor. Organization policy and required workflow approvals remain in effect; the choice expires when this executor ends."
+            : body.scope
               ? "The user explicitly reviewed a job-scoped native permission. It expires when this executor ends; other scopes and managed human approvals remain manual."
               : "The user approved one exact native runtime request. No future or blanket approval was granted."
             : body.action === "deny"
@@ -5825,6 +5848,7 @@ export function createDashboardServer({
         job.resumeSession = resumeSession;
         queuedJobs.push(job);
         recordJobMetric(job);
+        await startNextJob();
       }
       sendJson(response, 202, {
         job: publicJob(currentJob),
@@ -5929,6 +5953,7 @@ export function createDashboardServer({
       recordJobMetric(restartedJob);
       if (shouldQueue) {
         queuedJobs.push(restartedJob);
+        await startNextJob();
       } else {
         currentJob = restartedJob;
         try {
@@ -6088,6 +6113,25 @@ export function createDashboardServer({
       if (body.permissionPreflight !== undefined && typeof body.permissionPreflight !== "boolean") {
         sendJson(response, 400, { error: "permissionPreflight must be a boolean." });
         return;
+      }
+      let toolApprovalMode;
+      try {
+        toolApprovalMode = validateToolApprovalMode(body.toolApprovalMode);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
+      if (toolApprovalMode === "allow-all") {
+        const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+        if (request.headers.host !== new URL(expectedOrigin).host ||
+            request.headers.origin !== expectedOrigin) {
+          sendJson(response, 403, { error: "Allow all requires the dashboard's exact loopback host and origin." });
+          return;
+        }
+        if (body.allowAllConfirmed !== true) {
+          sendJson(response, 400, { error: "Allow all requires explicit confirmation." });
+          return;
+        }
       }
       const inputTokenLimit = body.inputTokenLimit ?? 0;
       if (!Number.isSafeInteger(inputTokenLimit) || inputTokenLimit < 0 ||
@@ -6322,6 +6366,7 @@ export function createDashboardServer({
         validationIntent,
         workflow,
         permissionPreflight: body.permissionPreflight === true,
+        toolApprovalMode,
         fileAccess,
         inputTokenLimit,
         budgetExceeded: false,
@@ -6376,6 +6421,12 @@ export function createDashboardServer({
         partial: { stdout: "", stderr: "" }
       };
       job.holdRequested = false;
+      if (toolApprovalMode === "allow-all") {
+        pushLog(job, {
+          index: job.nextLogIndex, timestamp: new Date().toISOString(), stream: "dashboard",
+          message: "The user explicitly selected Allow all tool commands for this executor. This choice expires when the executor ends; organization policy and required workflow approvals remain in effect."
+        });
+      }
       job.resumeSession = false;
       job.initialPrompt = buildJobPrompt({
         request: requestText,
@@ -6401,6 +6452,7 @@ export function createDashboardServer({
 
       if (shouldQueue) {
         queuedJobs.push(job);
+        await startNextJob();
       } else {
         currentJob = job;
         try {

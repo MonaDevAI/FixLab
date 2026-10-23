@@ -182,6 +182,67 @@ test("dashboard submits interception as a per-run option rather than a shared de
   await expect(page.locator("#job-test-mutation-mode")).toHaveValue("none");
 });
 
+test("Allow all is default-off, confirms submission and is cleared for the next job", async ({ page }) => {
+  const posts = [];
+  await mockChatWorkspace(page);
+  await page.route("**/api/jobs", async (route) => {
+    posts.push(route.request().postDataJSON());
+    await route.fulfill({
+      contentType: "application/json", status: 202,
+      body: JSON.stringify({
+        job: { id: "synthetic-allow-all", request: "Synthetic explicit tool approval.",
+          mode: "validate-only", status: "running", stages: {}, bugs: [], logs: [], activity: [] },
+        queue: [], history: []
+      })
+    });
+  });
+  await openWorkflowControls(page, baseUrl);
+  const option = page.locator('input[name="allowAllTools"]');
+  await expect(option).not.toBeChecked();
+  await page.locator("#request").fill("Synthetic explicit tool approval.");
+  await page.locator('input[name="mode"][value="validate-only"]').check();
+  await option.check();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await page.locator("#start-button").click();
+  expect(posts).toEqual([]);
+  await expect(page.locator("#start-button")).toBeEnabled();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0].toolApprovalMode).toBe("allow-all");
+  expect(posts[0].allowAllConfirmed).toBe(true);
+  await expect(option).not.toBeChecked();
+});
+
+test("live Allow all requires confirmation and is absent without an offered capability", async ({ page }) => {
+  const job = pendingApprovalJob(["npm test"]);
+  job.runtimeRequests[0].canAllowAll = true;
+  const posts = [];
+  await mockChatWorkspace(page, { job });
+  await page.route("**/api/job/runtime-response", async (route) => {
+    posts.push(route.request().postDataJSON());
+    job.runtimeRequests = [];
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ job }) });
+  });
+  await page.goto(baseUrl);
+  const allow = page.getByRole("button", { name: "Allow all for this run", exact: true });
+  await expect(allow).toBeVisible();
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await allow.click();
+  expect(posts).toEqual([]);
+  page.once("dialog", (dialog) => dialog.accept());
+  await allow.click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toEqual({
+    instanceId: "workspace-owner", jobId: job.id, requestId: expect.any(String),
+    confirmed: true, action: "allow", scope: "all-tools", answer: ""
+  });
+  job.runtimeRequests = pendingApprovalJob(["npm run build"]).runtimeRequests;
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeVisible();
+  await expect(allow).toHaveCount(0);
+});
+
 test("native Copilot prompts allow once, deny and answer choices in the same live job", async ({ page }) => {
   const directory = mkdtempSync(join(tmpdir(), "fixlab-native-ui-"));
   mkdirSync(join(directory, ".github", "fixlab"), { recursive: true });
