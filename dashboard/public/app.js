@@ -1,3 +1,5 @@
+import { workItemsRequest } from "./work-item-intake.js";
+
 const stageNames = [
   "intake",
   "diagnosis",
@@ -1160,14 +1162,28 @@ function renderReadiness(readiness) {
   document.querySelector("#workspace-repository").textContent = readiness.repository;
   const ready = readiness.repositoryReady && readiness.profileReady;
   const apiOnly = readiness.playwrightMode === "api";
+  const unitTestsOnly = readiness.unitTestsOnly === true;
+  const noUi = apiOnly || unitTestsOnly;
   for (const name of ["prestartFrontend", "manualLocalhostTest", "recordPlaywrightVideo", "runAllUiScenarios"]) {
     const input = document.querySelector(`[name="${name}"]`);
     if (input) {
-      input.disabled = apiOnly;
-      if (apiOnly) { input.checked = false; }
+      input.disabled = noUi;
+      if (noUi) { input.checked = false; }
     }
   }
   const mutationSelect = document.querySelector('[name="testMutationMode"]');
+  if (mutationSelect) {
+    mutationSelect.disabled = unitTestsOnly;
+    if (unitTestsOnly) { mutationSelect.value = ""; }
+  }
+  const browserOnlyMode = document.querySelector('[name="mode"][value="playwright-only"]');
+  if (browserOnlyMode) {
+    browserOnlyMode.disabled = unitTestsOnly;
+    if (unitTestsOnly && browserOnlyMode.checked) {
+      browserOnlyMode.checked = false;
+      document.querySelector('[name="mode"][value="fix-and-validate"]').checked = true;
+    }
+  }
   const interceptedOption = mutationSelect?.querySelector('option[value="intercepted"]');
   if (interceptedOption) { interceptedOption.disabled = apiOnly; }
   if (apiOnly && mutationSelect?.value === "intercepted") {
@@ -1175,7 +1191,7 @@ function renderReadiness(readiness) {
   }
   document.querySelector("#welcome-add-repository").hidden = ready;
   document.querySelector("#welcome-guidance").textContent = ready
-    ? `Describe a bug, change, or ${apiOnly ? "API" : "browser"} check.`
+    ? `Describe a bug, change, or ${unitTestsOnly ? "local unit-test" : apiOnly ? "API" : "browser"} check.`
     : "Set up a repository to get started.";
   readinessElement.className = `readiness ${ready ? "ready" : "blocked"}`;
   readinessElement.textContent = ready
@@ -1243,8 +1259,8 @@ async function refreshOnboarding() {
     onboardingStatus.className = `badge ${configured ? "passed" : "blocked"}`;
     onboardingStatus.textContent = configured ? "Configured" : "Required";
     onboardingMessage.textContent = configured
-      ? "Numeric Azure DevOps bug IDs can be loaded."
-      : "Enter the organization and project to enable numeric bug loading.";
+      ? "Numeric Azure DevOps work item IDs can be loaded."
+      : "Enter the organization and project to enable numeric work item loading.";
   } catch (error) {
     onboardingStatus.className = "badge blocked";
     onboardingStatus.textContent = "Unavailable";
@@ -2057,7 +2073,7 @@ function selectedIntakeSource() {
 
 function renderWorkItems(workItems) {
   workItemList.replaceChildren();
-  workItemCount.textContent = `${workItems.length} bug${workItems.length === 1 ? "" : "s"} loaded`;
+  workItemCount.textContent = `${workItems.length} work item${workItems.length === 1 ? "" : "s"} loaded`;
   for (const workItem of workItems) {
     const item = document.createElement("li");
     const link = document.createElement("a");
@@ -2067,49 +2083,11 @@ function renderWorkItems(workItems) {
     link.textContent = `#${workItem.id}`;
     item.append(
       link,
-      ` · ${workItem.state || "Unknown"} · ${workItem.title} · ${workItem.commentCount || 0} comment(s) · ${workItem.imageCount || 0} image(s)${workItem.commentsWarning ? " · comments unavailable" : ""}${workItem.imagesWarning ? " · some images unavailable" : ""}`
+      ` · ${workItem.workItemType || "Work Item"} · ${workItem.state || "Unknown"} · ${workItem.title} · ${workItem.commentCount || 0} comment(s) · ${workItem.imageCount || 0} image(s)${workItem.commentsWarning ? " · comments unavailable" : ""}${workItem.imagesWarning ? " · some images unavailable" : ""}`
     );
     workItemList.append(item);
   }
   workItemSummary.hidden = false;
-}
-
-function workItemsRequest(workItems) {
-  const separator = "\n\n==============================\n\n";
-  const blockBudget = Math.floor(
-    (9800 - separator.length * (workItems.length - 1)) / workItems.length
-  );
-  return workItems
-    .map((workItem) => {
-      const header = [
-        `Azure DevOps Bug ${workItem.id}: ${workItem.title}`,
-        `URL: ${workItem.webUrl}`,
-        workItem.state ? `State: ${workItem.state}` : ""
-      ]
-        .filter(Boolean)
-        .join("\n");
-      const evidence = [
-        workItem.description,
-        workItem.reproduction,
-        workItem.acceptanceCriteria,
-        workItem.commentsWarning,
-        workItem.imagesWarning,
-        ...(workItem.comments ?? []).map(
-          (comment) =>
-            `Comment by ${comment.author || "Unknown"}${comment.createdAt ? ` at ${comment.createdAt}` : ""}:\n${comment.text}`
-        )
-      ]
-        .filter(Boolean)
-        .join("\n\n");
-      const evidenceBudget = Math.max(
-        0,
-        blockBudget - header.length - "\nEvidence:\n".length
-      );
-      return evidenceBudget > 0 && evidence
-        ? `${header}\nEvidence:\n${evidence.slice(0, evidenceBudget)}`
-        : header.slice(0, blockBudget);
-    })
-    .join(separator);
 }
 
 function workItemInputs(value) {
@@ -2431,7 +2409,7 @@ form.addEventListener("submit", async (event) => {
     }
     const intakeSource = data.get("intakeSource");
     if (intakeSource === "azure-devops" && loadedWorkItems.length === 0) {
-      throw new Error("Load one or more Azure DevOps bugs before starting.");
+      throw new Error("Load one or more Azure DevOps work items before starting.");
     }
     const screenshots = await Promise.all(
       validateSelectedScreenshots().map(fileBase64)
@@ -2920,7 +2898,7 @@ onboardingSave.addEventListener("click", async () => {
     onboardingStatus.className = "badge passed";
     onboardingStatus.textContent = "Configured";
     onboardingMessage.textContent =
-      "Onboarding settings saved. Numeric bug loading is ready.";
+      "Onboarding settings saved. Numeric work item loading is ready.";
   } catch (error) {
     onboardingStatus.className = "badge blocked";
     onboardingStatus.textContent = "Save failed";

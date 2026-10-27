@@ -38,7 +38,66 @@ stopped. Unrelated unavailable dashboard registrations do not block setup.
 Plans expire after ten minutes and are invalidated by concurrent profile edits.
 Setup paths reject traversal and symbolic links.
 
+## Linked local applications in separate repositories
+
+An API-only repository can reference a separately onboarded frontend without
+moving its source, startup command or browser ownership into the API repository:
+
+```json
+{
+  "linkedApplications": [
+    {
+      "id": "web-client",
+      "repository": "C:\\source\\web-client",
+      "application": "frontend",
+      "url": "http://localhost:3001",
+      "environment": "local"
+    }
+  ]
+}
+```
+
+Add this optional field to the API repository's existing profile. References
+support only local frontends, unique lowercase IDs and absolute Git working-tree
+roots, with at most eight entries. Each target must have its own profile and
+repository-contained frontend command/directory, matching port and health URL
+protocol. URLs must be credential-free loopback origins with explicit ports.
+Both profiles must include the `local` environment and explicitly declare
+`browserAutomation.dataSafety.productionAllowed: false`.
+
+Under **Connections**, choose **Load linked applications**, review the owner and
+URL, and confirm **Open ... workspace**. FixLab reuses a verified owner or opens
+an idle separate workspace; changed source/target profiles invalidate the review.
+The host ownership and shutdown rules above still apply. The linked metadata
+does not expose startup commands, environment-variable values or browser state.
+
+Start the backend in its API workspace and the frontend in its own workspace.
+Separately review the frontend's API base URL, local CORS, authentication and
+browser request policy to target the intended backend checkout. Run real
+integration assertions through the frontend and retain evidence of both commits.
+Links do not rewrite URLs or policies, transfer edit permissions, copy login
+state, start jobs or commands, orchestrate cross-repository tests, or prove that
+either service is ready. API-only admission and required backend validation
+remain unchanged; a missing backend readiness proof still blocks API jobs.
+Keep changes and pull requests in their respective repositories.
+
 ## Required information
+
+### Explicitly deferred live tests
+
+For a repository approved for local unit tests only, set
+`validation.liveTestsRequired: false` and a nonempty
+`validation.liveTestsDeferredReason` (at most 500 characters). Omit
+`browserAutomation` and live-test gates, and retain at least one explicitly
+required gate with `kind: "tests"` for the offline unit suite. Other required
+local checks and CI/merge policies remain authoritative.
+
+The dashboard then admits ordinary fix/validation jobs without browser sign-in,
+API proof or application startup. Browser-only jobs and live/UI run options are
+rejected. Record local-stack and live-test as skipped with the saved reason,
+not passed; unit results do not prove integration or production access. This
+opt-in affects only that repository; omitted/true retains existing live-test
+requirements. Start a newly reviewed job after changing this policy.
 
 ### Repository
 
@@ -259,8 +318,21 @@ must be resumed using their original workspace policy.
 
 Branch changes require a clean index and working tree, including untracked
 files, and no merge/rebase/cherry-pick in progress. Stop owned frontend and
-authentication processes before selecting a different branch. FixLab never
-stashes, resets, deletes files, overwrites ignored files, or force-switches
+authentication processes before selecting a different branch. By default, preserve
+dirty files separately before starting another job. Set
+`worktreeSetup.autoStash: true` to automatically preserve eligible tracked
+(including staged) and untracked source changes in a verified stash before each
+new shared editing job acquires its new branch. The previous branch and its
+commits remain intact. The job records the stable stash commit, including if
+later base refresh fails; restore it separately using `git stash apply --index <commit>`.
+It is never automatically applied to the new job. Resuming an existing job and
+validation-only jobs never auto-stash or acquire a new branch.
+
+Automatic preservation rejects sensitive, linked, non-source, unresolved,
+oversized or excessive changes before stashing anything. Ignored credentials,
+browser state and dependencies are not stashed. A blocked preservation step
+stops the job rather than discarding or silently excluding changed files.
+FixLab never resets, deletes files, overwrites ignored files, or force-switches
 another worktree's branch. A failed fetch blocks the new job instead of using
 a stale base. The Git refresh is noninteractive and has a 30-second timeout;
 authenticate to the remote separately if necessary.
@@ -329,6 +401,178 @@ not proof of a valid application session. Add `--start-dashboard` only when
 all Doctor checks can pass; serve this worktree's actual code, not a healthy
 server from another checkout.
 
+### Frontend-owned authentication for an API-only repository
+
+The dashboard's **Onboard repository** and **Repository Settings** flows offer
+**Configure portal-backed API authentication**. Setup collects the approved
+local HTTPS read endpoint and full API scope.
+
+For a portal and backend in the **same repository**, keep the real frontend
+configuration in `applications.frontend` and select that repository as the
+permitted consumer. API-only profiles retain `browserAutomation.mode: "api"`
+and their API test command; the portal supplies sign-in only, not a portal UI
+test suite. Setup uses `portal-api-proof` directly and never links a repository
+to itself.
+
+For a portal in **another repository**, backend-only API profiles additionally
+select the linked portal repository, origin and ID; the portal owner selects
+the permitted consumer and its repository-owned session helper. Each setup
+changes only the current repository. Configure the portal's matching grant
+separately before connecting the API consumer.
+
+The portal helper is an existing, contained JavaScript module with two exports:
+
+```javascript
+export async function withApiToken({ scope, interactive }, check) {
+  const session = await openRepositorySession({ interactive });
+  try {
+    const token = await session.acquireApiToken(scope);
+    await check(token);
+  } finally {
+    await session.close();
+  }
+}
+
+export function assertApiResponse(body) {
+  return Array.isArray(body); // Replace with this endpoint's real contract.
+}
+```
+
+`openRepositorySession` above represents the repository's normal MSAL/OIDC
+browser-session implementation, not a FixLab API. Implement/import the actual
+portal helper; FixLab does not guess SDKs, client IDs, tenants or token stores.
+`withApiToken` must honor the requested API scope, use only its own authenticated
+browser, await the callback exactly once, close its owned session, and never
+persist/log the token. `assertApiResponse` must return `true` only for the actual
+expected response schema and behavior. Neither export may synthesize auth or
+API responses.
+
+On approval, setup configures separate API sign-in/proof commands with the
+`portal-api-proof` runner and adds a required read-only live-test gate. Normal
+portal sign-in/proof commands stay unchanged: connecting the portal does not
+require a running local API. Linked API consumers explicitly request the
+separate API proof from the idle portal owner. Existing
+builds, tests and authentication checks remain. The runner uses the in-memory
+token in Playwright's `APIRequestContext`, validates TLS, refuses redirects,
+checks anonymous 401 and authenticated 200 plus the helper's response contract,
+and persists only a non-sensitive readiness receipt. **Connect Playwright**
+still performs real sign-in/MFA. A saved portal session alone never passes API
+readiness. Scope/helper/profile changes invalidate the previous proof.
+Existing API-only gate selections also include the new required gate. For
+change-aware policies, setup adds it to scopes matching the configured backend
+directory, not frontend scopes. An ambiguous backend mapping blocks setup until
+the repository's scope policy is reviewed.
+
+The API proof origin must match the consumer's configured local backend origin.
+The initial onboarding bridge supports local HTTPS APIs only, not arbitrary
+deployed hosts or writes. For backend changes, build/start the changed checkout
+and select that local backend; proving a deployed baseline is not validation
+of a local fix. Focused API tests may reuse the repository session adapter;
+they do not require a complete portal UI test suite. Disabling the onboarding
+option restores the previous authentication commands and removes its generated
+gate/grant; unrelated validation remains untouched.
+
+Opening a linked frontend does not prove API readiness. To use its normal
+browser sign-in for an API check, set the API profile's
+`browserAutomation.authentication.linkedApplication` to an existing link ID.
+Configure its backend `healthUrl` as the exact approved loopback HTTPS GET
+endpoint and include that origin/method in its data-safety allowlist.
+The authentication working directory must exist and declare one non-secret
+JSON status receipt beneath `.auth`.
+
+The frontend profile must explicitly grant the consumer under
+`browserAutomation.authentication.apiProofFor`:
+
+```json
+{
+  "repository": "C:\\source\\api",
+  "origin": "https://localhost:50443",
+  "method": "GET",
+  "path": "/protected-read"
+}
+```
+
+`apiProofFor` is an array of at most eight such entries. The frontend's own
+reviewed authentication and proof commands must acquire/use the correct API
+token inside their owned browser context, assert anonymous rejection and a
+real authenticated response/schema, and return no private response data.
+Do not export tokens, copy browser state, mock the API or weaken its gates.
+Grants default to the exact consumer checkout and reviewed endpoint. An explicit
+`"includeWorktrees": true` additionally permits Git worktrees of that same
+canonical repository, so isolated API jobs need no copied credentials. Their
+individual profile revisions and workspace identities still bind each proof.
+
+Start the frontend's own idle dashboard workspace, then review and execute:
+
+```powershell
+fixlab linked-api-proof C:\source\api
+fixlab linked-api-proof C:\source\api --authenticate --yes
+fixlab linked-api-proof C:\source\api --proof --yes
+fixlab portal-api-proof C:\source\portal --proof --yes
+```
+
+Without `--yes`, `linked-api-proof` only describes the configured request;
+`portal-api-proof` requires explicit confirmation. Authentication
+runs the frontend's configured sign-in followed by fresh proof; proof-only
+does not launch its interactive sign-in command. A unique run ID prevents
+accepting another run's result. Profile, workspace or job changes invalidate
+the request. Failed/unreachable/busy owners never create readiness receipts.
+Use repository-owned wrappers in the API profile's authentication and required
+API-test commands; all other backend build, test and publication gates remain
+unchanged. This read-only proof is not evidence that a new write endpoint or
+changed backend commit has passed integration testing.
+
+### Local API backed by a production database
+
+This is a **default-off exception**, not general production access. In the
+portal-backed API setup, select **Allow this local API to read a production database?**
+only after approving the actual database target and effective backend identity.
+The profile then sets
+`browserAutomation.apiAuthentication.productionDatabaseReadOnly: true`.
+For separate repositories, approve it independently in both profiles and in
+the portal's exact-endpoint `apiProofFor` grant:
+
+```json
+{
+  "repository": "C:\\source\\api",
+  "origin": "https://localhost:50443",
+  "method": "GET",
+  "path": "/protected-read",
+  "productionDatabaseReadOnly": true
+}
+```
+
+The portal's session adapter must additionally implement
+`assertReadOnlyDatabase({ apiUrl, method, dataEnvironment })`. It must verify
+the **actual datasource and effective database identity**, including
+database-enforced read-only permissions, and return `true` only when verified.
+Missing, false or throwing checks block before API contexts, token acquisition
+or sign-in. A hardcoded success, GET method, localhost URL, DEV label,
+application read-only setting or connection read-intent alone is not proof.
+FixLab does not discover credentials, alter connections, grant permissions or
+choose a production datasource.
+
+The adapter's `withApiToken({ interactive: true }, check)` must handle sign-in
+after this preflight. Production mode deliberately does not prepend the older
+normal portal sign-in command, which could read business data before the
+safety check. On a browser-mode portal owner, ordinary portal authentication
+and UI jobs are blocked; only explicitly selected API-purpose proof is allowed.
+
+Run production-backed jobs from the **API-only dashboard** against the exact
+approved loopback HTTPS backend. Jobs block before executor launch until fresh,
+job-bound portal/API proof succeeds. Direct `run`/`validate` commands cannot
+bypass that requirement; the dedicated CLI proof commands remain available.
+Receipts and scenario evidence must say `production-read-only` and
+`mutationMode: "none"`, never non-production or intercepted. The general
+`dataSafety.productionAllowed` setting remains `false`. Deployed production
+portal/API targets, writes, synthetic success and broad production access
+remain prohibited.
+
+Changed production approval requires a newly reviewed job, including after
+restart. Disabling the option restores saved testing configuration, **not the
+database connection**: independently verify that the backend no longer targets
+production before using a non-production profile.
+
 ## Profile review checklist
 
 - Commands run non-interactively.
@@ -336,7 +580,8 @@ server from another checkout.
 - Tests are focused and deterministic.
 - Full builds have a bounded timeout.
 - Local processes have explicit ownership markers.
-- Production is excluded.
+- Production is excluded unless the narrowly approved local-API read-only
+  exception above is configured and its database-enforced safety check passes.
 - Browser profiles are stored outside Git.
 - Screenshots are sanitized before sharing.
 - Pull request creation requires authorization.

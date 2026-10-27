@@ -1,10 +1,27 @@
 import { constants, copyFileSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:path";
 import { canonicalExecutionRepository } from "./executor-lease.js";
 
 export const SETUP_PROFILE_PATH = join(".github", "fixlab", "repository-profile.json");
 export const REPOSITORY_PROMPT_NAMES = ["bugfix", "intake", "diagnose", "reproduce", "fix", "validate", "live-test", "pr"]
   .map((name) => `fixlab.${name}.prompt.md`);
+
+export function localRepository(value) {
+  if (typeof value !== "string" || value.length > 2048 || !isAbsolute(value)) {
+    throw new Error("Choose an existing local Git repository using its absolute folder path.");
+  }
+  const root = realpathSync.native(value);
+  if (!lstatSync(root).isDirectory() || root === parse(root).root) {
+    throw new Error("A filesystem root is not a repository workspace.");
+  }
+  const git = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd: root, encoding: "utf8", shell: false, windowsHide: true, timeout: 10000, maxBuffer: 65536
+  });
+  if (git.status !== 0 || realpathSync.native(git.stdout.trim()) !== root) {
+    throw new Error("Select the root of an existing Git working tree, not a subfolder or bare repository.");
+  }
+  return root;
+}
 
 export function setupPath(root, value) {
   if (
@@ -154,3 +171,4 @@ export function browserConfigurationErrors(profile, repository, plannedFiles = n
   }
   return errors;
 }
+import { spawnSync } from "node:child_process";

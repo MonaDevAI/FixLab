@@ -162,6 +162,183 @@ test("repository configuration rejects traversal, credential commands and unsafe
   }
 });
 
+test("portal API onboarding wires the owned helper and gate without running code or losing existing authentication", () => {
+  const repository = fixture();
+  try {
+    applyRepositorySettings(plan(repository), "synthetic-settings-owner");
+    const path = join(repository, SETUP_PROFILE_PATH);
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    profile.browserAutomation.authentication = { required: true, command: "node sign-in.mjs",
+      proofCommand: "node prove-portal.mjs", statusPaths: [".auth/session.json"] };
+    profile.validation.gates = [{ id: "existing-build", command: "node", args: ["build.mjs"],
+      workingDirectory: ".", timeoutSeconds: 30, required: true }];
+    profile.validation.apiOnly = { baseRef: "origin/main", paths: ["backend"],
+      fullValidationPaths: ["shared"], gateIds: ["existing-build"] };
+    writeFileSync(path, JSON.stringify(profile));
+    writeFileSync(join(repository, "session.mjs"), "throw new Error('Planning must not execute helpers');");
+    const settings = { apiAuthenticationEnabled: true, apiProofUrl: "https://localhost:50443/protected",
+      apiScope: "api://fixture/read", apiSessionHelper: "session.mjs", apiConsumerRepository: repository,
+      backendEnabled: true, backendPort: 50443, backendHealthUrl: "https://localhost:50443/protected" };
+    const preview = plan(repository, settings, false);
+    assert.equal(preview.profile.browserAutomation.apiAuthentication.role, "portal");
+    assert.equal(preview.profile.validation.gates[0].id, "existing-build");
+    assert.equal(preview.profile.validation.gates[1].required, true);
+    assert.deepEqual(preview.profile.validation.apiOnly.gateIds, ["existing-build", "portal-backed-api-read"]);
+    assert.deepEqual(preview.profile.browserAutomation.authentication.command, "node sign-in.mjs");
+    assert.deepEqual(preview.profile.browserAutomation.authentication.proofCommand, "node prove-portal.mjs");
+    assert.deepEqual(preview.profile.browserAutomation.authentication.statusPaths, [".auth/session.json"]);
+    assert.match(preview.profile.browserAutomation.apiAuthentication.command, /^node sign-in\.mjs && fixlab portal-api-proof/u);
+    assert.match(preview.profile.browserAutomation.apiAuthentication.proofCommand, /^fixlab portal-api-proof/u);
+    assert.deepEqual(preview.profile.browserAutomation.apiAuthentication.statusPaths, [".auth/session.json", ".auth/api-ready.json"]);
+    assert.equal(existsSync(join(repository, ".auth")), false);
+    applyRepositorySettings(preview, "synthetic-settings-owner");
+    const repeated = plan(repository, {}, false);
+    assert.equal(repeated.profile.validation.gates.length, 2);
+    assert.equal(repeated.profile.browserAutomation.authentication.apiProofFor.length, 1);
+    assert.equal(repeated.profile.browserAutomation.apiAuthentication.command.match(/portal-api-proof/gu).length, 1);
+    const disabled = plan(repository, { apiAuthenticationEnabled: false }, false);
+    assert.equal(disabled.profile.browserAutomation.apiAuthentication, undefined);
+    assert.equal(disabled.profile.browserAutomation.authentication.command, "node sign-in.mjs");
+    assert.equal(disabled.profile.validation.gates.length, 1);
+    assert.deepEqual(disabled.profile.validation.apiOnly.gateIds, ["existing-build"]);
+    assert.throws(() => plan(repository, { ...settings, apiSessionHelper: "../outside.mjs" }, false));
+    assert.throws(() => plan(repository, { ...settings,
+      apiProofUrl: "https://localhost:50444/protected" }, false), /configured local backend origin/u);
+  } finally { rmSync(repository, { recursive: true, force: true }); }
+});
+
+test("change-aware onboarding requires API proof for backend scopes but not frontend scopes", () => {
+  const repository = fixture();
+  try {
+    applyRepositorySettings(plan(repository), "synthetic-settings-owner");
+    const path = join(repository, SETUP_PROFILE_PATH);
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    profile.validation.gates = [{ id: "existing-build", command: "node", args: ["build.mjs"],
+      workingDirectory: ".", timeoutSeconds: 30, required: true }];
+    profile.validation.changeAware = { baseRef: "origin/main", fullValidationPaths: ["shared"],
+      scopes: [
+        { paths: ["backend/Src"], gateIds: ["existing-build"] },
+        { paths: ["frontend"], gateIds: ["existing-build"] }
+      ] };
+    writeFileSync(path, JSON.stringify(profile));
+    mkdirSync(join(repository, "backend"));
+    writeFileSync(join(repository, "session.mjs"), "export async function withApiToken() {}");
+    const settings = { apiAuthenticationEnabled: true, apiProofUrl: "https://localhost:50443/protected",
+      apiScope: "api://fixture/read", apiSessionHelper: "session.mjs", apiConsumerRepository: repository,
+      backendEnabled: true, backendDirectory: "backend", backendPort: 50443,
+      backendHealthUrl: "https://localhost:50443/protected" };
+    const preview = plan(repository, settings, false);
+    assert.deepEqual(preview.profile.validation.changeAware.scopes.map(scope => scope.gateIds), [
+      ["existing-build", "portal-backed-api-read"], ["existing-build"]
+    ]);
+    assert.throws(() => plan(repository, { ...settings, backendDirectory: "." }, false), /Review change-aware backend scopes/u);
+    applyRepositorySettings(preview, "synthetic-settings-owner");
+    const disabled = plan(repository, { apiAuthenticationEnabled: false }, false);
+    assert.deepEqual(disabled.profile.validation.changeAware.scopes.map(scope => scope.gateIds),
+      [["existing-build"], ["existing-build"]]);
+  } finally { rmSync(repository, { recursive: true, force: true }); }
+});
+
+test("API-only onboarding uses its same-repository portal without switching to UI tests or linking to itself", () => {
+  const repository = fixture();
+  try {
+    applyRepositorySettings(plan(repository), "synthetic-settings-owner");
+    const path = join(repository, SETUP_PROFILE_PATH);
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    profile.browserAutomation.mode = "api";
+    profile.browserAutomation.testCommand = "node api-tests.mjs";
+    profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+    profile.browserAutomation.testSynthesis.mutationMode = "none";
+    profile.browserAutomation.dataSafety.allowedOrigins = ["https://localhost:50443"];
+    profile.browserAutomation.dataSafety.allowedMethods = ["GET"];
+    profile.browserAutomation.authentication = { required: true, command: "node sign-in.mjs",
+      proofCommand: "node prove-portal.mjs", statusPaths: [".auth/session.json"] };
+    profile.applications.backend = { command: "dotnet run", workingDirectory: ".",
+      port: 50443, healthUrl: "https://localhost:50443/protected" };
+    writeFileSync(path, JSON.stringify(profile));
+    writeFileSync(join(repository, "session.mjs"), "export async function withApiToken() {}");
+    const inspected = inspectRepositorySettings(repository);
+    assert.ok(inspected.fields.some(field => field.key === "apiSessionHelper"));
+    assert.equal(inspected.fields.some(field => field.key === "linkedPortalRepository"), false);
+    const preview = plan(repository, { apiAuthenticationEnabled: true,
+      apiProofUrl: "https://localhost:50443/protected", apiScope: "api://fixture/read",
+      apiSessionHelper: "session.mjs", apiConsumerRepository: repository }, false);
+    const browser = preview.profile.browserAutomation;
+    assert.equal(browser.mode, "api");
+    assert.equal(browser.testCommand, "node api-tests.mjs");
+    assert.equal(browser.apiAuthentication.role, "portal");
+    assert.equal(browser.authentication.linkedApplication, undefined);
+    assert.match(browser.authentication.command, /^node sign-in\.mjs && fixlab portal-api-proof/u);
+    assert.match(browser.authentication.proofCommand, /^fixlab portal-api-proof/u);
+    assert.ok(browser.authentication.statusPaths.includes(".auth/api-ready.json"));
+    assert.deepEqual(preview.profile.applications.frontend, profile.applications.frontend);
+    assert.equal(preview.profile.linkedApplications?.length ?? 0, 0);
+    assert.equal(validateLiveTestProfile(preview.profile).ok, true);
+    applyRepositorySettings(preview, "synthetic-settings-owner");
+    const repeated = plan(repository, {}, false);
+    assert.equal(repeated.profile.browserAutomation.authentication.command.match(/portal-api-proof/gu).length, 1);
+    assert.equal(inspectRepositorySettings(repository).values.apiProductionDatabaseReadOnly, false);
+    const production = plan(repository, { apiProductionDatabaseReadOnly: true }, false);
+    assert.equal(production.profile.browserAutomation.testSynthesis.defaultDataSource, "production-read-only");
+    assert.equal(production.profile.browserAutomation.testSynthesis.mutationMode, "none");
+    assert.equal(production.profile.browserAutomation.dataSafety.productionAllowed, false);
+    assert.deepEqual(production.profile.browserAutomation.dataSafety.allowedOrigins, ["https://localhost:50443"]);
+    assert.equal(production.profile.browserAutomation.apiAuthentication.grant.productionDatabaseReadOnly, true);
+    assert.match(production.profile.browserAutomation.authentication.command, /^fixlab portal-api-proof/u);
+    assert.deepEqual(production.profile.browserAutomation.authentication.statusPaths, [".auth/api-ready.json"]);
+    assert.deepEqual(production.profile.applications.backend, profile.applications.backend);
+    applyRepositorySettings(production, "synthetic-settings-owner");
+    const nonProduction = plan(repository, { apiProductionDatabaseReadOnly: false }, false);
+    assert.equal(nonProduction.profile.browserAutomation.testSynthesis.defaultDataSource, "non-production-read-only");
+    assert.match(nonProduction.profile.browserAutomation.authentication.command, /^node sign-in\.mjs && /u);
+    const disabled = plan(repository, { apiAuthenticationEnabled: false }, false);
+    assert.equal(disabled.profile.browserAutomation.mode, "api");
+    assert.equal(disabled.profile.browserAutomation.authentication.command, "node sign-in.mjs");
+  } finally { rmSync(repository, { recursive: true, force: true }); }
+});
+
+test("API-only onboarding selects a linked portal without writing to it or adding a frontend", () => {
+  const repository = fixture();
+  const portal = fixture();
+  try {
+    applyRepositorySettings(plan(portal), "synthetic-portal-owner");
+    applyRepositorySettings(plan(repository), "synthetic-api-owner");
+    const path = join(repository, SETUP_PROFILE_PATH);
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    delete profile.applications.frontend;
+    delete profile.browserAutomation.browser;
+    profile.browserAutomation.mode = "api";
+    profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+    profile.browserAutomation.testSynthesis.mutationMode = "none";
+    profile.applications.backend = { workingDirectory: ".", command: "dotnet run",
+      port: 50443, healthUrl: "https://localhost:50443/protected" };
+    writeFileSync(path, JSON.stringify(profile));
+    const portalBefore = readFileSync(join(portal, SETUP_PROFILE_PATH), "utf8");
+    const settings = { apiAuthenticationEnabled: true, apiProofUrl: "https://localhost:50443/protected",
+      apiScope: "api://fixture/read", linkedPortalRepository: portal,
+      linkedPortalId: "portal", linkedPortalUrl: "http://localhost:3000" };
+    const preview = plan(repository, settings, false);
+    assert.equal(preview.profile.applications.frontend, undefined);
+    assert.equal(preview.profile.browserAutomation.browser, undefined);
+    assert.equal(preview.profile.browserAutomation.mode, "api");
+    assert.equal(preview.profile.browserAutomation.apiAuthentication.role, "consumer");
+    assert.equal(preview.profile.browserAutomation.authentication.linkedApplication, "portal");
+    assert.match(preview.profile.browserAutomation.authentication.command, /linked-api-proof/u);
+    applyRepositorySettings(preview, "synthetic-api-owner");
+    assert.equal(readFileSync(join(portal, SETUP_PROFILE_PATH), "utf8"), portalBefore);
+    assert.equal(existsSync(join(repository, ".auth")), false);
+    const disabled = plan(repository, { apiAuthenticationEnabled: false }, false);
+    assert.equal(disabled.profile.validation.gates, undefined);
+    assert.throws(() => plan(repository, { ...settings, linkedPortalRepository: repository }, false), /separate portal/u);
+    assert.throws(() => plan(repository, { ...settings, linkedPortalUrl: "http://localhost:3001" }, false), /match the frontend/u);
+    assert.throws(() => plan(repository, { ...settings,
+      apiProofUrl: "https://localhost:50444/protected" }, false), /configured local backend origin/u);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+    rmSync(portal, { recursive: true, force: true });
+  }
+});
+
 test("repository settings refuse symlinked scaffolding instead of writing outside the selected repository", () => {
   const repository = fixture();
   const outside = mkdtempSync(join(tmpdir(), "fixlab-settings-outside-"));

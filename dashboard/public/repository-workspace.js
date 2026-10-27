@@ -15,6 +15,71 @@ const settingsApply = document.querySelector("#repository-settings-apply");
 let wizard = null;
 let settings = null;
 
+const linkedLoad = document.querySelector("#linked-applications-load");
+const linkedList = document.querySelector("#linked-applications-list");
+const linkedMessage = document.querySelector("#linked-applications-message");
+let linkedContext = null;
+
+async function openLinkedApplication(link, context, button) {
+  if (linkedContext !== context ||
+      !window.confirm(`Open ${link.id} in its own FixLab workspace?\nRepository: ${link.repository}\nApplication: ${link.url}\nNo application or job will be started.`)) {
+    return;
+  }
+  button.disabled = true;
+  try {
+    const result = await configurationRequest(context, {
+      action: "open-linked-application", applicationId: link.id,
+      revision: link.revision, confirmed: true
+    });
+    if (linkedContext !== context) { return; }
+    const url = new URL(result.url);
+    if (url.protocol !== "http:" || url.hostname !== "127.0.0.1" || !url.port ||
+        url.username || url.password || url.search || url.hash || url.pathname !== "/") {
+      throw new Error("The linked repository returned an invalid local workspace URL.");
+    }
+    window.location.assign(url.href);
+  } catch (error) {
+    linkedMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+linkedLoad.addEventListener("click", async () => {
+  linkedLoad.disabled = true;
+  linkedContext = null;
+  linkedList.replaceChildren();
+  linkedMessage.textContent = "";
+  try {
+    const context = await fetchJson("/api/linked-applications");
+    linkedContext = context;
+    linkedMessage.textContent = context.applications.length ? context.notice : "No linked applications are configured.";
+    for (const link of context.applications) {
+      const article = document.createElement("article");
+      const description = document.createElement("p");
+      description.textContent = `${link.id}: ${link.url} - ${link.repository}`;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `Open ${link.id} workspace`;
+      button.dataset.linkedApplicationId = link.id;
+      article.append(description, button);
+      linkedList.append(article);
+    }
+  } catch (error) {
+    linkedMessage.textContent = error.message;
+  } finally {
+    linkedLoad.disabled = false;
+  }
+});
+
+linkedList.addEventListener("click", (event) => {
+  if (!(event.target instanceof Element)) { return; }
+  const button = event.target.closest("button[data-linked-application-id]");
+  if (!button || !linkedList.contains(button)) { return; }
+  const link = linkedContext?.applications.find((entry) => entry.id === button.dataset.linkedApplicationId);
+  if (link) { void openLinkedApplication(link, linkedContext, button); }
+});
+
 function configurationRequest(context, body) {
   return fetchJson("/api/repository/configuration", {
     method: "POST", headers: { "Content-Type": "application/json" },
@@ -53,7 +118,7 @@ async function loadConfiguration(repository) {
 function question() {
   while (wizard.index < wizard.fields.length) {
     const field = wizard.fields[wizard.index];
-    if (!field.when || wizard.values[field.when]) {
+    if ((!field.when || wizard.values[field.when]) && (!field.unless || !wizard.values[field.unless])) {
       const value = wizard.values[field.key];
       const hint = field.type === "boolean" ? (value ? "yes" : "no") : String(value);
       appendMessage("FixLab", `${field.label}${hint ? ` Suggested: ${hint}` : ""}`);
@@ -227,7 +292,8 @@ function settingsVisibility() {
   if (!settings) { return; }
   const values = settingValues();
   for (const field of settings.fields) {
-    settingsForm.elements.namedItem(field.key).closest("label").hidden = Boolean(field.when && !values[field.when]);
+    settingsForm.elements.namedItem(field.key).closest("label").hidden =
+      Boolean((field.when && !values[field.when]) || (field.unless && values[field.unless]));
   }
 }
 function settingsBusy(busy) {

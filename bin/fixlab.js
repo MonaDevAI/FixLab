@@ -47,7 +47,9 @@ import {
 } from "../dashboard/repository-setup.js";
 import { runValidationGate } from "./validation-gate-client.js";
 import { installNotifications } from "./notifications.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE } from "../dashboard/workflow-policy.js";
+import { linkedApiProofPlan, runLinkedApiProof } from "../dashboard/linked-api-proof.js";
+import { runPortalApiProof } from "../dashboard/portal-api-proof.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "../dashboard/workflow-policy.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -89,6 +91,8 @@ Usage:
   fixlab doctor [repository] [--runtime <agency|copilot>]
   fixlab setup-playwright [repository] [--yes]
   fixlab authenticate [repository] [--yes]
+  fixlab linked-api-proof [repository] [--authenticate|--proof] [--yes]
+  fixlab portal-api-proof [repository] [--authenticate|--proof] --yes
   fixlab exec [repository] [--cwd <path>] [--stage <name>] [--reuse] [--timeout-seconds <seconds>] -- <command> [args...]
   fixlab gate --port <port> --job <id> --gate <id> --repository <worktree>
   fixlab run [repository] [--runtime <agency|copilot>] [--model <model>] [--environment <name>] [--] [request...]
@@ -111,6 +115,10 @@ Commands:
             Plan or install Playwright; API-only profiles need no browser.
   authenticate
             Plan or run the repository-owned browser or API authentication command.
+  linked-api-proof
+            Request fresh API proof from an explicitly linked frontend owner.
+  portal-api-proof
+            Run the portal-owned in-memory APIRequestContext authentication helper.
   exec      Run a command with compact structured output and private evidence.
   gate      Run a profile-defined validation gate owned by a dashboard job.
   run       Launch the FixLab agent for a request.
@@ -626,7 +634,7 @@ function doctor(repository, runtime) {
     ? validateLiveTestProfile(profile, repository)
     : { ok: false, detail: "not checked because the repository profile is unavailable" };
   checks.push({
-    name: "Live-test profile",
+    name: profile?.validation?.liveTestsRequired === false ? "Unit-test validation profile" : "Live-test profile",
     ok: liveTestProfile.ok,
     detail: liveTestProfile.detail
   });
@@ -635,14 +643,18 @@ function doctor(repository, runtime) {
     ok: existsSync(join(repository, ".git")),
     detail: repository
   });
-  const playwright = checkPlaywright(repository, profile);
-  checks.push(playwright.packageCheck, playwright.browserCheck);
+  if (profile?.validation?.liveTestsRequired !== false) {
+    const playwright = checkPlaywright(repository, profile);
+    checks.push(playwright.packageCheck, playwright.browserCheck);
+  }
 
   for (const check of checks) {
     console.log(`${check.ok ? "PASS" : "FAIL"}  ${check.name} (${check.detail})`);
   }
 
-  console.log(profile?.browserAutomation?.mode === "api"
+  console.log(profile?.validation?.liveTestsRequired === false
+    ? "SKIP  Live tests and authentication (explicit repository unit-test-only policy; no integration coverage)."
+    : profile?.browserAutomation?.mode === "api"
     ? "Doctor does not prove API health or API authentication. Live validation needs the owning job's fresh API proof."
     : "Doctor does not prove an authenticated browser session. Required sign-in needs the owning job's fresh authentication proof.");
   const failed = checks.filter((check) => !check.ok);
@@ -914,6 +926,11 @@ function authenticate(repository, approved) {
   }
 
   const browserAutomation = profile.browserAutomation ?? {};
+  if (browserAutomation.apiAuthentication?.productionDatabaseReadOnly &&
+      browserAutomation.mode !== "api") {
+    console.error("Production database approval permits dedicated portal-api-proof only, not ordinary portal UI authentication.");
+    return 1;
+  }
   const authenticationLabel = browserAutomation.mode === "api" ? "API" : "Browser";
   const authentication = browserAutomation.authentication ?? {};
   if (
@@ -997,6 +1014,11 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
     );
     return 1;
   }
+  if (profile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly ||
+      profile.browserAutomation?.testSynthesis?.defaultDataSource === "production-read-only") {
+    console.error("Production-backed API jobs require dashboard-owned, fresh job-bound authentication and the database read-only check. Use fixlab dashboard or fixlab chat; direct run/validate does not grant production access.");
+    return 1;
+  }
   if (profile.worktreeSetup?.mode === "shared" && !readOnly) {
     console.error(
       "Shared worktree jobs require dashboard-owned branch acquisition and resumption. Use fixlab dashboard or fixlab chat for this repository."
@@ -1026,6 +1048,7 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
 
   const guidance = [
     COPILOT_EXECUTION_GUIDANCE,
+    ...(profile.validation?.liveTestsRequired === false ? [UNIT_TEST_ONLY_GUIDANCE] : []),
     ...(!readOnly ? [CONCISE_PR_GUIDANCE] : []),
     ...(profile.browserAutomation?.mode === "api" ? [API_ONLY_PLAYWRIGHT_GUIDANCE] : []),
     "For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.",
@@ -1731,6 +1754,41 @@ async function main(args) {
     }
     const repository = resolveRepository(rest.find((value) => !value.startsWith("-")));
     console.log(JSON.stringify(installNotifications(repository, packageRoot, rest.includes("--yes")), null, 2));
+    return 0;
+  }
+
+  if (command === "portal-api-proof" || command === "linked-api-proof") {
+    const positional = rest.filter((value) => !value.startsWith("-"));
+    if (positional.length > 1 || rest.some((value) => value.startsWith("-") &&
+        !["--authenticate", "--proof", "--yes"].includes(value)) ||
+        (rest.includes("--authenticate") && rest.includes("--proof"))) {
+      throw new Error(`Usage: fixlab ${command} [repository] [--authenticate|--proof] [--yes]`);
+    }
+    const repository = resolveRepository(positional[0]);
+    if (command === "portal-api-proof") {
+      if (!rest.includes("--yes")) {
+        throw new Error("Review portal API authentication in Repository Settings, then explicitly pass --yes.");
+      }
+      try {
+        console.log(JSON.stringify(await runPortalApiProof(repository, {
+          authenticate: rest.includes("--authenticate"), confirmed: true
+        })));
+        return 0;
+      } catch {
+        console.error("Portal-owned API proof failed. Inspect the repository session helper, approved API configuration and sign-in; credentials and response data were not logged.");
+        return 1;
+      }
+    }
+    if (!rest.includes("--yes")) {
+      const plan = linkedApiProofPlan(repository);
+      console.log(JSON.stringify({ application: plan.application, environment: plan.environment,
+        origin: plan.origin, method: plan.method, path: plan.path, requiresConfirmation: true }));
+      return 0;
+    }
+    const receipt = await runLinkedApiProof(repository, {
+      authenticate: rest.includes("--authenticate"), confirmed: true
+    });
+    console.log(JSON.stringify(receipt));
     return 0;
   }
 

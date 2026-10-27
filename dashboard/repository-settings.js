@@ -1,11 +1,15 @@
-import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, parse } from "node:path";
+import { closeSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join, relative } from "node:path";
 import { createExecutorLease } from "./executor-lease.js";
-import { SETUP_PROFILE_PATH, REPOSITORY_PROMPT_NAMES, setupPath, browserConfigurationErrors } from "./repository-setup.js";
+import { SETUP_PROFILE_PATH, REPOSITORY_PROMPT_NAMES, setupPath, browserConfigurationErrors, localRepository } from "./repository-setup.js";
 import { safeRuntimeText } from "./runtime-requests.js";
 import { configuredWorkflow } from "./workflow-policy.js";
+import { apiAuthenticationConfiguration } from "./api-authentication.js";
+import { resolveLinkedApplications } from "./linked-applications.js";
+import { validationGates } from "./validation-gates.js";
+
+export { localRepository };
 
 export const REPOSITORY_SETTING_FIELDS = [
   { key: "efficientWorkflow", label: "Use efficient delivery by default: focused checks, then draft PR?", type: "boolean" },
@@ -24,9 +28,19 @@ export const REPOSITORY_SETTING_FIELDS = [
   { key: "backendHealthUrl", label: "What is the backend's local health URL?", type: "text", when: "backendEnabled" },
   { key: "browserDirectory", label: "Where should Playwright run?", type: "text" },
   { key: "browserCommand", label: "Which command runs the browser tests?", type: "text" },
-  { key: "authenticationRequired", label: "Does browser validation require sign-in?", type: "boolean" },
-  { key: "authenticationCommand", label: "Which repository command opens sign-in? Never enter credentials.", type: "text", when: "authenticationRequired" },
-  { key: "authenticationPaths", label: "Which relative authentication status paths should be checked? Separate them with commas; do not paste file contents.", type: "text", when: "authenticationRequired" },
+  { key: "apiAuthenticationEnabled", label: "Configure portal-backed API authentication and a real read-only API check? Tokens stay in the portal runner's memory.", type: "boolean" },
+  { key: "apiProofUrl", label: "Which approved local HTTPS API endpoint should reject anonymous access and pass an authenticated GET?", type: "text", when: "apiAuthenticationEnabled" },
+  { key: "apiScope", label: "What is the full API scope (for example api://client-id/access_as_user)? Never enter a token.", type: "text", when: "apiAuthenticationEnabled" },
+  { key: "apiProductionDatabaseReadOnly", label: "Allow this local API to read a production database? Requires a database-enforced read-only identity and an assertReadOnlyDatabase helper; never enables writes or deployed production hosts.", type: "boolean", when: "apiAuthenticationEnabled" },
+  { key: "linkedPortalId", label: "Which linked portal ID should own API authentication?", type: "text", when: "apiAuthenticationEnabled", role: "consumer" },
+  { key: "linkedPortalRepository", label: "Which separately onboarded local Git repository owns the portal and its authenticated session?", type: "text", when: "apiAuthenticationEnabled", role: "consumer" },
+  { key: "linkedPortalUrl", label: "What is that portal's local frontend origin, including its port?", type: "text", when: "apiAuthenticationEnabled", role: "consumer" },
+  { key: "apiConsumerRepository", label: "Which local Git repository may request API proof? Use this repository for a combined portal/backend.", type: "text", when: "apiAuthenticationEnabled", role: "portal" },
+  { key: "apiIncludeWorktrees", label: "Also grant isolated Git worktrees of that same consumer repository?", type: "boolean", when: "apiAuthenticationEnabled", role: "portal" },
+  { key: "apiSessionHelper", label: "Which repository-relative JavaScript helper exports withApiToken and assertApiResponse? It must already exist and use normal portal sign-in.", type: "text", when: "apiAuthenticationEnabled", role: "portal" },
+  { key: "authenticationRequired", label: "Does browser validation require sign-in?", type: "boolean", unless: "apiAuthenticationEnabled" },
+  { key: "authenticationCommand", label: "Which repository command opens sign-in? Never enter credentials.", type: "text", when: "authenticationRequired", unless: "apiAuthenticationEnabled" },
+  { key: "authenticationPaths", label: "Which relative authentication status paths should be checked? Separate them with commas; do not paste file contents.", type: "text", when: "authenticationRequired", unless: "apiAuthenticationEnabled" },
   { key: "environments", label: "Which non-production environments are allowed? Separate them with commas.", type: "text" },
   { key: "targetBranch", label: "Which branch should pull requests target?", type: "text" },
   { key: "branchUserId", label: "What developer alias should own new branches?", type: "text" },
@@ -34,23 +48,15 @@ export const REPOSITORY_SETTING_FIELDS = [
   { key: "idleTimeoutMinutes", label: "How many idle minutes may an executor wait? Choose 1 to 120.", type: "number", max: 120 }
 ];
 const split = (value) => value.split(",").map((part) => part.trim()).filter(Boolean);
-
-export function localRepository(value) {
-  if (typeof value !== "string" || value.length > 2048 || !isAbsolute(value)) {
-    throw new Error("Choose an existing local Git repository using its absolute folder path.");
-  }
-  const root = realpathSync.native(value);
-  if (!lstatSync(root).isDirectory() || root === parse(root).root) {
-    throw new Error("A filesystem root is not a repository workspace.");
-  }
-  const git = spawnSync("git", ["rev-parse", "--show-toplevel"], {
-    cwd: root, encoding: "utf8", shell: false, windowsHide: true, timeout: 10000, maxBuffer: 65536
-  });
-  if (git.status !== 0 || realpathSync.native(git.stdout.trim()) !== root) {
-    throw new Error("Select the root of an existing Git working tree, not a subfolder or bare repository.");
-  }
-  return root;
-}
+const portalInRepository = (profile) => profile.browserAutomation?.mode !== "api" ||
+  (profile.browserAutomation?.apiAuthentication?.role ??
+    (profile.applications?.frontend ? "portal" : "consumer")) === "portal";
+const settingFields = (apiOnly, localPortal) => REPOSITORY_SETTING_FIELDS.filter((field) =>
+  !(apiOnly && field.key.startsWith("frontend")) && (!field.role || field.role === (localPortal ? "portal" : "consumer")));
+const sameApiGrant = (left, right) => left && right &&
+  ["repository", "origin", "method", "path"].every((key) => left[key] === right[key]) &&
+  (left.includeWorktrees === true) === (right.includeWorktrees === true) &&
+  (left.productionDatabaseReadOnly === true) === (right.productionDatabaseReadOnly === true);
 
 function readConfiguration(repository) {
   const root = localRepository(repository);
@@ -88,6 +94,8 @@ export function inspectRepositorySettings(repository) {
   const browser = p.browserAutomation ?? {};
   const apiOnly = browser.mode === "api";
   const auth = browser.authentication ?? {};
+  const api = browser.apiAuthentication ?? {};
+  const portal = p.linkedApplications?.find((link) => link.id === auth.linkedApplication) ?? {};
   const workflow = configuredWorkflow(p);
   const values = {
     efficientWorkflow: workflow.mode === "efficient",
@@ -103,6 +111,14 @@ export function inspectRepositorySettings(repository) {
     backendHealthUrl: b.healthUrl ?? "http://127.0.0.1:5000/health",
     browserDirectory: browser.workingDirectory ?? f.workingDirectory ?? ".",
     browserCommand: browser.testCommand ?? "npx playwright test",
+    apiAuthenticationEnabled: Boolean(browser.apiAuthentication),
+    apiProofUrl: api.url ?? (b.healthUrl?.startsWith("https:") ? b.healthUrl : "https://localhost:50443/protected-read"),
+    apiScope: api.scope ?? "", apiProductionDatabaseReadOnly: api.productionDatabaseReadOnly === true,
+    linkedPortalId: auth.linkedApplication ?? "api-portal",
+    linkedPortalRepository: portal.repository ?? "", linkedPortalUrl: portal.url ?? "http://localhost:3000",
+    apiConsumerRepository: api.consumerRepository ?? info.root,
+    apiIncludeWorktrees: api.grant?.includeWorktrees ?? false,
+    apiSessionHelper: api.sessionHelper ?? ".fixlab/api-session.mjs",
     authenticationRequired: auth.required ?? false, authenticationCommand: auth.command ?? "",
     authenticationPaths: (auth.statusPaths ?? []).join(", "),
     environments: (Array.isArray(p.environments) ? p.environments :
@@ -119,9 +135,7 @@ export function inspectRepositorySettings(repository) {
     }
   }
   return { repository: info.root, revision: info.revision, exists: info.exists,
-    fields: apiOnly
-      ? REPOSITORY_SETTING_FIELDS.filter((field) => !field.key.startsWith("frontend"))
-      : REPOSITORY_SETTING_FIELDS, values };
+    fields: settingFields(apiOnly, portalInRepository(p)), values };
 }
 
 function configuredProfile(root, original, values) {
@@ -130,9 +144,9 @@ function configuredProfile(root, original, values) {
       Object.keys(values).some((key) => !REPOSITORY_SETTING_FIELDS.some((field) => field.key === key))) {
     throw new Error("Only the displayed repository settings may be updated.");
   }
-  for (const field of REPOSITORY_SETTING_FIELDS) {
-    if (apiOnly && field.key.startsWith("frontend")) { continue; }
+  for (const field of settingFields(apiOnly, portalInRepository(original))) {
     if (field.when && values[field.when] === false) { continue; }
+    if (field.unless && values[field.unless] === true) { continue; }
     const value = values[field.key];
     if (field.type === "boolean" ? typeof value !== "boolean"
       : field.type === "number" ? !Number.isInteger(value) || value < 1 || value > field.max
@@ -180,8 +194,8 @@ function configuredProfile(root, original, values) {
     throw new Error("This editor cannot change a profile permitting production operations. Review its safety policy separately.");
   }
   const browserDirectory = directory(values.browserDirectory);
-  const statusPaths = values.authenticationRequired ? split(values.authenticationPaths) : [];
-  if (values.authenticationRequired && (!statusPaths.length || statusPaths.length > 8)) {
+  const statusPaths = values.authenticationRequired && !values.apiAuthenticationEnabled ? split(values.authenticationPaths) : [];
+  if (values.authenticationRequired && !values.apiAuthenticationEnabled && (!statusPaths.length || statusPaths.length > 8)) {
     throw new Error("Authenticated browser setup requires 1 to 8 relative status paths.");
   }
   for (const path of statusPaths) { setupPath(setupPath(root, browserDirectory), path); }
@@ -192,7 +206,7 @@ function configuredProfile(root, original, values) {
   }
   if (values.backendEnabled) { applications.backend = application("backend", original.applications?.backend); }
   else { delete applications.backend; }
-  return {
+  const profile = {
     ...original, version: original.version ?? 1, name: values.name, applications,
     workflow: configuredWorkflow({ workflow: {
       mode: values.efficientWorkflow ? "efficient" : "strict",
@@ -219,6 +233,160 @@ function configuredProfile(root, original, values) {
       branchNaming: { ...original.pullRequests?.branchNaming,
         userId: values.branchUserId, prefixTemplate: values.branchPrefix } }
   };
+  return configuredApiAuthentication(root, original, profile, values, apiOnly);
+}
+
+function configureApiGateSelection(profile, gateId, enabled, apiOnly) {
+  validationGates(profile);
+  const validation = profile.validation;
+  const update = ids => [...ids.filter(id => id !== gateId), ...(enabled ? [gateId] : [])];
+  if (validation.apiOnly) {
+    validation.apiOnly = { ...validation.apiOnly, gateIds: update(validation.apiOnly.gateIds) };
+  }
+  if (validation.changeAware) {
+    const policy = validation.changeAware;
+    const backend = profile.applications?.backend?.workingDirectory?.replace(/\\/gu, "/").replace(/\/$/u, "");
+    const applies = scope => scope.paths.some(path => {
+      const root = path.replace(/\\/gu, "/").replace(/\/$/u, "");
+      return (backend === "." && apiOnly) || root === backend ||
+        root.startsWith(`${backend}/`) || backend?.startsWith(`${root}/`);
+    });
+    if (enabled && !policy.scopes.some(applies)) {
+      throw new Error("Review change-aware backend scopes before adding the required API proof gate.");
+    }
+    validation.changeAware = { ...policy, scopes: policy.scopes.map(scope => ({
+      ...scope, gateIds: enabled && applies(scope) ? update(scope.gateIds) :
+        scope.gateIds.filter(id => id !== gateId)
+    })) };
+  }
+}
+
+function configuredApiAuthentication(root, original, profile, values, apiOnly) {
+  const localPortal = portalInRepository(original);
+  const previous = original.browserAutomation?.apiAuthentication;
+  const previousTestSynthesis = previous?.previousTestSynthesis ?? original.browserAutomation?.testSynthesis;
+  const previousAuthentication = previous?.previousAuthentication ?? {
+    required: original.browserAutomation?.authentication?.required ?? false,
+    command: original.browserAutomation?.authentication?.command ?? "",
+    proofCommand: original.browserAutomation?.authentication?.proofCommand,
+    statusPaths: original.browserAutomation?.authentication?.statusPaths ?? [],
+    linkedApplication: original.browserAutomation?.authentication?.linkedApplication
+  };
+  const authentication = profile.browserAutomation.authentication;
+  const gateId = "portal-backed-api-read";
+  const gates = original.validation?.gates ?? [];
+  if (!Array.isArray(gates)) { throw new Error("validation.gates must be an array before configuring API authentication."); }
+  const remainingGates = previous ? gates.filter((gate) => gate.id !== gateId) : gates;
+  if (previous?.grantAdded) {
+    authentication.apiProofFor = (authentication.apiProofFor ?? [])
+      .filter((grant) => !sameApiGrant(grant, previous.grant));
+  }
+  if (previous?.link) {
+    profile.linkedApplications = (profile.linkedApplications ?? []).filter((link) => link.id !== previous.link.id);
+    if (previous.previousLink) { profile.linkedApplications.push(previous.previousLink); }
+  }
+  if (!values.apiAuthenticationEnabled) {
+    if (previous) {
+      Object.assign(authentication, previousAuthentication);
+      delete profile.browserAutomation.apiAuthentication;
+      configureApiGateSelection(profile, gateId, false, apiOnly);
+      if (previous.previousTestSynthesis) {
+        profile.browserAutomation.testSynthesis = previous.previousTestSynthesis;
+      }
+      if (previous.hadExplicitGates || remainingGates.length) { profile.validation.gates = remainingGates; }
+      else { delete profile.validation.gates; }
+    }
+    return profile;
+  }
+  if (remainingGates.some((gate) => gate.id === gateId)) {
+    throw new Error("The generated API gate ID is already in use; review that gate before onboarding authentication.");
+  }
+  const configuration = apiAuthenticationConfiguration(root, {
+    role: localPortal ? "portal" : "consumer", url: values.apiProofUrl, scope: values.apiScope,
+    ...(values.apiProductionDatabaseReadOnly ? { productionDatabaseReadOnly: true } : {}),
+    ...(localPortal ? { sessionHelper: values.apiSessionHelper,
+      consumerRepository: localRepository(values.apiConsumerRepository) } : {})
+  });
+  if (!(Array.isArray(profile.environments) ? profile.environments : Object.keys(profile.environments)).includes("local")) {
+    throw new Error("Portal-backed API setup requires the explicitly permitted local environment.");
+  }
+  const url = new URL(configuration.url);
+  if (apiOnly) {
+    profile.browserAutomation.testSynthesis = configuration.productionDatabaseReadOnly
+      ? { ...previousTestSynthesis, defaultDataSource: "production-read-only", mutationMode: "none" }
+      : previousTestSynthesis;
+  }
+  if ((apiOnly || configuration.consumerRepository === root) &&
+      (!profile.applications?.backend?.healthUrl ||
+       new URL(profile.applications.backend.healthUrl).origin !== url.origin)) {
+    throw new Error("API proof must target the configured local backend origin, not a different server.");
+  }
+  profile.browserAutomation.dataSafety.allowedOrigins = [...new Set([
+    ...(profile.browserAutomation.dataSafety.allowedOrigins ?? []), url.origin
+  ])];
+  profile.browserAutomation.dataSafety.allowedMethods = [...new Set([
+    ...(profile.browserAutomation.dataSafety.allowedMethods ?? []), "GET"
+  ])];
+  if (apiOnly && configuration.productionDatabaseReadOnly) {
+    profile.browserAutomation.dataSafety.allowedOrigins = [url.origin];
+    profile.browserAutomation.dataSafety.allowedMethods = ["GET", "HEAD", "OPTIONS"];
+  }
+  const relativeRoot = relative(setupPath(root, profile.browserAutomation.workingDirectory), root) || ".";
+  const commandName = localPortal ? "portal-api-proof" : "linked-api-proof";
+  const runner = `fixlab ${commandName} "${relativeRoot}"`;
+  if (!localPortal) {
+    authentication.required = true;
+    if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(values.linkedPortalId)) {
+      throw new Error("Choose a safe linked portal ID.");
+    }
+    const repository = localRepository(values.linkedPortalRepository);
+    if (repository === root) { throw new Error("An API-only consumer must select a separate portal repository."); }
+    const link = { id: values.linkedPortalId, repository, application: "frontend",
+      url: values.linkedPortalUrl, environment: "local" };
+    const existing = (profile.linkedApplications ?? []).find((entry) => entry.id === link.id);
+    configuration.previousLink = existing;
+    configuration.link = link;
+    profile.linkedApplications = [...(profile.linkedApplications ?? []).filter((entry) => entry.id !== link.id), link];
+    resolveLinkedApplications(root, profile);
+    authentication.linkedApplication = link.id;
+    authentication.command = `${runner} --authenticate --yes`;
+    authentication.proofCommand = `${runner} --proof --yes`;
+    authentication.statusPaths = [".auth/api-ready.json"];
+  } else {
+    const grant = { repository: configuration.consumerRepository, origin: url.origin, method: "GET",
+      path: url.pathname, ...(values.apiIncludeWorktrees ? { includeWorktrees: true } : {}),
+      ...(configuration.productionDatabaseReadOnly ? { productionDatabaseReadOnly: true } : {}) };
+    const grants = authentication.apiProofFor ?? [];
+    if (!Array.isArray(grants) || grants.length > 8) { throw new Error("Review existing API proof grants before onboarding."); }
+    configuration.grantAdded = !grants.some((entry) => sameApiGrant(entry, grant));
+    configuration.grant = grant;
+    authentication.apiProofFor = configuration.grantAdded ? [...grants, grant] : grants;
+    if (authentication.apiProofFor.length > 8) { throw new Error("At most eight API proof grants are allowed."); }
+    Object.assign(authentication, previousAuthentication);
+    configuration.command = `${previousAuthentication.command && !configuration.productionDatabaseReadOnly
+      ? `${previousAuthentication.command} && ` : ""}${runner} --authenticate --yes`;
+    configuration.proofCommand = `${runner} --proof --yes`;
+    configuration.statusPaths = configuration.productionDatabaseReadOnly ? [".auth/api-ready.json"]
+      : [...new Set([...previousAuthentication.statusPaths, ".auth/api-ready.json"])];
+    if (apiOnly) {
+      Object.assign(authentication, { required: true, command: configuration.command,
+        proofCommand: configuration.proofCommand, statusPaths: configuration.statusPaths });
+    }
+    profile.worktreeSetup = { ...profile.worktreeSetup,
+      files: [...new Set([...(profile.worktreeSetup?.files ?? []), configuration.sessionHelper])] };
+  }
+  configuration.previousAuthentication = previousAuthentication;
+  configuration.previousTestSynthesis = previousTestSynthesis;
+  configuration.hadExplicitGates = previous?.hadExplicitGates ?? (original.validation?.gates !== undefined);
+  profile.browserAutomation.apiAuthentication = configuration;
+  const gate = { id: gateId, kind: "tests", stage: "live-test", required: true,
+    workingDirectory: ".", timeoutSeconds: 180,
+    ...(process.platform === "win32" ? { command: "pwsh",
+      args: ["-NoProfile", "-NonInteractive", "-Command", `& fixlab ${commandName} . --proof --yes; exit $LASTEXITCODE`] }
+      : { command: "fixlab", args: [commandName, ".", "--proof", "--yes"] }) };
+  profile.validation.gates = [...remainingGates, gate];
+  configureApiGateSelection(profile, gateId, true, apiOnly);
+  return profile;
 }
 
 export function planRepositorySettings({ repository, revision, values, install, packageRoot, validate }) {

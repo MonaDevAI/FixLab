@@ -153,6 +153,68 @@ test.afterAll(async () => {
   rmSync(repository, { recursive: true, force: true });
 });
 
+test("unit-only dashboard starts from the default form without React warm-up or live options", async ({ page }) => {
+  const directory = mkdtempSync(join(tmpdir(), "fixlab-unit-form-"));
+  const profileDirectory = join(directory, ".github", "fixlab");
+  mkdirSync(profileDirectory, { recursive: true });
+  writeFileSync(join(profileDirectory, "repository-profile.json"), JSON.stringify({
+    name: "Unit-only browser fixture",
+    validation: {
+      liveTestsRequired: false,
+      liveTestsDeferredReason: "Run local units only; integration remains deferred.",
+      gates: [{
+        id: "local-units", kind: "tests", required: true,
+        command: process.execPath, args: ["-e", "process.exit(0)"],
+        workingDirectory: ".", timeoutSeconds: 30
+      }]
+    }
+  }));
+  for (const args of [
+    ["init", "--quiet"], ["config", "user.name", "Fixture"],
+    ["config", "user.email", "fixture@example.invalid"],
+    ["add", "."], ["commit", "--quiet", "-m", "Local unit fixture"]
+  ]) {
+    const result = spawnSync("git", args, { cwd: directory, encoding: "utf8", windowsHide: true });
+    expect(result.status, result.stderr).toBe(0);
+  }
+  const executions = [];
+  const instance = createDashboardServer({
+    repository: directory, packageRoot, browserOpener() {},
+    executor(input) {
+      executions.push(input);
+      let finish;
+      const completion = new Promise((resolve) => { finish = resolve; });
+      return { completion, terminate() { finish({ code: null, signal: "SIGTERM" }); } };
+    }
+  });
+  try {
+    const url = (await instance.listen({ port: await availablePort() })).url;
+    await openWorkflowControls(page, url);
+    await expect(page.locator("#readiness")).toHaveText("Ready");
+    for (const name of ["prestartFrontend", "manualLocalhostTest", "recordPlaywrightVideo", "runAllUiScenarios"]) {
+      await expect(page.locator(`[name="${name}"]`)).toBeDisabled();
+      await expect(page.locator(`[name="${name}"]`)).not.toBeChecked();
+    }
+    await expect(page.locator('[name="testMutationMode"]')).toBeDisabled();
+    await expect(page.locator('[name="mode"][value="playwright-only"]')).toBeDisabled();
+    await page.locator("#request").fill("Run the configured offline unit tests.");
+    const responsePromise = page.waitForResponse((response) =>
+      response.url() === `${url}/api/jobs` && response.request().method() === "POST");
+    await page.locator("#start-button").click();
+    const response = await responsePromise;
+    expect(response.status(), await response.text()).toBe(202);
+    const submitted = response.request().postDataJSON();
+    expect(submitted.prestartFrontend).toBe(false);
+    expect(submitted.manualLocalhostTest).toBe(false);
+    expect(submitted.testMutationMode).toBe("");
+    await expect.poll(() => executions.length).toBe(1);
+    expect(executions[0].prompt).toContain("Repository unit-test-only override");
+  } finally {
+    await instance.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("dashboard submits per-run interception without optional folder preflight", async ({ page }) => {
   let submitted;
   await page.route("**/api/jobs", async (route) => {
@@ -1021,7 +1083,7 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     .getByRole("button", { name: "Save onboarding settings" })
     .click();
   await expect(page.locator("#onboarding-message")).toContainText(
-    "Numeric bug loading is ready"
+    "Numeric work item loading is ready"
   );
   await expect(
     page.getByRole("button", { name: "Check status" })
@@ -1048,14 +1110,14 @@ test("dashboard exposes multi-bug intake and resumable user input", async ({
     page.getByLabel("Open React localhost for manual validation")
   ).not.toBeChecked();
   await page.getByLabel("Load from Azure DevOps").check();
-  await expect(page.getByText("Load bugs")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Load work items", exact: true })).toBeVisible();
   await expect(
     page.getByPlaceholder("123, 456, or one URL/ID per line")
   ).toBeVisible();
   await page
     .getByPlaceholder("123, 456, or one URL/ID per line")
     .fill("123");
-  await page.getByRole("button", { name: "Load bugs" }).click();
+  await page.getByRole("button", { name: "Load work items" }).click();
   await expect(page.locator("#screenshot-list")).toContainText("123-bug.png");
   await expect(page.getByText("1 image(s)")).toBeVisible();
   await expect(page.getByText("Continue this job")).toBeHidden();

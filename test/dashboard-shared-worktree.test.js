@@ -247,3 +247,106 @@ test("workspace reuse rejects stale reviews, protected branches and in-progress 
     rmSync(f.root, { recursive: true, force: true });
   }
 });
+
+test("automatic preservation saves staged, unstaged, deleted and untracked source changes before a fresh base branch", () => {
+  const f = fixture();
+  try {
+    f.profile.worktreeSetup.autoStash = true;
+    for (const name of ["tracked.ts", "deleted.ts"]) {
+      writeFileSync(join(f.source, name), "export const value = 1;\n");
+    }
+    git(f.source, "add", ".");
+    git(f.source, "commit", "--quiet", "-m", "source fixtures");
+    const first = prepare(f);
+    writeFileSync(join(f.repository, "old-branch.ts"), "export const old = true;\n");
+    git(f.repository, "add", ".");
+    git(f.repository, "commit", "--quiet", "-m", "previous branch work");
+    const oldHead = git(f.repository, "rev-parse", "HEAD");
+    writeFileSync(join(f.repository, "tracked.ts"), "export const value = 2;\n");
+    git(f.repository, "add", "tracked.ts");
+    writeFileSync(join(f.repository, "tracked.ts"), "export const value = 3;\n");
+    writeFileSync(join(f.repository, "untracked.ts"), "export const fresh = true;\n");
+    rmSync(join(f.repository, "deleted.ts"));
+    writeFileSync(join(f.repository, "ignored.txt"), "preserve ignored fixture");
+    let receipt;
+    const next = prepare(f, { onStash(value) { receipt = value; } });
+    assert.deepEqual(next.workspaceStash, receipt);
+    assert.equal(receipt.previousBranch, first.branch);
+    assert.match(receipt.stashRef, /^[a-f0-9]{40,64}$/u);
+    assert.notEqual(next.branch, first.branch);
+    assert.equal(next.baseCommit, git(f.source, "rev-parse", "HEAD"));
+    assert.equal(git(f.repository, "rev-parse", first.branch), oldHead);
+    assert.equal(git(f.repository, "status", "--porcelain"), "");
+    assert.equal(existsSync(join(f.repository, "old-branch.ts")), false);
+    assert.equal(readFileSync(join(f.repository, "tracked.ts"), "utf8").trim(), "export const value = 1;");
+    assert.equal(readFileSync(join(f.repository, "ignored.txt"), "utf8"), "preserve ignored fixture");
+    assert.equal(git(f.repository, "show", `${receipt.stashRef}:tracked.ts`), "export const value = 3;");
+    assert.equal(git(f.repository, "show", `${receipt.stashRef}^2:tracked.ts`), "export const value = 2;");
+    assert.equal(git(f.repository, "show", `${receipt.stashRef}^3:untracked.ts`), "export const fresh = true;");
+    git(f.repository, "stash", "apply", "--index", receipt.stashRef);
+    assert.equal(readFileSync(join(f.repository, "tracked.ts"), "utf8").trim(), "export const value = 3;");
+    assert.match(git(f.repository, "diff", "--cached"), /value = 2/u);
+    assert.match(git(f.repository, "diff"), /value = 3/u);
+    assert.equal(existsSync(join(f.repository, "deleted.ts")), false);
+    assert.equal(readFileSync(join(f.repository, "untracked.ts"), "utf8").trim(), "export const fresh = true;");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("automatic preservation is opt-in and never stashes on resume or while owned resources run", () => {
+  const f = fixture();
+  try {
+    f.profile.worktreeSetup.autoStash = true;
+    const id = randomUUID();
+    const saved = prepare(f, { jobId: id });
+    writeFileSync(join(f.repository, "pending.ts"), "export const pending = true;\n");
+    assert.deepEqual(prepare(f, { jobId: id, saved, resume: true, resourcesRunning: true }), saved);
+    assert.throws(() => prepare(f, { resourcesRunning: true }), /owned React and authentication/u);
+    assert.equal(git(f.repository, "stash", "list"), "");
+    f.profile.worktreeSetup.autoStash = false;
+    assert.throws(() => prepare(f), /uncommitted or untracked/u);
+    f.profile.worktreeSetup.autoStash = "yes";
+    assert.throws(() => prepare(f), /autoStash must be a boolean/u);
+    assert.equal(readFileSync(join(f.repository, "pending.ts"), "utf8"), "export const pending = true;\n");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("automatic preservation refuses protected and sensitive staged content without partial stashing", () => {
+  const f = fixture();
+  try {
+    f.profile.worktreeSetup.autoStash = true;
+    writeFileSync(join(f.repository, "safe.ts"), "export const safe = true;\n");
+    writeFileSync(join(f.repository, ".env"), "SYNTHETIC=fixture-only\n");
+    assert.throws(() => prepare(f), /sensitive.*non-source/u);
+    assert.equal(git(f.repository, "stash", "list"), "");
+    rmSync(join(f.repository, ".env"));
+    writeFileSync(join(f.repository, "staged.ts"), 'export const value = "Bearer synthetic-private-fixture-value";\n');
+    git(f.repository, "add", "staged.ts");
+    writeFileSync(join(f.repository, "staged.ts"), "export const value = true;\n");
+    assert.throws(() => prepare(f), /Staged files.*sensitive/u);
+    assert.equal(git(f.repository, "stash", "list"), "");
+    assert.equal(readFileSync(join(f.repository, "safe.ts"), "utf8"), "export const safe = true;\n");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("a failed refresh retains the verified stash receipt and the previous branch", () => {
+  const f = fixture();
+  try {
+    f.profile.worktreeSetup.autoStash = true;
+    const branch = git(f.repository, "branch", "--show-current");
+    writeFileSync(join(f.repository, "preserved.ts"), "export const preserved = true;\n");
+    git(f.repository, "remote", "set-url", "origin", join(f.root, "missing"));
+    let receipt;
+    assert.throws(() => prepare(f, { onStash(value) { receipt = value; } }), /base refresh failed/u);
+    assert.equal(git(f.repository, "branch", "--show-current"), branch);
+    assert.equal(git(f.repository, "show", `${receipt.stashRef}^3:preserved.ts`), "export const preserved = true;");
+    assert.equal(git(f.repository, "status", "--porcelain"), "");
+  } finally {
+    rmSync(f.root, { recursive: true, force: true });
+  }
+});

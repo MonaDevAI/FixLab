@@ -111,6 +111,16 @@
         </div>
       </section>
 
+      <section class="panel" aria-labelledby="linked-applications-heading" data-area="connections-view">
+        <div class="section-heading">
+          <h2 id="linked-applications-heading">Linked applications</h2>
+          <button id="linked-applications-load" type="button">Load linked applications</button>
+        </div>
+        <p class="guidance">Open a configured application's own repository workspace. Its frontend, authentication, tests, permissions and pull requests remain separate. Opening a link does not start commands or prove integration readiness.</p>
+        <p id="linked-applications-message" class="guidance" role="status"></p>
+        <div id="linked-applications-list"></div>
+      </section>
+
       <section class="panel" aria-labelledby="session-heading" data-area="connections-view">
         <div class="section-heading">
           <h2 id="session-heading">Session controls</h2>
@@ -229,9 +239,9 @@
             <div class="inline-input">
               <textarea id="work-item" rows="3" autocomplete="off"
                 placeholder="123, 456, or one URL/ID per line"></textarea>
-              <button id="load-work-item" type="button">Load bugs</button>
+              <button id="load-work-item" type="button">Load work items</button>
             </div>
-            <p class="guidance">Load up to 20 unique bugs in one authenticated batch. ID-only lookup uses Azure DevOps settings from the repository profile. Up to five attached or embedded images are loaded locally; non-image attachments are not downloaded.</p>
+            <p class="guidance">Load up to 20 Bugs, User Stories, Tasks, or Features in one authenticated batch. Descriptions, acceptance criteria, comments, and bounded images are included. ID-only lookup uses this repository's Azure DevOps settings. Select Small enhancement for scoped story, task, or feature implementation; child work items are not loaded automatically.</p>
             <div id="work-item-summary" class="loaded-summary" hidden>
               <strong id="work-item-count"></strong>
               <ul id="work-item-list" class="work-item-list"></ul>
@@ -406,7 +416,7 @@
 
       <section id="bug-results-panel" class="panel" data-area="details-view" hidden>
         <div class="section-heading">
-          <h2>Azure DevOps bug outcomes</h2>
+          <h2>Azure DevOps work item outcomes</h2>
           <span>One combined workflow</span>
         </div>
         <div class="table-scroll">
