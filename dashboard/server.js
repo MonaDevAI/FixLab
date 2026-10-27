@@ -41,9 +41,13 @@ import { canonicalExecutionRepository, createExecutorLease } from "./executor-le
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
+import { apiAuthenticationConfiguration } from "./api-authentication.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "./repository-settings.js";
+import { configuredLinkedApplications, resolveLinkedApplications } from "./linked-applications.js";
+import { linkedApiProofPlan } from "./linked-api-proof.js";
+import { portalApiProofRevision } from "./portal-api-proof.js";
 import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, stashReviewedSharedWorktree, verifySharedWorktreeBranch } from "./shared-worktree.js";
 import { compactControlResult, conversationOperations } from "./conversation-operations.js";
 const windowsOwnedTrees = new WeakMap();
@@ -181,6 +185,7 @@ const testDataSources = new Set([
   "synthetic-intercepted",
   "local-fixture",
   "non-production-read-only",
+  "production-read-only",
   "non-production-approved",
   "profile-defined"
 ]);
@@ -199,6 +204,7 @@ const staticFiles = new Map([
   ["/", "index.html"],
   ["/index.html", "index.html"],
   ["/app.js", "app.js"],
+  ["/work-item-intake.js", "work-item-intake.js"],
   ["/repository-workspace.js", "repository-workspace.js"],
   ["/styles.css", "styles.css"]
 ]);
@@ -222,11 +228,13 @@ export function validatePort(value) {
 
 export function validateLiveTestProfile(profile, repository) {
   const missing = [];
+  let gates;
   if (repository) {
     missing.push(...browserConfigurationErrors(profile, repository));
   }
   try {
-    validationGates(profile ?? {}, "validate-only");
+    gates = validationGates(profile ?? {}, "validate-only");
+    configuredLinkedApplications(profile);
   } catch (error) {
     missing.push(error.message);
   }
@@ -242,6 +250,10 @@ export function validateLiveTestProfile(profile, repository) {
   const requiredString = (value) =>
     typeof value === "string" && Boolean(value.trim());
 
+  if (profile?.validation?.liveTestsRequired !== undefined &&
+      typeof profile.validation.liveTestsRequired !== "boolean") {
+    missing.push("validation.liveTestsRequired (boolean)");
+  }
   if (
     agentIdleTimeoutMinutes !== undefined &&
     (!Number.isInteger(agentIdleTimeoutMinutes) ||
@@ -251,6 +263,27 @@ export function validateLiveTestProfile(profile, repository) {
     missing.push(
       "validation.agentIdleTimeoutMinutes (integer from 1 to 120)"
     );
+  }
+
+  if (profile?.validation?.liveTestsRequired === false) {
+    if (!requiredString(profile.validation.liveTestsDeferredReason) ||
+        profile.validation.liveTestsDeferredReason.length > 500) {
+      missing.push("validation.liveTestsDeferredReason (1-500 characters)");
+    }
+    if (browserAutomation !== undefined) {
+      missing.push("unit-test-only profiles must omit browserAutomation");
+    }
+    if (!gates?.some((gate) => gate.required && gate.kind === "tests" && gate.stage !== "live-test")) {
+      missing.push("unit-test-only validation requires a required local tests gate");
+    }
+    if (gates?.some((gate) => gate.stage === "live-test")) {
+      missing.push("unit-test-only validation cannot configure live-test gates");
+    }
+    return {
+      ok: missing.length === 0,
+      detail: missing.length ? `missing or invalid: ${missing.join(", ")}`
+        : "local unit-test gates configured; live tests explicitly deferred"
+    };
   }
 
   if (browserAutomation?.mode !== undefined &&
@@ -353,9 +386,23 @@ export function validateLiveTestProfile(profile, repository) {
           methods.some((value) => !["GET", "HEAD", "OPTIONS"].includes(value))) {
         missing.push("browserAutomation.dataSafety.allowedMethods (read-only GET, HEAD, OPTIONS)");
       }
-      if (!["non-production-read-only", "local-fixture"].includes(testSynthesis?.defaultDataSource) ||
+      const productionDatabaseReadOnly = browserAutomation.apiAuthentication?.productionDatabaseReadOnly === true;
+      if (!(productionDatabaseReadOnly ? ["production-read-only"] : ["non-production-read-only", "local-fixture"])
+        .includes(testSynthesis?.defaultDataSource) ||
           testSynthesis?.mutationMode !== "none") {
-        missing.push("API-only validation requires non-production-read-only or local-fixture data and mutationMode=none");
+        missing.push("API-only validation requires accurately labeled read-only data and mutationMode=none");
+      }
+      if (productionDatabaseReadOnly) {
+        try {
+          const api = apiAuthenticationConfiguration(repository ?? "", browserAutomation.apiAuthentication, { requireHelper: false });
+          if (origins?.length !== 1 || origins[0] !== new URL(api.url).origin ||
+              new URL(application.healthUrl).origin !== new URL(api.url).origin ||
+              authentication?.required !== true) {
+            throw new Error("Production database reads require authenticated proof and only the approved local API origin.");
+          }
+        } catch (error) {
+          missing.push(error.message);
+        }
       }
     }
     if (testSynthesis === undefined) {
@@ -390,9 +437,27 @@ export function validateLiveTestProfile(profile, repository) {
 }
 
 export function configuredTestSynthesis(profile, selectedMutationMode = "") {
+  if (profile?.validation?.liveTestsRequired === false) {
+    if (selectedMutationMode) {
+      throw new Error("Unit-test-only validation does not permit live mutation-mode selection.");
+    }
+    return {
+      unitTestsOnly: true,
+      liveTestsDeferredReason: profile.validation.liveTestsDeferredReason,
+      enabled: false,
+      source: "profile-defined",
+      mutationMode: "none",
+      requireScenarioEvidence: false,
+      reported: false,
+      scenario: ""
+    };
+  }
   const configuration = profile?.browserAutomation?.testSynthesis;
   const result = {
     ...(profile?.browserAutomation?.mode === "api" ? { apiOnly: true } : {}),
+    ...(profile?.browserAutomation?.mode === "api" &&
+      profile.browserAutomation.apiAuthentication?.productionDatabaseReadOnly === true
+      ? { productionDatabaseReadOnly: true } : {}),
     enabled: configuration?.enabled !== false,
     source: testDataSources.has(configuration?.defaultDataSource)
       ? configuration.defaultDataSource
@@ -406,6 +471,10 @@ export function configuredTestSynthesis(profile, selectedMutationMode = "") {
     scenario: "",
     ...(selectedMutationMode ? { selectedMutationMode } : {})
   };
+  if ((result.source === "production-read-only") !== (result.productionDatabaseReadOnly === true) ||
+      (result.productionDatabaseReadOnly && result.mutationMode !== "none")) {
+    throw new Error("Production database evidence requires an explicitly approved local API-only read-only profile.");
+  }
   if (!["", "intercepted", "none"].includes(selectedMutationMode)) {
     throw new Error("testMutationMode must be empty, intercepted or none. This selector never authorizes real writes.");
   }
@@ -419,7 +488,9 @@ export function configuredTestSynthesis(profile, selectedMutationMode = "") {
       throw new Error("The repository profile does not allow the selected per-run mutation mode.");
     }
     if (selectedMutationMode === "none" &&
-        !["non-production-read-only", "non-production-approved", ...(result.apiOnly ? ["local-fixture"] : [])].includes(result.source)) {
+        !["non-production-read-only", "non-production-approved",
+          ...(result.apiOnly ? ["local-fixture"] : []),
+          ...(result.productionDatabaseReadOnly ? ["production-read-only"] : [])].includes(result.source)) {
       throw new Error("Live read-only mode requires a profile that permits non-production backend reads.");
     }
     result.mutationMode = selectedMutationMode;
@@ -558,7 +629,12 @@ function dashboardSnapshot(job) {
     manualLocalhostResult: job.manualLocalhostResult,
     testEvidence: {
       enabled: job.testEvidence.enabled,
+      ...(job.testEvidence.unitTestsOnly === true ? {
+        unitTestsOnly: true,
+        liveTestsDeferredReason: safePersistedSummary(job.testEvidence.liveTestsDeferredReason)
+      } : {}),
       ...(job.testEvidence.apiOnly === true ? { apiOnly: true } : {}),
+      ...(job.testEvidence.productionDatabaseReadOnly === true ? { productionDatabaseReadOnly: true } : {}),
       source: job.testEvidence.source,
       mutationMode: job.testEvidence.mutationMode,
       ...(job.testEvidence.selectedMutationMode
@@ -954,6 +1030,7 @@ export function inspectRepository(repository) {
       repository: resolvedRepository,
       repositoryReady: true,
       profileReady: true,
+      unitTestsOnly: profile.validation?.liveTestsRequired === false,
       playwrightMode: profile.browserAutomation?.mode ?? "browser",
       profilePath,
       environments: configuredValidationEnvironments(profile),
@@ -1013,6 +1090,7 @@ export function buildJobPrompt({
       title,
       state,
       workItemType,
+      acceptanceCriteria,
       webUrl,
       comments,
       commentCount,
@@ -1022,6 +1100,7 @@ export function buildJobPrompt({
       title,
       state,
       workItemType,
+      acceptanceCriteria,
       webUrl,
       commentCount: Array.isArray(comments)
         ? comments.length
@@ -1052,7 +1131,9 @@ export function buildJobPrompt({
 - Do not silently fall back to local or another environment. If ${targetEnvironment} is unavailable, unauthenticated, or cannot be used safely, block the affected stage with the exact prerequisite.
 - Focused tests, type-checks, and builds still run locally unless the repository profile explicitly defines otherwise.`
     : "- No environment override was selected. Use the repository profile's safe default and never select production.";
-  const testDataGuidance = apiOnly
+  const testDataGuidance = testEvidence.productionDatabaseReadOnly
+    ? "- This local API reads a PRODUCTION database under an explicit read-only exception. Run the required portal-backed API gate and its assertReadOnlyDatabase permission check before business reads. Require a database-enforced read-only identity; GET alone does not prove safety. Use only the approved loopback HTTPS API, never a deployed production URL or a different database. Do not write, change database settings or permissions, bypass guards, or fall back to synthetic data. Label evidence FIXLAB_TEST|production-read-only|none|...; never describe these reads as non-production."
+    : apiOnly
     ? "- Use only allowlisted read-only API operations and real approved data for live validation. No synthetic fallback, redirected request outside the allowlist, or business-data write is authorized."
     : targetEnvironment &&
     testEvidence.source === "non-production-read-only"
@@ -1254,6 +1335,7 @@ ${readOnly ? "" : CONCISE_PR_GUIDANCE}
 - Preserve exact command errors in the stage message or adjacent output.
 ${validateOnly ? "- The fix and pr stages must be explicitly skipped unless they fail for another reason." : ""}
 ${playwrightOnly ? "- The diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped unless a required setup or browser-validation blocker makes the applicable stage blocked or failed." : ""}
+${testEvidence.unitTestsOnly ? `\nRepository unit-test-only override:\n${UNIT_TEST_ONLY_GUIDANCE}\nRecorded reason: ${testEvidence.liveTestsDeferredReason}` : ""}
 
 Request:
 ${request}`;
@@ -1263,7 +1345,7 @@ function extractBugResults(request, workItems = []) {
   const bugs = new Map();
   const lines = String(request ?? "").split(/\r?\n/);
   for (const [index, line] of lines.entries()) {
-    const match = line.match(/^Azure DevOps Bug (\d+):\s*(.+)$/i);
+    const match = line.match(/^Azure DevOps (?:Bug|User Story|Task|Feature|Work Item) (\d+):\s*(.+)$/i);
     if (!match) {
       continue;
     }
@@ -2561,8 +2643,15 @@ function appendLine(job, stream, line) {
       return;
     }
     const selectedMode = job.testEvidence.selectedMutationMode;
+    if ((source === "production-read-only") !== (job.testEvidence.productionDatabaseReadOnly === true)) {
+      job.testEvidence.modeViolation = true;
+      pushLog(job, { index: job.nextLogIndex, timestamp: new Date().toISOString(), stream: "dashboard",
+        message: "Rejected evidence that mislabels the approved database environment." });
+      return;
+    }
     if (job.testEvidence.apiOnly &&
-        (mutationMode !== "none" || !["non-production-read-only", "local-fixture"].includes(source))) {
+        (mutationMode !== "none" || !(job.testEvidence.productionDatabaseReadOnly
+          ? ["production-read-only"] : ["non-production-read-only", "local-fixture"]).includes(source))) {
       job.testEvidence.modeViolation = true;
       pushLog(job, {
         index: job.nextLogIndex,
@@ -2688,6 +2777,17 @@ function finishJob(job, result) {
     return;
   }
 
+  if (job.testEvidence.unitTestsOnly) {
+    for (const stage of ["local-stack", "live-test"]) {
+      if (job.stages[stage].status === "passed") {
+        job.stages[stage] = {
+          status: "failed",
+          message: "Unit-test-only validation must report application startup and live tests skipped, not passed."
+        };
+        job.error = job.stages[stage].message;
+      }
+    }
+  }
   if (job.testEvidence.modeViolation) {
     job.stages["live-test"] = {
       status: "failed",
@@ -2932,10 +3032,16 @@ function resolveContainedPath(root, candidate, label, { mustExist = false } = {}
   return realCandidate;
 }
 
-function playwrightAuthenticationConfig(repository) {
+function playwrightAuthenticationConfig(repository, { apiProof = false } = {}) {
   const profile = loadRepositoryProfile(repository);
   const browserAutomation = profile.browserAutomation ?? {};
-  const authentication = browserAutomation.authentication ?? {};
+  const browserAuthentication = browserAutomation.authentication ?? {};
+  if (apiProof && browserAutomation.apiAuthentication?.role !== "portal") {
+    throw new Error("API proof requires a configured portal authentication provider.");
+  }
+  const authentication = apiProof ? {
+    ...browserAuthentication, ...browserAutomation.apiAuthentication
+  } : browserAuthentication;
   const workingDirectory = resolveContainedPath(
     repository,
     browserAutomation.workingDirectory ??
@@ -2964,6 +3070,10 @@ function playwrightAuthenticationConfig(repository) {
     command,
     mode: browserAutomation.mode ?? "browser",
     proofCommand: typeof authentication.proofCommand === "string" ? authentication.proofCommand.trim() : "",
+    linkedProofRevision: authentication.linkedApplication === undefined ? null : linkedApiProofPlan(repository).revision,
+    portalProofRevision: apiProof ||
+      (browserAutomation.mode === "api" && browserAutomation.apiAuthentication?.role === "portal")
+      ? portalApiProofRevision(repository) : null,
     environment,
     statusPaths,
     workingDirectory
@@ -3141,6 +3251,8 @@ function authenticationProofIdentity(configuration, job) {
     mode: configuration.mode,
     command: configuration.command,
     proofCommand: configuration.proofCommand,
+    linkedProofRevision: configuration.linkedProofRevision,
+    portalProofRevision: configuration.portalProofRevision,
     workingDirectory: configuration.workingDirectory,
     environment: configuration.environment,
     jobId: job?.id ?? null,
@@ -3152,7 +3264,7 @@ function authenticationProofIdentity(configuration, job) {
 function playwrightAuthenticationStatus(repository, connection, job) {
   let configuration;
   try {
-    configuration = playwrightAuthenticationConfig(repository);
+    configuration = playwrightAuthenticationConfig(repository, { apiProof: connection.apiProof === true });
   } catch (error) {
     return {
       configured: false,
@@ -3193,6 +3305,7 @@ function playwrightAuthenticationStatus(repository, connection, job) {
       paths.every((entry) => entry.ready) && proofMatches,
     statePresent: paths.length > 0 && paths.every((entry) => entry.ready),
     proofConfigured: Boolean(configuration.proofCommand),
+    runId: connection.runId ?? null,
     running: Boolean(connection.handle),
     error: "",
     lastResult: connection.lastResult,
@@ -3381,6 +3494,45 @@ export function createDashboardServer({
       throw new Error("Cannot verify every registered owner of this repository. Reconnect to its owner and verify its resources are idle before changing settings or opening another workspace.");
     }
     return catalog.repositories.filter((entry) => sameExistingRepository(entry.repository, root));
+  }
+
+  async function openRepositoryWorkspace(root, verify = () => {}) {
+    if (!inspectRepositorySettings(root).exists) {
+      throw new Error("Apply the reviewed repository setup before opening its workspace.");
+    }
+    const existing = (await repositoryWorkspaceOwners(root))[0];
+    verify();
+    if (existing) {
+      return { url: existing.url, repository: root, startedJob: false };
+    }
+    if (closing || workspaceHostState.closing) {
+      throw new Error("The dashboard is shutting down.");
+    }
+    let workspace = workspaceServers.get(root);
+    if (!workspace) {
+      if (workspaceServers.size >= 8) {
+        throw new Error("This host already owns eight additional repository workspaces.");
+      }
+      const dashboard = createDashboardServer({
+        repository: root, packageRoot, runtime, model, executor, preflight, browserOpener, browserOwnership,
+        workspaceServers, ownsWorkspaceServers: false, workspaceHostState
+      });
+      workspace = { dashboard, ready: dashboard.listen({ port: 0 }) };
+      workspaceServers.set(root, workspace);
+    }
+    let address;
+    try {
+      address = await workspace.ready;
+    } catch (error) {
+      workspaceServers.delete(root);
+      await workspace.dashboard.close();
+      throw error;
+    }
+    if (closing || workspaceHostState.closing) {
+      throw new Error("The dashboard is shutting down.");
+    }
+    verify();
+    return { url: address.url, repository: root, startedJob: false };
   }
 
   async function launchFrontend(verifyConversation = () => {}) {
@@ -3619,6 +3771,7 @@ export function createDashboardServer({
       heldAt: null,
       sharedWorkspace: null,
       workspaceReview: null,
+      workspaceStash: null,
       validationBaseline: null,
       validationHistory: { complete: true, gates: [] },
       finishedAt: null,
@@ -3707,6 +3860,37 @@ export function createDashboardServer({
     if (job.runtime !== runtime) {
       throw new Error("Saved job runtime does not match this dashboard; reconnect using its originating runtime.");
     }
+    const currentProfile = loadRepositoryProfile(resolvedRepository);
+    if ((job.testEvidence.unitTestsOnly === true) !==
+        (currentProfile.validation?.liveTestsRequired === false)) {
+      throw new Error("The repository live-test policy changed; start a newly reviewed job.");
+    }
+    if (currentProfile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly &&
+        currentProfile.browserAutomation.mode !== "api") {
+      throw new Error("Production database approval permits dedicated API proof only in a portal workspace; run jobs from an API-only profile.");
+    }
+    if (job.testEvidence.productionDatabaseReadOnly ||
+        (currentProfile.browserAutomation?.mode === "api" &&
+          currentProfile.browserAutomation.apiAuthentication?.productionDatabaseReadOnly)) {
+      const currentEvidence = configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "");
+      if ((currentEvidence.productionDatabaseReadOnly === true) !== (job.testEvidence.productionDatabaseReadOnly === true) ||
+          (job.targetEnvironment && job.targetEnvironment !== "local") ||
+          job.testEvidence.source !== "production-read-only" || job.testEvidence.mutationMode !== "none") {
+        throw new Error("Production database approval or evidence changed; start a newly reviewed local read-only job.");
+      }
+      if (!validateLiveTestProfile(currentProfile, resolvedRepository).ok) {
+        throw new Error("Production database safety configuration changed; correct the profile and start a newly reviewed local read-only job.");
+      }
+    }
+    if (job.testEvidence.productionDatabaseReadOnly &&
+        !playwrightAuthenticationStatus(resolvedRepository, playwrightConnection, job).ready) {
+      job.status = "blocked";
+      job.error = "Complete fresh portal-backed API authentication and its database read-only check for this job before production reads.";
+      job.stages["live-test"] = { status: "blocked", message: job.error };
+      pushActivity(job, { stage: "live-test", message: job.error, timestamp: new Date().toISOString() });
+      persistDashboardState();
+      return;
+    }
     validateCopilotModel(job.model, runtime);
     const authentication = runtime === "copilot" ? playwrightAuthenticationConfig(resolvedRepository) : null;
     const protectedPaths = authentication?.statusPaths.map((path) =>
@@ -3749,7 +3933,7 @@ export function createDashboardServer({
       }
       prompt += job.testEvidence.selectedMutationMode === "intercepted"
         ? "\nThe user explicitly selected intercepted validation for this run only. This supersedes conflicting free-text requests for no interception, but not repository safety rules. Use real permitted reads and lookups, including semantically read-only POST searches; intercept actual mutating requests. Do not classify every POST as a write. Clearly distinguish intercepted behavior from backend mutation validation. This choice grants no real-write permission and does not change shared defaults."
-        : "\nThe user explicitly selected live non-production read-only validation without added interception for this run only. Do not perform or send any mutations, including Save, Submit, Approve or automatic draft persistence. Verify an action cannot write before using it; if that cannot be established, stop and ask for a safe mode. Keep repository-required guards and data-safety policy authoritative; this selection cannot waive them. Never claim backend writes were validated or disable a required guard to make the test run. Do not change shared defaults.";
+        : `\nThe user explicitly selected live ${job.testEvidence.productionDatabaseReadOnly ? "production-backed local API" : "non-production"} read-only validation without added interception for this run only. Do not perform or send any mutations, including Save, Submit, Approve or automatic draft persistence. Verify an action cannot write before using it; if that cannot be established, stop and ask for a safe mode. Keep repository-required guards and data-safety policy authoritative; this selection cannot waive them. Never claim backend writes were validated or disable a required guard to make the test run. Do not change shared defaults.`;
     }
     if (runtime === "copilot") {
       prompt += `\nNative dashboard interaction replaces the exit-and-resume instruction above for live human requests:
@@ -3839,6 +4023,14 @@ export function createDashboardServer({
           jobId: job.id,
           saved: job.sharedWorkspace,
           reviewedWorkspace: job.reviewedWorkspace,
+          onStash(receipt) {
+            job.workspaceStash = receipt;
+            pushLog(job, {
+              index: job.nextLogIndex, timestamp: new Date().toISOString(), stream: "dashboard",
+              message: `Automatically preserved ${receipt.files.length} changed file(s) in stash ${receipt.stashRef} before creating this job's fresh branch. Restore the stash separately; it is not applied to the new job.`
+            });
+            persistDashboardState();
+          },
           resume,
           resourcesRunning: Boolean(frontendConnection.handle) ||
             frontendConnection.starting || Boolean(playwrightConnection.handle)
@@ -4754,6 +4946,20 @@ export function createDashboardServer({
       return;
     }
 
+    if (request.method === "GET" && requestUrl.pathname === "/api/linked-applications") {
+      try {
+        sendJson(response, 200, {
+          instanceId: sessions.id,
+          repository: realpathSync.native(resolvedRepository),
+          applications: resolveLinkedApplications(resolvedRepository, loadRepositoryProfile(resolvedRepository)),
+          notice: "Links do not grant repository permissions, start applications or jobs, prove readiness, or change API-only validation. Start and test each application in its owner's workspace."
+        });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
+      return;
+    }
+
     if (request.method === "POST" && requestUrl.pathname === "/api/repository/configuration") {
       const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
       if (request.headers.host !== new URL(expectedOrigin).host || request.headers.origin !== expectedOrigin) {
@@ -4812,36 +5018,28 @@ export function createDashboardServer({
           }
           setupPlans.delete(body.planId);
           sendJson(response, 200, applyRepositorySettings(plan, sessions.id));
+        } else if (body.action === "open-linked-application") {
+          if (body.confirmed !== true) {
+            throw new Error("Confirm opening the linked application's separate repository workspace.");
+          }
+          const verify = () => {
+            if (closing || workspaceHostState.closing || body.instanceId !== sessions.id) {
+              throw new Error("The dashboard changed or is shutting down.");
+            }
+            const link = resolveLinkedApplications(resolvedRepository, loadRepositoryProfile(resolvedRepository))
+              .find((entry) => entry.id === body.applicationId);
+            if (!link || link.revision !== body.revision) {
+              throw new Error("The linked application changed. Reload and review its owner and URL again.");
+            }
+            return link;
+          };
+          const link = verify();
+          const workspace = await openRepositoryWorkspace(link.repository, verify);
+          sendJson(response, 200, { ...workspace, application: link });
         } else if (body.action === "open") {
           if (body.confirmed !== true) { throw new Error("Confirm opening this local repository workspace."); }
           const root = localRepository(body.repository);
-          const settings = inspectRepositorySettings(root);
-          if (!settings.exists) { throw new Error("Apply the reviewed repository setup before opening its workspace."); }
-          const existing = (await repositoryWorkspaceOwners(root))[0];
-          if (existing) {
-            sendJson(response, 200, { url: existing.url, repository: root, startedJob: false });
-          } else {
-            if (closing || workspaceHostState.closing) { throw new Error("The dashboard is shutting down."); }
-            let workspace = workspaceServers.get(root);
-            if (!workspace) {
-              if (workspaceServers.size >= 8) { throw new Error("This host already owns eight additional repository workspaces."); }
-              const dashboard = createDashboardServer({
-                repository: root, packageRoot, runtime, model, executor, preflight, browserOpener, browserOwnership,
-                workspaceServers, ownsWorkspaceServers: false, workspaceHostState
-              });
-              workspace = { dashboard, ready: dashboard.listen({ port: 0 }) };
-              workspaceServers.set(root, workspace);
-            }
-            try {
-              const address = await workspace.ready;
-              if (closing || workspaceHostState.closing) { throw new Error("The dashboard is shutting down."); }
-              sendJson(response, 200, { url: address.url, repository: root, startedJob: false });
-            } catch (error) {
-              workspaceServers.delete(root);
-              await workspace.dashboard.close();
-              throw error;
-            }
-          }
+          sendJson(response, 200, await openRepositoryWorkspace(root));
         } else {
           throw new Error("Unknown repository configuration action.");
         }
@@ -5925,6 +6123,7 @@ export function createDashboardServer({
           });
           persistDashboardState();
           restartedJob = createRestartedJob(source, "running");
+          restartedJob.workspaceStash = workspaceStash;
           restartedJob.sharedWorkspace = prepareSharedWorktree({
             repository: resolvedRepository, profile: loadRepositoryProfile(resolvedRepository),
             jobId: restartedJob.id
@@ -6219,6 +6418,14 @@ export function createDashboardServer({
         });
         return;
       }
+      if (repositoryProfile.validation?.liveTestsRequired === false &&
+          (body.mode === "playwright-only" || manualLocalhostTest ||
+           prestartFrontend || recordPlaywrightVideo || runAllUiScenarios)) {
+        sendJson(response, 400, {
+          error: "This repository explicitly defers live tests; browser-only, manual localhost, application warm-up, video and UI-scenario requests are unavailable."
+        });
+        return;
+      }
       if (repositoryProfile.browserAutomation?.mode === "api" &&
           (manualLocalhostTest || prestartFrontend || recordPlaywrightVideo || runAllUiScenarios)) {
         sendJson(response, 400, {
@@ -6230,8 +6437,15 @@ export function createDashboardServer({
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       let testEvidence;
       try {
+        if (repositoryProfile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly &&
+            repositoryProfile.browserAutomation.mode !== "api") {
+          throw new Error("Production database approval does not authorize portal UI jobs; use an API-only profile.");
+        }
         testEvidence = configuredTestSynthesis(repositoryProfile,
           body.testMutationMode === undefined ? "" : body.testMutationMode);
+        if (testEvidence.productionDatabaseReadOnly && targetEnvironment && targetEnvironment !== "local") {
+          throw new Error("The production database read-only exception permits only the local API environment.");
+        }
       } catch (error) {
         sendJson(response, 400, { error: error.message });
         return;
@@ -6596,15 +6810,50 @@ export function createDashboardServer({
       request.method === "POST" &&
       requestUrl.pathname === "/api/playwright/connect"
     ) {
+      let proofOnly = false;
+      let apiProof = false;
+      if (request.headers["content-type"]?.startsWith("application/json")) {
+        const body = await readJsonBody(request);
+        if ((body.proofOnly !== undefined && typeof body.proofOnly !== "boolean") ||
+            (body.apiProof !== undefined && typeof body.apiProof !== "boolean")) {
+          sendJson(response, 400, { error: "proofOnly and apiProof must be booleans" });
+          return;
+        }
+        if (body.proofOnly === true || body.apiProof === true) {
+          const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+          if (request.headers.host !== new URL(expectedOrigin).host || request.headers.origin !== expectedOrigin) {
+            sendJson(response, 403, { error: "Fresh proof requires the owning dashboard origin" });
+            return;
+          }
+          if (body.instanceId !== sessions.id || body.confirmed !== true) {
+            sendJson(response, 409, { error: "Fresh proof requires the confirmed current workspace instance" });
+            return;
+          }
+          proofOnly = body.proofOnly === true;
+          apiProof = body.apiProof === true;
+        }
+      }
       if (playwrightConnection.handle) {
         sendJson(response, 409, {
           error: "Playwright authentication is already running"
         });
         return;
       }
+      if (apiProof && currentJob?.running) {
+        sendJson(response, 409, { error: "API proof must wait for the portal's owned job to settle" });
+        return;
+      }
+      const authenticationProfile = loadRepositoryProfile(resolvedRepository).browserAutomation;
+      if (!apiProof && authenticationProfile?.apiAuthentication?.productionDatabaseReadOnly &&
+          authenticationProfile.mode !== "api") {
+        sendJson(response, 403, {
+          error: "Production database approval permits dedicated API proof only, not ordinary portal UI authentication."
+        });
+        return;
+      }
       let configuration;
       try {
-        configuration = playwrightAuthenticationConfig(resolvedRepository);
+        configuration = playwrightAuthenticationConfig(resolvedRepository, { apiProof });
       } catch (error) {
         sendJson(response, 400, { error: error.message });
         return;
@@ -6614,6 +6863,10 @@ export function createDashboardServer({
           error:
             "repository profile must configure browserAutomation.authentication.command and statusPaths"
         });
+        return;
+      }
+      if (proofOnly && !configuration.proofCommand) {
+        sendJson(response, 400, { error: "Fresh proof requires a repository-owned proofCommand" });
         return;
       }
       try {
@@ -6634,12 +6887,14 @@ export function createDashboardServer({
       }
       playwrightConnection.lastResult = null;
       playwrightConnection.proof = null;
+      playwrightConnection.apiProof = apiProof;
+      playwrightConnection.runId = randomUUID();
       const authenticationJob = currentJob;
       const startAuthentication = (proving = false) => {
       const proofIdentity = proving ? authenticationProofIdentity(configuration, authenticationJob) : null;
       const child = spawnOwnedShell({ ...configuration,
         environment: { ...configuration.environment,
-          FIXLAB_TARGET_ENVIRONMENT: authenticationJob?.targetEnvironment ?? "local" },
+          FIXLAB_TARGET_ENVIRONMENT: apiProof ? "local" : authenticationJob?.targetEnvironment ?? "local" },
         command: proving ? configuration.proofCommand : configuration.command });
       playwrightConnection.handle = child;
       child.once("fixlab-input-error", (error) => {
@@ -6711,7 +6966,15 @@ export function createDashboardServer({
         playwrightConnection.handle = null;
       });
       };
-      startAuthentication();
+      try {
+        startAuthentication(proofOnly);
+      } catch {
+        playwrightConnection.lastResult = { ok: false,
+          message: "Authentication could not start; verify the owned helper and authentication state.",
+          finishedAt: new Date().toISOString() };
+        sendJson(response, 409, { error: playwrightConnection.lastResult.message });
+        return;
+      }
       sendJson(response, 202, {
         ...playwrightAuthenticationStatus(
           resolvedRepository,

@@ -45,6 +45,23 @@ Registered runner
 Result, evidence, and pull request status
 ```
 
+Optional `linkedApplications` profile references connect separately onboarded
+local frontend workspaces without extending repository execution boundaries.
+The dashboard resolves only configured Git roots and contained frontend
+configuration, requires explicit local/non-production policy, and binds opening
+to the source instance plus source/target configuration revisions. It reuses the
+verified workspace registry and existing owned-workspace lifecycle. Links never
+start commands/jobs, transfer credentials or permissions, relax API-only gates,
+or count as integration evidence. See [repository onboarding](repository-onboarding.md#linked-local-applications-in-separate-repositories).
+
+Separately approved `linked-api-proof` requests may ask the verified frontend
+owner to run its existing authentication and proof commands. Both profiles must
+explicitly bind the API-only consumer, linked frontend and exact local HTTPS
+GET endpoint. The frontend owns browser execution and token use; only a fresh,
+instance/run/configuration-bound result returns to the API consumer. This does
+not grant arbitrary commands, endpoint overrides, writes or cross-repository
+editing. Existing API-only admission and validation gates remain required.
+
 ## Components
 
 ### Delivery policy
@@ -68,9 +85,33 @@ publication field retain their recorded ready-for-review intent. The runtime
 also preserves legacy strict-ready intent when no publication preference is
 specified. An explicit strict plus draft choice remains draft, with provider
 `isDraft: true` verified; strict validation requirements are unchanged.
+
+Portal-backed API authentication is an opt-in repository onboarding/settings
+contract. The portal's repository-owned session adapter supplies a scoped token
+only to an in-process callback. The generic `portal-api-proof` worker creates a
+local HTTPS Playwright `APIRequestContext`, performs anonymous and authenticated
+read assertions, disposes it and retains sanitized proof only. API consumers
+invoke the separately owned frontend workspace; they never receive its token
+or browser state. API proof has separate commands and an explicitly confirmed
+connection purpose; normal portal authentication does not run local API checks.
+Setup preserves existing browser authentication checks and adds one
+required live-test gate without replacing existing validation. Session adapters
+and API response schemas remain application-specific and explicitly reviewed.
 The runtime
 executes these checks through the existing permission-controlled, owned gate
 interface; no independent unreviewed shell scheduler is introduced.
+
+A default-off `productionDatabaseReadOnly` exception permits only an approved
+local HTTPS API backed by a production database. The repository adapter must
+verify the actual target and database-enforced read-only identity through
+`assertReadOnlyDatabase` before API or token activity. Separate portal/consumer
+profiles and exact-endpoint grants must agree. Dashboard jobs require fresh,
+job-bound proof before executor launch; direct CLI jobs cannot bypass it.
+Production-backed receipts/evidence remain explicitly labeled
+`production-read-only`, with no mutations. Changed approval cannot carry over
+to saved jobs. General production access, deployed production targets, portal
+UI jobs and writes remain forbidden; FixLab never changes database connections
+or permissions. See the [onboarding safety contract](repository-onboarding.md#local-api-backed-by-a-production-database).
 
 Stopped jobs expose identity-bound, explicitly confirmed configured gate
 selection: all, tests, builds, one gate, or a stage. Gate `kind` and `stage`

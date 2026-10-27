@@ -365,9 +365,14 @@ Set `pullRequests.branchNaming.userId` during onboarding. With
 produces branches beneath `users/developer/`.
 
 The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
-IDs or URLs. FixLab authenticates once, loads the unique bugs concurrently,
+IDs or URLs for Bugs, User Stories, Tasks, or Features. FixLab authenticates
+once, loads the unique work items concurrently with their original types,
+descriptions, acceptance criteria, comments and bounded images,
 shows the selected list before submission, and creates one bounded request
-with a result row for every bug. Outcomes distinguish repository fixes from
+with a result row for every work item. Choose **Small enhancement** for scoped
+story, task or feature implementation. Loading a Feature does not expand its
+children or authorize an entire backlog, and loading any item does not change
+its Azure DevOps status. Outcomes distinguish repository fixes from
 already-fixed, expected, duplicate, no-change, blocked, and external causes.
 An external-system result identifies that system as the responsible boundary.
 FixLab creates a combined pull request only when at least one proven repository

@@ -29,7 +29,7 @@ function git(repository, args, description, raw = false) {
   if (result.status !== 0 || result.error) {
     throw new Error(
       `${description} failed (${result.error?.code ?? `Git exit ${result.status}`}). ` +
-      "Resolve the Git prerequisite and retry; FixLab will not reset, stash, clean or force-switch this checkout."
+      "Resolve the Git prerequisite and retry; no reset, cleanup, force-switch or automatic stash restoration will be attempted."
     );
   }
   return raw ? result.stdout : result.stdout.trim();
@@ -75,10 +75,13 @@ export function sharedWorktreeConfig(profile, repository) {
     throw new Error("Shared worktree mode requires pullRequests.branchNaming.userId and prefixTemplate");
   }
   const prefix = branchRef(root, naming.prefixTemplate.replaceAll("{userId}", naming.userId), "Shared branch prefix");
-  return { remote, baseBranch, prefix };
+  if (profile.worktreeSetup.autoStash !== undefined && typeof profile.worktreeSetup.autoStash !== "boolean") {
+    throw new Error("worktreeSetup.autoStash must be a boolean");
+  }
+  return { remote, baseBranch, prefix, autoStash: profile.worktreeSetup.autoStash === true };
 }
 
-export function reviewSharedWorktree(repository, profile) {
+export function reviewSharedWorktree(repository, profile, { autoStash = false } = {}) {
   const config = sharedWorktreeConfig(profile, repository);
   if (!config) {
     return null;
@@ -86,22 +89,27 @@ export function reviewSharedWorktree(repository, profile) {
   const branch = git(repository, ["branch", "--show-current"], "Workspace review");
   const prefix = `${config.prefix}/fixlab-`;
   const owner = branch.startsWith(prefix) ? branch.slice(prefix.length) : "";
-  if (!jobIdPattern.test(owner)) {
+  if (!jobIdPattern.test(owner) && !autoStash) {
     return null;
   }
+  if (!branch) { throw new Error("Automatic stashing requires a named current branch."); }
   const state = repositoryState(repository);
-  const files = git(repository, ["ls-files", "--others", "--exclude-standard", "-z"], "Untracked file review", true)
+  const untracked = git(repository, ["ls-files", "--others", "--exclude-standard", "-z"], "Untracked file review", true)
     .split("\0").filter(Boolean);
+  const tracked = autoStash
+    ? git(repository, ["diff", "--name-only", "--no-renames", "-z", "HEAD", "--"], "Tracked file review", true).split("\0").filter(Boolean)
+    : [];
+  const files = [...new Set([...tracked, ...untracked])];
   const policy = createRuntimePermissionPolicy(repository);
-  let reason = git(repository, ["status", "--porcelain", "--untracked-files=no"], "Tracked change review")
+  let reason = !autoStash && git(repository, ["status", "--porcelain", "--untracked-files=no"], "Tracked change review")
     ? "Preserve tracked changes separately before starting a fresh branch."
-    : files.length > 50 ? "Too many untracked files for automatic recovery; review them separately." : "";
+    : files.length > 50 ? "Too many changed files for automatic recovery; review them separately." : "";
   if (!reason && files.some((file) => {
     const path = resolve(repository, file);
     return !policy.isSourceFile(path) ||
-      lstatSync(path).size > 1024 * 1024;
+      (existsSync(path) && lstatSync(path).size > 1024 * 1024);
   })) {
-    reason = "Untracked files include sensitive, linked, non-source or oversized files; preserve them separately.";
+    reason = "Changed files include sensitive, linked, non-source or oversized files; preserve them separately.";
   }
   return {
     branch,
@@ -110,14 +118,14 @@ export function reviewSharedWorktree(repository, profile) {
     fingerprint: createHash("sha256").update(JSON.stringify({ branch, config, state })).digest("hex"),
     freshBranch: {
       remote: config.remote, baseBranch: config.baseBranch,
-      files: files.slice(0, 50), available: !reason, reason
+      files: files.slice(0, 50), trackedFiles: tracked, available: !reason, reason
     }
   };
 }
 
-export function stashReviewedSharedWorktree({ repository, profile, reviewedWorkspace }) {
+export function stashReviewedSharedWorktree({ repository, profile, reviewedWorkspace, autoStash = false, onStash = null }) {
   verifyIdleGit(repository);
-  const review = reviewSharedWorktree(repository, profile);
+  const review = reviewSharedWorktree(repository, profile, { autoStash });
   if (!review || review.branch !== reviewedWorkspace?.branch ||
       review.fingerprint !== reviewedWorkspace?.fingerprint) {
     throw new Error("The workspace changed since review. Review the branch and files again.");
@@ -126,10 +134,27 @@ export function stashReviewedSharedWorktree({ repository, profile, reviewedWorks
     throw new Error(review.freshBranch.reason);
   }
   const { files, remote, baseBranch } = review.freshBranch;
+  const tracked = new Set(review.freshBranch.trackedFiles);
+  const snapshots = new Map();
   for (const file of files) {
-    if (!safeRuntimeText(readFileSync(resolve(repository, file), "utf8"), 1024 * 1024)) {
+    const path = resolve(repository, file);
+    if (existsSync(path) && !safeRuntimeText(readFileSync(path, "utf8"), 1024 * 1024)) {
       throw new Error("A reviewed source file may contain sensitive content; automatic stashing is unavailable.");
     }
+    const entries = git(repository, ["--literal-pathspecs", "ls-files", "--stage", "-z", "--", file], "Staged file review", true)
+      .split("\0").filter(Boolean);
+    let index = "";
+    for (const entry of entries) {
+      const match = /^(100644|100755) ([0-9a-f]{40,64}) 0\t/u.exec(entry);
+      if (!match || !safeRuntimeText(git(repository, ["cat-file", "blob", match[2]], "Staged source review", true), 1024 * 1024)) {
+        throw new Error("Staged files include unresolved, linked, oversized or sensitive content; preserve them separately.");
+      }
+      index = match[2];
+    }
+    snapshots.set(file, {
+      index,
+      working: existsSync(path) ? git(repository, ["hash-object", `--path=${file}`, "--", file], "Source preservation fingerprint") : ""
+    });
   }
   let stashRef = null;
   if (files.length) {
@@ -140,8 +165,19 @@ export function stashReviewedSharedWorktree({ repository, profile, reviewedWorks
     if (!/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/u.test(stashRef) || stashRef === previous) {
       throw new Error("A new stash could not be verified. Stop and inspect the checkout; no reset or cleanup will be attempted.");
     }
+    onStash?.({ stashRef, files, previousBranch: review.branch, remote, baseBranch });
     for (const file of files) {
-      git(repository, ["cat-file", "-e", `${stashRef}^3:${file}`], "Stashed file verification");
+      const snapshot = snapshots.get(file);
+      for (const [tree, expected] of [
+        [tracked.has(file) ? stashRef : `${stashRef}^3`, snapshot.working],
+        [`${stashRef}^2`, snapshot.index]
+      ]) {
+        const entry = git(repository, ["--literal-pathspecs", "ls-tree", "-z", tree, "--", file], "Stashed file verification", true);
+        const actual = /^[0-7]{6} blob ([0-9a-f]{40,64})\t/u.exec(entry)?.[1] ?? "";
+        if (actual !== expected) {
+          throw new Error(`Stash preservation could not be verified. Preserved stash: ${stashRef}. No branch change or automatic restore was attempted.`);
+        }
+      }
     }
   }
   const remaining = git(repository, ["status", "--porcelain", "--untracked-files=all"], "Clean checkout verification");
@@ -158,7 +194,7 @@ function recoveryRequired(repository, profile, message) {
   return error;
 }
 
-export function prepareSharedWorktree({ repository, profile, jobId, saved = null, resume = false, resourcesRunning = false, reviewedWorkspace = null }) {
+export function prepareSharedWorktree({ repository, profile, jobId, saved = null, resume = false, resourcesRunning = false, reviewedWorkspace = null, onStash = null }) {
   const config = sharedWorktreeConfig(profile, repository);
   if (!config) {
     if (saved) {
@@ -223,7 +259,13 @@ export function prepareSharedWorktree({ repository, profile, jobId, saved = null
   if (resourcesRunning) {
     throw recoveryRequired(repository, profile, "Stop the shared checkout's owned React and authentication sessions before starting another job branch, or explicitly review reuse of the current branch");
   }
-  if (dirty) {
+  let workspaceStash = null;
+  if (dirty && config.autoStash) {
+    workspaceStash = stashReviewedSharedWorktree({
+      repository, profile, autoStash: true, onStash,
+      reviewedWorkspace: reviewSharedWorktree(repository, profile, { autoStash: true })
+    });
+  } else if (dirty) {
     throw recoveryRequired(repository, profile, "The shared worktree has uncommitted or untracked files; preserve them before starting another job, or explicitly review reuse of the current branch");
   }
   const branch = branchRef(repository, `${config.prefix}/fixlab-${jobId}`, "New job branch");
@@ -235,7 +277,8 @@ export function prepareSharedWorktree({ repository, profile, jobId, saved = null
     "rev-parse", "--verify", `refs/remotes/${config.remote}/${config.baseBranch}^{commit}`
   ], "Fetched base verification");
   git(repository, ["switch", "--no-guess", "--no-overwrite-ignore", "-c", branch, baseCommit], "New job branch creation");
-  return { mode: "shared", branch, baseCommit, remote: config.remote, baseBranch: config.baseBranch };
+  return { mode: "shared", branch, baseCommit, remote: config.remote, baseBranch: config.baseBranch,
+    ...(workspaceStash ? { workspaceStash } : {}) };
 }
 
 export function verifySharedWorktreeBranch(repository, workspace) {

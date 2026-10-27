@@ -19,6 +19,13 @@ Turn a defect or pull request into a verified engineering outcome:
 
 Never report a skipped or timed-out check as passed.
 
+When `validation.liveTestsRequired` is `false`, follow unit-test-only validation:
+run configured local unit tests and required offline checks, without application
+startup, authentication, API requests or remote database access. This overrides
+live/browser instructions. Mark local-stack and live-test skipped using
+`validation.liveTestsDeferredReason`, never passed; retain required local gates,
+PR approvals and CI/merge policies. Do not claim integration coverage.
+
 When `browserAutomation.mode` is `api`, validate the backend with Playwright
 `APIRequestContext`, not a frontend or browser. This overrides browser-only
 startup, screenshots, video and profile-lock requirements, not safety gates.
@@ -28,6 +35,12 @@ Require fresh legitimate API authentication and sanitized status/schema
 assertions with `FIXLAB_TEST` evidence. Missing API prerequisites block live
 validation; synthetic responses never prove a live API passed. Never retain
 tokens, authorization headers, cookies or sensitive response bodies/traces.
+
+Production-backed data requires the explicit local-API
+`productionDatabaseReadOnly` exception, a successful `assertReadOnlyDatabase`
+check proving database-enforced read-only access, and `production-read-only`
+evidence. Use dashboard-owned, fresh job-bound authentication before any API
+reads. This never permits deployed production URLs or writes.
 
 Keep PR descriptions concise, normally at most 120 words unless the repository
 template or material risk requires more. Preserve required headings/fields,

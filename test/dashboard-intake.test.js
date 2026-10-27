@@ -165,7 +165,7 @@ test("Azure DevOps loader returns safe fields without exposing tokens", async ()
   );
 });
 
-test("Azure DevOps batch loader authenticates once and loads unique bugs concurrently", async () => {
+test("Azure DevOps batch loader authenticates once and preserves mixed work-item types and acceptance criteria", async () => {
   let tokenCalls = 0;
   const requestedUrls = [];
   const loader = createAzureDevOpsLoader({
@@ -183,16 +183,17 @@ test("Azure DevOps batch loader authenticates once and loads unique bugs concurr
         id,
         fields: {
           "System.Id": id,
-          "System.Title": `Bug ${id}`,
+          "System.Title": `Work item ${id}`,
+          "Microsoft.VSTS.Common.AcceptanceCriteria": `<p>Acceptance for ${id}</p>`,
           "System.State": "Active",
-          "System.WorkItemType": "Bug"
+          "System.WorkItemType": { 101: "Bug", 202: "User Story", 303: "Task", 404: "Feature" }[id]
         }
       };
     }
   });
 
   const workItems = await loader.loadMany({
-    workItems: ["101", "202", "303"],
+    workItems: ["101", "202", "303", "404"],
     profile: {
       azureDevOps: {
         organization: "profile-org",
@@ -202,7 +203,7 @@ test("Azure DevOps batch loader authenticates once and loads unique bugs concurr
   });
 
   assert.equal(tokenCalls, 1);
-  assert.equal(requestedUrls.length, 6);
+  assert.equal(requestedUrls.length, 8);
   assert.deepEqual(
     requestedUrls
       .map((url) => Number(url.match(/workitems\/(\d+)/i)?.[1]))
@@ -211,13 +212,17 @@ test("Azure DevOps batch loader authenticates once and loads unique bugs concurr
     [
     101,
     202,
-    303
+    303,
+    404
     ]
   );
   assert.deepEqual(
     workItems.map((item) => item.title),
-    ["Bug 101", "Bug 202", "Bug 303"]
+    ["Work item 101", "Work item 202", "Work item 303", "Work item 404"]
   );
+  assert.deepEqual(workItems.map((item) => item.workItemType), ["Bug", "User Story", "Task", "Feature"]);
+  assert.deepEqual(workItems.map((item) => item.acceptanceCriteria),
+    ["Acceptance for 101", "Acceptance for 202", "Acceptance for 303", "Acceptance for 404"]);
 });
 
 test("Azure DevOps loader bounds comments and reports comment-only failures", async () => {

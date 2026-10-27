@@ -403,6 +403,106 @@ function apiProfile() {
   return profile;
 }
 
+function unitOnlyProfile() {
+  return {
+    name: "Offline unit-test repository",
+    validation: {
+      liveTestsRequired: false,
+      liveTestsDeferredReason: "Local units only; integration is deferred by repository approval.",
+      gates: [{
+        id: "local-unit-tests", command: process.execPath,
+        args: ["-e", "process.exit(0)"], workingDirectory: ".",
+        kind: "tests", required: true, timeoutSeconds: 30
+      }]
+    }
+  };
+}
+
+test("unit-test-only readiness requires an explicit reason and required offline tests without live configuration", () => {
+  const repository = createRepository();
+  const path = join(repository, ".github", "fixlab", "repository-profile.json");
+  const inspect = (profile) => {
+    writeFileSync(path, JSON.stringify(profile));
+    return inspectRepository(repository);
+  };
+  try {
+    const ready = inspect(unitOnlyProfile());
+    assert.equal(ready.profileReady, true);
+    assert.equal(ready.unitTestsOnly, true);
+    for (const [change, message] of [
+      [(p) => { delete p.validation.liveTestsDeferredReason; }, /liveTestsDeferredReason/],
+      [(p) => { p.validation.liveTestsDeferredReason = " "; }, /liveTestsDeferredReason/],
+      [(p) => { p.validation.liveTestsRequired = "false"; }, /liveTestsRequired/],
+      [(p) => { delete p.validation.gates; }, /required local tests gate/],
+      [(p) => { p.validation.gates[0].required = false; }, /required local tests gate/],
+      [(p) => { p.validation.gates[0].stage = "live-test"; }, /cannot configure live-test gates/],
+      [(p) => { p.browserAutomation = validProfile().browserAutomation; }, /must omit browserAutomation/]
+    ]) {
+      const profile = unitOnlyProfile();
+      change(profile);
+      const readiness = inspect(profile);
+      assert.equal(readiness.profileReady, false);
+      assert.match(readiness.error, message);
+    }
+    const profile = unitOnlyProfile();
+    delete profile.validation.liveTestsRequired;
+    assert.equal(inspect(profile).profileReady, false, "live requirements remain the default");
+    const evidence = configuredTestSynthesis(unitOnlyProfile());
+    assert.equal(evidence.unitTestsOnly, true);
+    assert.equal(evidence.enabled, false);
+    assert.equal(evidence.requireScenarioEvidence, false);
+    assert.throws(() => configuredTestSynthesis(unitOnlyProfile(), "none"), /Unit-test-only/);
+    const prompt = buildJobPrompt({ request: "Run local units.", mode: "validate-only", testEvidence: evidence });
+    assert.match(prompt, /Repository unit-test-only override/);
+    assert.match(prompt, /do not start applications, authenticate, send API requests or access remote databases/);
+    assert.match(prompt, /Mark local-stack and live-test skipped/);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("unit-test-only dashboard admits and recovers normal jobs without API proof and rejects live run options", async () => {
+  const repository = createGitRepository();
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(unitOnlyProfile()));
+  const executions = [];
+  const executor = (input) => {
+    executions.push(input);
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  let current = await startDashboard(repository, executor, undefined, { autoTestEvidence: false });
+  const post = (body) => jsonRequest(current.url, "/api/jobs", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    for (const body of [
+      { mode: "playwright-only" }, { manualLocalhostTest: true }, { prestartFrontend: true },
+      { recordPlaywrightVideo: true }, { runAllUiScenarios: true }
+    ]) {
+      const result = await post({ request: "Check explicit offline policy.", mode: "validate-only", ...body });
+      assert.equal(result.response.status, 400, result.body.error);
+      assert.match(result.body.error, /explicitly defers live tests/);
+    }
+    assert.equal(executions.length, 0);
+    const started = await post({ request: "Run configured local unit tests.", mode: "validate-only" });
+    assert.equal(started.response.status, 202, started.body.error);
+    assert.equal(executions.length, 1);
+    assert.equal(started.body.job.testEvidence.unitTestsOnly, true);
+    assert.equal(started.body.job.testEvidence.enabled, false);
+    assert.match(executions[0].prompt, /unit-test-only override/);
+    const status = await jsonRequest(current.url, "/api/status");
+    assert.equal(status.body.readiness.profileReady, true);
+    await current.dashboard.close();
+    current = await startDashboard(repository, executor, undefined, { autoTestEvidence: false });
+    const restored = await jsonRequest(current.url, "/api/status");
+    assert.equal(restored.body.job.testEvidence.unitTestsOnly, true);
+    assert.equal(restored.body.job.testEvidence.liveTestsDeferredReason,
+      unitOnlyProfile().validation.liveTestsDeferredReason);
+  } finally {
+    await current.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("API-only readiness requires backend, authentication and read-only safety without a frontend", () => {
   const repository = createRepository();
   const path = join(repository, ".github", "fixlab", "repository-profile.json");
@@ -441,6 +541,198 @@ test("API-only readiness requires backend, authentication and read-only safety w
     fixture.browserAutomation.testSynthesis.defaultDataSource = "local-fixture";
     assert.equal(configuredTestSynthesis(fixture, "none").mutationMode, "none");
   } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+function productionApiProfile() {
+  const profile = apiProfile();
+  profile.applications.backend.port = 50443;
+  profile.applications.backend.healthUrl = "https://localhost:50443/protected";
+  profile.browserAutomation.apiAuthentication = { role: "portal",
+    url: "https://localhost:50443/protected", scope: "api://fixture/read",
+    sessionHelper: "session.mjs", productionDatabaseReadOnly: true };
+  profile.browserAutomation.authentication = { required: true,
+    command: "node auth.mjs", proofCommand: "node proof.mjs", statusPaths: [".auth/ready.json"] };
+  profile.browserAutomation.dataSafety.allowedOrigins = ["https://localhost:50443"];
+  profile.browserAutomation.testSynthesis.defaultDataSource = "production-read-only";
+  return profile;
+}
+
+function createProductionApiRepository({ persisted = false } = {}) {
+  const repository = persisted ? createGitRepository() : createRepository();
+  mkdirSync(join(repository, ".auth"));
+  writeFileSync(join(repository, ".auth", "ready.json"), '{"syntheticFixture":true}');
+  writeFileSync(join(repository, "session.mjs"), "export async function assertReadOnlyDatabase() { return false; }");
+  // Synthetic child processes exercise dashboard lifecycle, not database access.
+  writeFileSync(join(repository, "auth.mjs"), "process.exit(0);");
+  writeFileSync(join(repository, "proof.mjs"), "process.exit(0);");
+  return repository;
+}
+
+test("production-backed API-only profiles require explicit local read-only configuration and truthful evidence", () => {
+  const repository = createProductionApiRepository();
+  const path = join(repository, ".github", "fixlab", "repository-profile.json");
+  try {
+    const profile = productionApiProfile();
+    writeFileSync(path, JSON.stringify(profile));
+    assert.equal(inspectRepository(repository).profileReady, true);
+    const evidence = configuredTestSynthesis(profile, "none");
+    assert.equal(evidence.productionDatabaseReadOnly, true);
+    assert.equal(evidence.source, "production-read-only");
+    for (const change of [
+      p => { p.browserAutomation.apiAuthentication.productionDatabaseReadOnly = false; },
+      p => { p.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only"; },
+      p => { p.browserAutomation.testSynthesis.mutationMode = "approved-write"; },
+      p => { p.browserAutomation.dataSafety.allowedOrigins.push("https://production.example.invalid"); },
+      p => { p.browserAutomation.apiAuthentication.url = "https://production.example.invalid/protected"; },
+      p => { p.browserAutomation.authentication.required = false; },
+      p => { p.browserAutomation.dataSafety.productionAllowed = true; }
+    ]) {
+      const invalid = productionApiProfile();
+      change(invalid);
+      writeFileSync(path, JSON.stringify(invalid));
+      assert.equal(inspectRepository(repository).profileReady, false);
+    }
+    profile.browserAutomation.apiAuthentication.productionDatabaseReadOnly = false;
+    assert.throws(() => configuredTestSynthesis(profile), /explicitly approved/u);
+  } finally { rmSync(repository, { recursive: true, force: true }); }
+});
+
+for (const source of ["production-read-only", "non-production-read-only"]) {
+  test(`production-backed API jobs enforce local targets and ${source} evidence labeling`, async () => {
+    const repository = createProductionApiRepository();
+    writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"),
+      JSON.stringify(productionApiProfile()));
+    let prompt = "";
+    const { dashboard, url } = await startDashboard(repository, input => {
+      prompt = input.prompt;
+      input.onOutput("stdout", `FIXLAB_TEST|${source}|none|Synthetic production-mode contract fixture.\n`);
+      for (const stage of FIXLAB_STAGES) {
+        input.onOutput("stdout", `FIXLAB_STAGE|${stage}|${["intake", "local-stack", "live-test"].includes(stage) ? "passed" : "skipped"}|Contract fixture.\n`);
+      }
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }, undefined, { autoTestEvidence: false });
+    try {
+      const remote = await jsonRequest(url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Read approved API.", mode: "playwright-only", targetEnvironment: "dev" })
+      });
+      assert.equal(remote.response.status, 400);
+      assert.match(remote.body.error, /only the local API environment/u);
+      const created = await jsonRequest(url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Read approved API.", mode: "playwright-only", targetEnvironment: "local" })
+      });
+      assert.equal(created.response.status, 202, JSON.stringify(created.body));
+      const blocked = await jsonRequest(url, "/api/job");
+      assert.equal(blocked.body.job.status, "blocked");
+      assert.match(blocked.body.job.error, /database read-only check/u);
+      assert.equal(prompt, "");
+      assert.equal((await jsonRequest(url, "/api/playwright/connect", { method: "POST" })).response.status, 202);
+      const deadline = Date.now() + 30000;
+      let auth;
+      do {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        auth = await jsonRequest(url, "/api/playwright/status");
+      } while (auth.body.running && Date.now() < deadline);
+      assert.equal(auth.body.ready, true, JSON.stringify(auth.body));
+      const resumed = await jsonRequest(url, "/api/job/input", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "continue", details: "Continue the synthetic contract test." })
+      });
+      assert.equal(resumed.response.status, 202, JSON.stringify(resumed.body));
+      const result = await jsonRequest(url, "/api/job");
+      assert.match(prompt, /PRODUCTION database/u);
+      assert.match(prompt, /assertReadOnlyDatabase/u);
+      assert.equal(result.body.job.testEvidence.productionDatabaseReadOnly, true);
+      assert.equal(result.body.job.testEvidence.reported, source === "production-read-only");
+      if (source !== "production-read-only") {
+        assert.equal(result.body.job.testEvidence.modeViolation, true);
+        assert.equal(result.body.job.stages["live-test"].status, "failed");
+      }
+    } finally {
+      await dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
+
+for (const [originallyApproved, changedOrigin] of [[false, false], [true, false], [true, true]]) {
+  test(`saved API jobs cannot inherit changed production database approval (${originallyApproved}, origin ${changedOrigin})`, async () => {
+    const repository = createProductionApiRepository({ persisted: true });
+    const path = join(repository, ".github", "fixlab", "repository-profile.json");
+    const profile = productionApiProfile();
+    profile.browserAutomation.apiAuthentication.productionDatabaseReadOnly = originallyApproved;
+    profile.browserAutomation.testSynthesis.defaultDataSource = originallyApproved
+      ? "production-read-only" : "non-production-read-only";
+    writeFileSync(path, JSON.stringify(profile));
+    let running;
+    try {
+      running = await startDashboard(repository, ({ onOutput }) => {
+        onOutput("stdout", "FIXLAB_STAGE|live-test|blocked|Synthetic prerequisite.\n");
+        return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+      }, undefined, { autoTestEvidence: false });
+      const created = await jsonRequest(running.url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Read approved API.", mode: "playwright-only" })
+      });
+      assert.equal(created.response.status, 202);
+      await running.dashboard.close();
+      running = null;
+      const history = JSON.parse(readFileSync(join(dirname(createCacheContext(repository).cachePath),
+        "dashboard-jobs.json"), "utf8"));
+      const saved = history.jobs.find(job => job.id === created.body.job.id);
+      assert.equal(saved.testEvidence.productionDatabaseReadOnly === true, originallyApproved);
+      if (changedOrigin) {
+        profile.browserAutomation.dataSafety.allowedOrigins.push("https://production.example.invalid");
+      } else {
+        profile.browserAutomation.apiAuthentication.productionDatabaseReadOnly = !originallyApproved;
+        profile.browserAutomation.testSynthesis.defaultDataSource = originallyApproved
+          ? "non-production-read-only" : "production-read-only";
+      }
+      writeFileSync(path, JSON.stringify(profile));
+      let launches = 0;
+      running = await startDashboard(repository, () => {
+        launches += 1;
+        throw new Error("Changed approval must not launch an executor.");
+      }, undefined, { autoTestEvidence: false });
+      const restored = await jsonRequest(running.url, "/api/status");
+      assert.equal(restored.body.job.id, created.body.job.id);
+      assert.equal(restored.body.job.testEvidence.productionDatabaseReadOnly === true, originallyApproved);
+      await jsonRequest(running.url, "/api/job/input", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "continue", details: "Resume the saved fixture." })
+      });
+      const result = await jsonRequest(running.url, "/api/job");
+      assert.equal(launches, 0);
+      assert.match(result.body.job.error, /newly reviewed local read-only job/u);
+    } finally {
+      await running?.dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
+
+test("production database approval never enables portal UI authentication or UI jobs", async () => {
+  const repository = createProductionApiRepository();
+  const profile = validProfile();
+  profile.browserAutomation.apiAuthentication = productionApiProfile().browserAutomation.apiAuthentication;
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  const { dashboard, url } = await startDashboard(repository, () => {
+    throw new Error("A portal UI executor must not start.");
+  });
+  try {
+    const auth = await jsonRequest(url, "/api/playwright/connect", { method: "POST" });
+    assert.equal(auth.response.status, 403);
+    const job = await jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Test portal.", mode: "playwright-only" })
+    });
+    assert.equal(job.response.status, 400);
+    assert.match(job.body.error, /does not authorize portal UI jobs/u);
+  } finally {
+    await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });
@@ -804,6 +1096,51 @@ test("connected Copilot recovery reuses reviewed work, preserves the same job an
     rmSync(source, { recursive: true, force: true });
   }
 });
+
+for (const mode of ["fix-and-validate", "validate-only"]) {
+  test(`automatic shared-job preservation respects ${mode} and records the stash before execution`, async () => {
+    const source = createGitRepository();
+    const repository = mkdtempSync(join(tmpdir(), "fixlab-auto-stash-server-"));
+    const profile = validProfile({ worktreeSetup: { mode: "shared", baseBranch: "develop", autoStash: true } });
+    writeFileSync(join(source, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+    git(source, ["branch", "-m", "develop"]);
+    git(source, ["add", "."]);
+    git(source, ["commit", "--quiet", "-m", "shared automatic preservation profile"]);
+    git(source, ["clone", "--quiet", source, repository]);
+    writeFileSync(join(repository, "pending.ts"), "export const pending = true;\n");
+    let executions = 0;
+    const current = await startDashboard(repository, () => {
+      executions++;
+      let finish;
+      return { completion: new Promise((resolve) => { finish = resolve; }),
+        terminate() { finish({ code: null, signal: "SIGTERM" }); } };
+    });
+    try {
+      const created = await jsonRequest(current.url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Synthetic automatic workspace preparation.", mode })
+      });
+      assert.equal(created.response.status, 202, created.body.error);
+      assert.equal(executions, 1, created.body.job.error);
+      const job = created.body.job;
+      if (mode === "fix-and-validate") {
+        assert.equal(job.sharedWorkspace.branch, `users/fixlab-test/fixlab-${job.id}`);
+        assert.match(job.workspaceStash.stashRef, /^[a-f0-9]{40,64}$/u);
+        assert.equal(git(repository, ["show", `${job.workspaceStash.stashRef}^3:pending.ts`]), "export const pending = true;");
+        assert.equal(existsSync(join(repository, "pending.ts")), false);
+      } else {
+        assert.equal(job.workspaceStash, null);
+        assert.equal(git(repository, ["branch", "--show-current"]), "develop");
+        assert.equal(git(repository, ["stash", "list"]), "");
+        assert.equal(existsSync(join(repository, "pending.ts")), true);
+      }
+    } finally {
+      await current.dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+      rmSync(source, { recursive: true, force: true });
+    }
+  });
+}
 
 test("connected control starts scoped browser jobs, manages the queue and stops only the owned execution", async () => {
   const repository = createGitRepository();
@@ -2390,7 +2727,8 @@ test("dashboard reports readiness and serves only known static assets", async ()
     assert.match(pageText, /Bug or required enhancement/);
     assert.match(pageText, /Enter manually/);
     assert.match(pageText, /Load from Azure DevOps/);
-    assert.match(pageText, /Load bugs/);
+    assert.match(pageText, /Load work items/);
+    assert.match(pageText, /Bugs, User Stories, Tasks, or Features/);
     assert.match(pageText, /Continue this job/);
     assert.match(pageText, /<label for="screenshots">Images \(optional\)<\/label>/);
     assert.match(pageText, /id="workspace-tools"[^>]* hidden>/);
@@ -2506,7 +2844,7 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     reproduction: "Loaded reproduction",
     acceptanceCriteria: "Loaded acceptance",
     state: "Active",
-    workItemType: "Bug",
+    workItemType: "Feature",
     screenshots: [
       {
         name: "71-loaded.png",
@@ -2554,6 +2892,10 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     });
     assert.equal(loaded.response.status, 200);
     assert.equal(loaded.body.workItem.title, "Loaded bug");
+    assert.equal(loaded.body.workItem.workItemType, "Feature");
+    const intakeModule = await fetch(`${url}/work-item-intake.js`);
+    assert.equal(intakeModule.status, 200);
+    assert.match(await intakeModule.text(), /export function workItemsRequest/u);
     assert.equal(loaded.body.workItem.screenshots.length, 1);
     assert.equal(loaded.body.workItem.screenshots[0].name, "71-loaded.png");
     assert.equal(
@@ -2598,6 +2940,8 @@ test("loads Azure DevOps intake and passes local screenshots without caching the
     assert.equal(existsSync(screenshotPath), true);
     assert.deepEqual(receivedArtifactDirectories, [dirname(screenshotPath)]);
     assert.match(receivedPrompt, /Loaded Azure DevOps selection/);
+    assert.match(receivedPrompt, /"workItemType":\s*"Feature"/u);
+    assert.match(receivedPrompt, /"acceptanceCriteria":\s*"Loaded acceptance"/u);
     assert.match(
       receivedPrompt,
       /Do not search for or download additional Azure DevOps attachments/
@@ -3424,6 +3768,47 @@ test("running job queues a comment and resumes the same session", async () => {
     assert.equal(calls[1].resume, true);
     assert.equal(calls[1].sessionId, sessionId);
     assert.match(calls[1].prompt, /existing pull request/);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("same-repository API-only authentication invalidates proof when its portal adapter changes", async () => {
+  const repository = createRepository();
+  const profile = validProfile();
+  profile.applications.backend = { workingDirectory: ".", command: "dotnet run",
+    port: 50443, healthUrl: "https://localhost:50443/protected" };
+  Object.assign(profile.browserAutomation, { mode: "api", testCommand: "node api-tests.mjs",
+    apiAuthentication: { role: "portal", scope: "api://fixture/read",
+      url: "https://localhost:50443/protected", sessionHelper: "session.mjs" },
+    authentication: { required: true, command: "node -e \"process.exit(0)\"",
+      proofCommand: "node -e \"process.exit(0)\"", statusPaths: [".auth/api-ready.json"] } });
+  Object.assign(profile.browserAutomation.dataSafety, {
+    allowedOrigins: ["https://localhost:50443"], allowedMethods: ["GET"]
+  });
+  Object.assign(profile.browserAutomation.testSynthesis, {
+    defaultDataSource: "non-production-read-only", mutationMode: "none"
+  });
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  writeFileSync(join(repository, "session.mjs"), "export async function withApiToken() {}");
+  mkdirSync(join(repository, ".auth"));
+  writeFileSync(join(repository, ".auth", "api-ready.json"), '{"syntheticFixture":true}');
+  const { dashboard, url } = await startDashboard(repository, () => {
+    throw new Error("Authentication must not start a job.");
+  });
+  try {
+    const started = await jsonRequest(url, "/api/playwright/connect", { method: "POST" });
+    assert.equal(started.response.status, 202);
+    let status;
+    const deadline = Date.now() + 10000;
+    do {
+      await new Promise(resolve => setTimeout(resolve, 25));
+      status = await jsonRequest(url, "/api/playwright/status");
+    } while (status.body.running && Date.now() < deadline);
+    assert.equal(status.body.ready, true, JSON.stringify(status.body));
+    writeFileSync(join(repository, "session.mjs"), "export async function withApiToken() { return; }");
+    assert.equal((await jsonRequest(url, "/api/playwright/status")).body.ready, false);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

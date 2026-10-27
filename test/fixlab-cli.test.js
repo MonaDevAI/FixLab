@@ -1249,6 +1249,35 @@ for (const runtime of ["agency", "copilot"]) {
   });
 }
 
+test("direct run and validate cannot bypass production database job-bound proof", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-production-"));
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const path = join(repository, ".github", "fixlab", "repository-profile.json");
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    profile.browserAutomation.mode = "api";
+    for (const approved of [true, false]) {
+      profile.browserAutomation.apiAuthentication = { productionDatabaseReadOnly: approved };
+      profile.browserAutomation.testSynthesis.defaultDataSource = "production-read-only";
+      writeFileSync(path, JSON.stringify(profile));
+      for (const args of [
+        ["run", repository, "--", "Read the local API."],
+        ["validate", repository, "--pr", "123"]
+      ]) {
+        const result = run(args, repository);
+        assert.equal(result.status, 1);
+        assert.match(result.stderr, /dashboard-owned, fresh job-bound authentication/u);
+      }
+    }
+    profile.browserAutomation.mode = "browser";
+    profile.browserAutomation.apiAuthentication.productionDatabaseReadOnly = true;
+    writeFileSync(path, JSON.stringify(profile));
+    const authentication = run(["authenticate", repository, "--yes"], repository);
+    assert.equal(authentication.status, 1);
+    assert.match(authentication.stderr, /not ordinary portal UI authentication/u);
+  } finally { rmSync(repository, { recursive: true, force: true }); }
+});
+
 test("Agency backend-first guidance requires both environment and read-only source", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
   const executableDirectory = join(repository, "bin");

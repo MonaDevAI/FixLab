@@ -1,11 +1,48 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
+import { API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
 import { ValidationSession, selectedValidationGates, validationGates } from "../dashboard/validation-gates.js";
 import { buildJobPrompt } from "../dashboard/server.js";
+
+test("production-backed API safety guidance reaches CLI, dashboard and every packaged agent", () => {
+  for (const path of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md"
+  ]) {
+    const text = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    for (const marker of ["productionDatabaseReadOnly", "assertReadOnlyDatabase",
+      "production-read-only", "deployed production URLs or writes"]) {
+      assert.ok(text.includes(marker), `${path}: ${marker}`);
+      assert.ok(API_ONLY_PLAYWRIGHT_GUIDANCE.includes(marker), marker);
+    }
+  }
+  for (const path of ["bin/fixlab.js", "dashboard/server.js"]) {
+    assert.match(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"),
+      /API_ONLY_PLAYWRIGHT_GUIDANCE/u);
+  }
+});
+
+test("explicit repository unit-only guidance reaches both runtimes without relaxing defaults", () => {
+  for (const path of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md"
+  ]) {
+    const text = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
+    for (const marker of ["validation.liveTestsRequired", "validation.liveTestsDeferredReason",
+      "unit-test-only", "CI/merge policies"]) {
+      assert.ok(text.includes(marker), `${path}: ${marker}`);
+      assert.ok(UNIT_TEST_ONLY_GUIDANCE.includes(marker), marker);
+    }
+  }
+  for (const path of ["bin/fixlab.js", "dashboard/server.js"]) {
+    assert.match(readFileSync(new URL(`../${path}`, import.meta.url), "utf8"), /UNIT_TEST_ONLY_GUIDANCE/u);
+  }
+});
 
 test("efficient workflow is a product default with saved preferences and strict opt-in", () => {
   assert.deepEqual(configuredWorkflow(), {
