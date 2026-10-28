@@ -1,11 +1,18 @@
 # Architecture
 
+Start with [Architecture and benefits](architecture-overview.md) for component
+diagrams, job flow, deployment, and trust boundaries. This document is the
+detailed operational reference; see the [documentation index](README.md) for
+installation and usage guides.
+
 FixLab separates orchestration from repository-specific behavior.
 
 FixLab is distributed and versioned as its own product. It supports Agency
 Copilot as the default compatibility runtime and GitHub Copilot CLI as an
 optional direct runtime. Both provide agent execution, authentication, plugin
-loading, and tools; FixLab does not bundle or fork either runtime.
+loading, and tools. FixLab does not fork either runtime. Direct Copilot
+dashboard execution uses the official SDK and its bundled runtime;
+interactive CLI execution uses the selected runtime command.
 
 The package keeps equivalent runtime entry points in `agents/fixlab.md` for
 Agency and `com.github.copilot/agents/fixlab.agent.md` for the Agent Plugins
@@ -31,10 +38,10 @@ Defect or pull request
 FixLab dashboard or CLI
         |
         v
-Durable job queue and evidence store
+Local job queue and private metadata
         |
         v
-Registered runner
+Owned local executor
   - isolated worktree
   - repository profile
   - tests and builds
@@ -287,7 +294,8 @@ request. The reviewed-workspace retry then starts the first executor fresh.
 If a grant becomes invalid before that launch, its replacement review retains
 the fresh-launch state; approval never resumes a nonexistent runtime session.
 
-The packaged dashboard is a dependency-free, single-user local implementation.
+The packaged dashboard is a single-user local implementation using Node.js
+built-in HTTP APIs.
 It binds to `127.0.0.1`, reads the selected repository profile, invokes the
 packaged Agency plugin, and retains one active job plus a bounded 20-job
 pending queue and a separate persisted held-job collection. It also writes the
@@ -764,11 +772,10 @@ starting an autonomous session. This keeps long requests below operating-system
 command-line limits without breaking terminal interaction.
 
 The dashboard Agency adapter invokes `agency copilot` with the plugin-qualified
-`fixlab:fixlab` agent. The direct dashboard adapter invokes `copilot`, where the
-packaged agent is selected as `fixlab:fixlab`, with explicit UUID session or resume
-identity, streaming output, non-interactive blocker behavior, and the same tool
-approval contract. Direct dashboard mode additionally enables Copilot
-autopilot.
+`fixlab:fixlab` agent. The direct dashboard adapter uses an owned SDK host,
+with the packaged agent selected as `fixlab:fixlab`, explicit UUID session or
+resume identity, streaming output, and structured runtime permission/question
+handling. It does not silently convert workflow responses into runtime approvals.
 Runtime selection changes only execution transport; queueing, marker parsing,
 metrics, evidence, validation gates, and pull-request rules remain shared.
 
@@ -825,15 +832,19 @@ remain authoritative.
 
 ### Broker
 
+This is a future team-service concept, not a component shipped by the local
+package.
+
 Stores jobs durably, authenticates callers, assigns work to runners, streams
 status, and preserves audit records. A team deployment should host this behind
 organizational identity and authorization controls.
 
 ### Runner
 
-Executes work on a registered machine. A runner owns its worktree, ports,
-browser profile, logs, and child processes. It must never terminate unrelated
-developer processes.
+The current package executes on the local developer or runner machine, with
+owned workspaces, ports, logs, and child processes. It must never terminate
+unrelated developer processes. A registered managed-runner fleet would be
+part of the future team-service design, not an installed local service.
 
 ### Repository profile
 
