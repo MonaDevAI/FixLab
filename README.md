@@ -41,18 +41,121 @@ For VS Code, follow the
 | Validate an existing change or PR | Findings and evidence without source or PR changes |
 | Run focused Playwright validation | Browser or configured API assertions without an implementation job |
 
-```text
-Request -> Repository profile -> Diagnosis/change -> Validation -> Evidence/PR
+## Architecture and benefits
+
+FixLab coordinates the developer-facing dashboard and CLI, a repository-owned
+profile, Copilot execution, and configured validation. It runs locally on the
+developer or runner machine; the configured AI service supplies model access.
+
+### System architecture
+
+```mermaid
+flowchart LR
+    Engineer["Engineer"]
+    subgraph Local["Developer or runner machine"]
+        UI["Browser dashboard or terminal chat"]
+        CLI["FixLab CLI"]
+        Server["Dashboard server<br/>127.0.0.1:4317"]
+        Profile["Repository profile<br/>and instructions"]
+        Runtime["Copilot runtime adapters<br/>SDK executor or Agency"]
+        Agent["Packaged FixLab workflow"]
+        Workspace["Assigned checkout/worktree<br/>and scoped changes"]
+        Checks["Configured gates<br/>tests, apps, Playwright"]
+        Evidence["Local evidence<br/>and bounded metadata"]
+        MCP["Optional stdio MCP bridge"]
+        UI --> Server
+        CLI --> Server
+        CLI -->|"Interactive execution"| Runtime
+        Profile --> Server
+        Server --> Runtime
+        Runtime --> Agent
+        Profile --> Agent
+        Agent --> Workspace
+        Agent --> Checks
+        Checks --> Evidence
+        Runtime -->|"Status and result markers"| Server
+        Server --> Evidence
+        MCP --> Profile
+        MCP <-->|"Identity-bound controls"| Server
+    end
+    Engineer --> UI
+    Engineer --> CLI
+    Engineer --> MCP
+    Runtime <-->|"Model requests and responses"| Provider["Configured AI service"]
+    Server <-->|"Optional work-item intake"| ADO["Azure DevOps"]
+    Agent -->|"Authorized publication"| Git["Git hosting and pull requests"]
 ```
+
+| Component | Responsibility |
+| --- | --- |
+| CLI, terminal chat, and dashboard | Onboard repositories, submit work, show progress, and collect human decisions |
+| Repository profile | Define application paths, commands, environments, validation gates, and safety policy |
+| Copilot runtime and FixLab workflow | Investigate the task, make authorized scoped changes, and collect evidence |
+| Configured checks | Run focused tests, required application startup, and browser/API validation |
+| Evidence and metadata | Retain local results, artifacts, and bounded recovery context |
+| Optional MCP bridge | Connect a host conversation to identity-bound dashboard controls |
 
 The dashboard and terminal chat share job state, blockers, and results.
 Interrupted work can resume in the same job; a bounded queue keeps later
 requests separate.
 
+### End-to-end job flow
+
+```mermaid
+sequenceDiagram
+    actor Engineer
+    participant Dashboard
+    participant Runtime
+    participant Agent as FixLab workflow
+    participant Repo as Assigned repository
+    participant Checks as Tests and applications
+
+    Engineer->>Dashboard: Submit request, mode, and approved environment
+    Dashboard->>Dashboard: Check profile, workspace, and ownership; queue job
+    Dashboard->>Runtime: Start owned executor and session
+    Runtime->>Agent: Apply packaged workflow and repository instructions
+    Agent->>Repo: Inspect status/diff and bound the task
+    Agent->>Checks: Reproduce defect or define enhancement acceptance
+    opt Changes authorized
+        Agent->>Repo: Make scoped change and review effective diff
+    end
+    Agent->>Checks: Run applicable configured validation
+    Agent-->>Dashboard: Report stages, assertions, and evidence
+    opt Permission, authentication, or approval blocker
+        Dashboard-->>Engineer: Present exact required action
+        Engineer->>Dashboard: Supply reviewed response or complete sign-in
+        Dashboard->>Runtime: Continue the same owned job when eligible
+    end
+    opt Publication authorized and required gates satisfied
+        Agent->>Repo: Publish reviewed checkpoint under selected PR policy
+    end
+    Agent-->>Dashboard: Final result, remaining risks, and optional PR link
+    Dashboard-->>Engineer: Display outcome and retained evidence
+```
+
 Efficient delivery defaults to focused checks and an authorized **draft PR**.
 Optional broad tests/builds are controlled by saved preferences; required
 repository checks and CI/merge policies still apply. Failed, deferred, stale,
 or skipped checks are never reported as passed.
+
+### Benefits
+
+| Benefit | Mechanism |
+| --- | --- |
+| Repeatable delivery | A shared workflow with repository-owned commands, boundaries, and gates |
+| Fewer manual handoffs | Diagnosis, scoped edits, startup, validation, and evidence in one job |
+| Reviewable outcomes | Explicit assertions, failures, skipped checks, risks, and PR state |
+| Recoverable work | Same-job/session continuation instead of discarding completed work |
+| Reuse across applications | Profiles configure applications without hardcoding them into the product |
+| Bounded context | Focused searches, compact command evidence, and advisory metadata reuse |
+
+These are workflow capabilities, not guarantees of correctness, cost reduction,
+or faster delivery. Actual results depend on repository quality, model/runtime
+availability, authentication, and the configured validation contract.
+
+The [architecture and benefits guide](docs/architecture-overview.md) contains
+the same diagrams and benefits, plus deployment, state/recovery, and detailed
+trust boundaries.
 
 ## Documentation
 
