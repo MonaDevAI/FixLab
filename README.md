@@ -49,42 +49,10 @@ developer or runner machine; the configured AI service supplies model access.
 
 ### System architecture
 
-```mermaid
-flowchart LR
-    Engineer["Engineer"]
-    subgraph Local["Developer or runner machine"]
-        UI["Browser dashboard or terminal chat"]
-        CLI["FixLab CLI"]
-        Server["Dashboard server<br/>127.0.0.1:4317"]
-        Profile["Repository profile<br/>and instructions"]
-        Runtime["Copilot runtime adapters<br/>SDK executor or Agency"]
-        Agent["Packaged FixLab workflow"]
-        Workspace["Assigned checkout/worktree<br/>and scoped changes"]
-        Checks["Configured gates<br/>tests, apps, Playwright"]
-        Evidence["Local evidence<br/>and bounded metadata"]
-        MCP["Optional stdio MCP bridge"]
-        UI --> Server
-        CLI --> Server
-        CLI -->|"Interactive execution"| Runtime
-        Profile --> Server
-        Server --> Runtime
-        Runtime --> Agent
-        Profile --> Agent
-        Agent --> Workspace
-        Agent --> Checks
-        Checks --> Evidence
-        Runtime -->|"Status and result markers"| Server
-        Server --> Evidence
-        MCP --> Profile
-        MCP <-->|"Identity-bound controls"| Server
-    end
-    Engineer --> UI
-    Engineer --> CLI
-    Engineer --> MCP
-    Runtime <-->|"Model requests and responses"| Provider["Configured AI service"]
-    Server <-->|"Optional work-item intake"| ADO["Azure DevOps"]
-    Agent -->|"Authorized publication"| Git["Git hosting and pull requests"]
-```
+![FixLab architecture: local orchestration, repository contract, Copilot runtime, evidence, and external services](assets/fixlab-architecture-diagram.png)
+
+The architecture and workflow illustrations are the original images created
+for the **FixLab Architecture & Benefits** Word guide.
 
 | Component | Responsibility |
 | --- | --- |
@@ -101,37 +69,7 @@ requests separate.
 
 ### End-to-end job flow
 
-```mermaid
-sequenceDiagram
-    actor Engineer
-    participant Dashboard
-    participant Runtime
-    participant Agent as FixLab workflow
-    participant Repo as Assigned repository
-    participant Checks as Tests and applications
-
-    Engineer->>Dashboard: Submit request, mode, and approved environment
-    Dashboard->>Dashboard: Check profile, workspace, and ownership, then queue job
-    Dashboard->>Runtime: Start owned executor and session
-    Runtime->>Agent: Apply packaged workflow and repository instructions
-    Agent->>Repo: Inspect status/diff and bound the task
-    Agent->>Checks: Reproduce defect or define enhancement acceptance
-    opt Changes authorized
-        Agent->>Repo: Make scoped change and review effective diff
-    end
-    Agent->>Checks: Run applicable configured validation
-    Agent-->>Dashboard: Report stages, assertions, and evidence
-    opt Permission, authentication, or approval blocker
-        Dashboard-->>Engineer: Present exact required action
-        Engineer->>Dashboard: Supply reviewed response or complete sign-in
-        Dashboard->>Runtime: Continue the same owned job when eligible
-    end
-    opt Publication authorized and required gates satisfied
-        Agent->>Repo: Publish reviewed checkpoint under selected PR policy
-    end
-    Agent-->>Dashboard: Final result, remaining risks, and optional PR link
-    Dashboard-->>Engineer: Display outcome and retained evidence
-```
+![FixLab workflow: intake, diagnosis, reproduction, change, review, local stack, live test, and outcome](assets/fixlab-workflow-diagram.png)
 
 Efficient delivery defaults to focused checks and an authorized **draft PR**.
 Optional broad tests/builds are controlled by saved preferences; required
@@ -153,9 +91,10 @@ These are workflow capabilities, not guarantees of correctness, cost reduction,
 or faster delivery. Actual results depend on repository quality, model/runtime
 availability, authentication, and the configured validation contract.
 
-The [architecture and benefits guide](docs/architecture-overview.md) contains
-the same diagrams and benefits, plus deployment, state/recovery, and detailed
-trust boundaries.
+The [architecture and benefits guide](docs/architecture-overview.md) expands
+on deployment, state/recovery, and trust boundaries. See the
+[architecture reference](docs/architecture.md) for current runtime and MCP
+control contracts beyond the high-level Word-guide illustrations.
 
 ## Documentation
 
