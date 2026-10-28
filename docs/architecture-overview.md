@@ -86,7 +86,7 @@ sequenceDiagram
     participant Checks as Tests and applications
 
     Engineer->>Dashboard: Submit request, mode, and approved environment
-    Dashboard->>Dashboard: Check profile, workspace, and ownership; queue job
+    Dashboard->>Dashboard: Check profile, workspace, and ownership, then queue job
     Dashboard->>Runtime: Start owned executor and session
     Runtime->>Agent: Apply packaged workflow and repository instructions
     Agent->>Repo: Inspect status/diff and bound the task
