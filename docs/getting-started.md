@@ -1,552 +1,187 @@
 # Getting started
 
-Complete the [installation guide](installation.md) before onboarding a
-repository.
+This guide covers the first job and day-to-day operation. Use
+[Installation](installation.md) for tool setup and
+[Repository onboarding](repository-onboarding.md) for profile configuration.
 
 ## Prerequisites
 
-A FixLab runner typically needs:
-
-- Agency Copilot or GitHub Copilot CLI
-- Git
-- Node.js
-- PowerShell 7
-- The .NET SDK selected by the repository's `global.json`, when present
-- Microsoft Edge or another approved Playwright browser
-- Repository access
-- Access to the selected non-production validation environment
-
-Install only the tools required by the repository profile.
+Complete the [installation prerequisites](installation.md#prerequisites),
+configure the application's `.github/fixlab/repository-profile.json`, and
+resolve the required readiness checks. Install only what that profile needs.
+The CLI, optional plugin/MCP connection, browser setup, and application
+authentication are separate.
 
 ## Simplified chat-first workflow
 
-Install FixLab once:
+With FixLab and the selected runtime installed:
 
 ```powershell
-npm install --global github:MonaDevAI/FixLab
-fixlab --help
+fixlab chat C:\source\application --runtime copilot
 ```
 
-Then start chat from any directory:
+Use `--runtime agency` for Agency. Omitting the path lets chat use the current
+ready repository or ask for one. An incomplete repository opens guided
+onboarding before the dashboard starts.
 
-```powershell
-fixlab chat
-```
+Review the connected repository before submitting a request. Terminal chat
+and the browser dashboard share the job, runtime session, branch, evidence,
+and pull-request state. Closing terminal chat does not stop the job.
+Open the printed loopback dashboard URL, request `open dashboard`, or opt in
+with `fixlab dashboard --open`; onboarding does not automatically open a tab.
 
-If the dashboard is not already running, FixLab asks for the local repository
-path. If the repository is not ready, it creates the initial profile when
-needed and opens the interactive FixLab onboarding agent. Enter a request such
-as:
+On the dashboard, enter the request and select **Start job**. **Run options**
+contains mode, environment, and evidence settings. The sidebar exposes saved
+work, connections, settings, and run details. On small screens, select **Menu**;
+**Back to chat** restores the unsent draft without starting work.
+
+Keep the request about behavior and expected results, not profile-owned paths
+and commands. For example:
 
 ```text
-Onboard this React and .NET repository for FixLab. Inspect the project,
-configure the repository profile, show me any commands requiring approval,
-prepare dependencies, verify Playwright and authentication, and run doctor.
+The search results contain duplicate rows after filtering.
+Reproduce the issue, make the smallest fix, run the configured affected tests
+and browser journey, capture non-sensitive evidence, and create a draft PR.
 ```
 
-FixLab creates or preserves `.github/fixlab/repository-profile.json`. Review
-repository-owned commands before approving restore, authentication, or browser
-setup. When the onboarding session exits with a ready profile, FixLab starts
-the dashboard and connects chat automatically. After onboarding, use ordinary
-language for bugs.
-
-For a UI bug:
+For an API-only repository:
 
 ```text
-The exported inventory spreadsheet is missing the configured date formatting.
-Reproduce the issue in the React UI, make the smallest fix, run focused tests
-and type-check/build, start the required local applications, validate with
-Playwright, capture evidence, and create or update the PR.
-```
-
-For an API or backend bug:
-
-```text
-The create request API returns the wrong status for invalid hierarchy input.
-Reproduce it with the smallest safe API test, identify the .NET service and
-validation path, make the smallest fix, run focused .NET tests and build,
-start the backend when runtime validation is required, verify the HTTP
-response, and create or update the PR.
-```
-
-For a UI bug that also requires backend behavior:
-
-```text
-Fix this React workflow end to end. If the behavior depends on the .NET API,
-restore, build, and start the backend automatically before Playwright. Keep the
-frontend available for local testing, verify the API and UI behavior, capture
-evidence, and create or update the PR.
-```
-
-FixLab reads paths, commands, ports, safe environments, and test-data policy
-from the repository profile. Do not paste credentials into chat. If a job
-stops, type a normal-language recovery instruction such as:
-
-```text
-Continue the same job, preserve existing changes, finish the required
-validation, and create or update the PR.
+The create-request API returns the wrong status for invalid input.
+Reproduce it with a focused API test, make the smallest fix, and verify the
+HTTP behavior using this repository's configured validation policy.
 ```
 
 ## Onboard a repository
 
-For an Agency-like conversation that can help with setup and then accept the
-bug, start FixLab with only the repository path:
+Use the [guided installation](installation.md#recommended-path-install-then-run)
+or request an explicit setup plan:
 
 ```powershell
-fixlab C:\path\to\application
+fixlab onboard C:\source\application --runtime copilot
 ```
 
-The interactive agent keeps the same repository context while it checks
-readiness, explains required onboarding or authentication, diagnoses the
-reported behavior, makes the approved fix, and runs validation.
+Review the profile, real component directories, test/startup commands, allowed
+environments, authentication, and pull-request settings before approving setup.
+`fixlab init` preserves existing files; it does not make example paths correct
+for an application. Run `fixlab doctor --runtime copilot` after configuration.
 
-For the explicit plan-first workflow, run:
-
-```powershell
-fixlab onboard C:\path\to\application --runtime copilot
-```
-
-The first run creates the profile and stops for repository-specific
-configuration. After reviewing the profile, rerun the same command to inspect
-the restore and Playwright plans. Approve the complete setup explicitly:
-
-```powershell
-fixlab onboard C:\path\to\application `
-  --yes `
-  --authenticate `
-  --start-dashboard `
-  --runtime copilot
-```
-
-The equivalent manual steps are:
-
-1. Run `fixlab init` to create
-   `.github/fixlab/repository-profile.json` and the FixLab prompt commands
-   under `.github/prompts`.
-2. Declare the frontend and backend paths.
-3. Add deterministic restore, test, lint, build, and startup commands.
-4. Define safe validation environments.
-5. Add browser journeys that use non-sensitive test data.
-6. Document the repository's process ownership and cleanup rules.
-7. Validate the profile before enabling pull request creation.
-
-When the profile already exists, `fixlab init` preserves it and reports that
-new required fields must be merged manually. Run `fixlab doctor` after every
-FixLab update; a dashboard **Not ready** message identifies the exact missing
-or invalid profile field. See the
-[installation guide](installation.md#upgrade-an-existing-repository-profile)
-for the current profile-upgrade workflow.
-
-Review the repository-owned restore commands, then prepare the fresh checkout:
-
-```powershell
-fixlab prepare
-fixlab prepare --yes
-```
-
-The first command prints the frontend and backend restore plan without making
-changes. The approved command runs only `frontendRestore` and `backendRestore`
-from the repository profile in their configured application directories.
-
-Run `fixlab doctor` after preparation. Agency is the default runtime. To run
-the packaged plugin directly through GitHub Copilot CLI, use:
-
-```powershell
-fixlab doctor --runtime copilot
-fixlab dashboard --runtime copilot
-```
-
-The same selection can be made with `FIXLAB_RUNTIME=copilot`.
-
-For verbose local validation, execute the repository-owned command through the
-structured evidence boundary:
-
-```powershell
-fixlab exec --stage validation -- npm test
-fixlab exec --stage build --reuse -- dotnet build .\src\Application.csproj
-fixlab exec --cwd .\frontend --stage typecheck --reuse -- npm run type-check
-```
-
-The terminal receives a compact pass/fail summary, unique diagnostics, test
-counts, duration, and a private evidence path instead of the complete command
-stream. Its `Context:` line shows raw versus retained lines, bytes, estimated
-tokens, omitted lines, and reduction percentage. Open the private
-`result.json` and inspect its `context` object to compare those measurements
-across runs. Estimated tokens use `bytes / 4`; they show relative context
-reduction, not exact provider billing. The child command's exit code is
-preserved. `--reuse` skips a prior
-successful deterministic validation only when its command, arguments, stage,
-working directory, Git `HEAD`, tracked and untracked content, worktree status,
-and FixLab profile are
-identical. Omit it for startup, health, authentication, browser, environment,
-installation, deployment, and mutating commands.
-
-To enable the dashboard authentication controls, define the repository-owned
-login command and the local files or directories that prove the session is
-ready:
-
-```json
-{
-  "browserAutomation": {
-    "workingDirectory": "frontend",
-    "package": "@playwright/test",
-    "browser": "chromium",
-    "testCommand": "npm run test:e2e",
-    "testSynthesis": {
-      "enabled": true,
-      "defaultDataSource": "synthetic-intercepted",
-      "mutationMode": "intercepted",
-      "requireScenarioEvidence": true
-    },
-    "authentication": {
-      "required": true,
-      "command": "npm run test:e2e:auth",
-      "environment": {
-        "E2E_START": "npm start"
-      },
-      "statusPaths": [
-        "e2e/.auth/user.json"
-      ]
-    },
-    "dataSafety": {
-      "policy": "Use local mock data or intercept every mutating request; require approval before using non-production records.",
-      "productionAllowed": false
-    }
-  }
-}
-```
-
-Do not place credentials, tokens, cookies, or browser-state contents in the
-profile. **Connect Playwright** runs only the configured local command.
-**Check status** reports whether every configured path exists without reading
-or returning its contents.
-
-When a job is blocked at live-test, **Connect Playwright, then retry live test**
-runs the same configured command, waits for you to sign in, and retries the
-live test automatically only after the command exits successfully. Sign-in
-always stays with you; FixLab never handles credentials.
-While the authentication helper is running, browser retry controls are disabled
-and the API rejects attempts to resume a blocked live test. If the repository
-keeps its sign-in window open after login, close that window to release the
-persistent profile before retrying; do not start another sign-in helper.
-
-The **React frontend** panel starts the profile's `applications.frontend.command`
-in `applications.frontend.workingDirectory` ahead of time and watches
-`healthUrl`. Connect Playwright starts it automatically, so authentication and
-live tests reuse a warm server instead of waiting for a cold compile. FixLab
-stops the process tree it started, when you click **Stop React** or the
-dashboard exits, including frontend children launched through a shell or
-package manager. On Linux and macOS, that tree runs in a dedicated process
-group. FixLab never touches a server that was already running. A
-Playwright config that sets `reuseExistingServer` picks up the running server.
-
-Dashboard startup, onboarding startup and React warm-up do not open browser
-tabs automatically. Open the printed loopback URL yourself, use the explicit
-`fixlab dashboard --open` option, or request **open dashboard** in terminal
-chat. `--no-open` remains supported. Loopback binding stays at `127.0.0.1`;
-changing browser-opening behavior does not expose the service to the network.
-FixLab-owned agent and frontend processes inherit `BROWSER=none` to suppress
-React development-server auto-opening. Explicit manual localhost validation
-still opens the application once when its health gate passes.
-
-**Warm React in parallel when a local job starts** is enabled by default in the
-job form. Select the **local** validation environment to start the profile
-command alongside diagnosis, including when a queued job becomes active.
-Disable the checkbox to keep startup manual. API callers opt in with
-`prestartFrontend: true`; DEV, SIT and profile-defined environment selections
-are not automatically warmed. Warm-up does not delay the agent, count as a
-passed health check, or replace the live-test gate. A server can be reused only
-when it is healthy and serves the checkout containing the change under test;
-an isolated worktree must not validate against a warmed baseline checkout.
-Warm-up errors are reported in job activity/logs and the React panel.
-
-The **Session controls** panel discovers FixLab dashboards for the same
-repository (including linked worktrees), shows their owner and job IDs, and
-links to the live dashboard without restarting its agent. **Resume job** uses
-the same session ID and saved context after a stop or dashboard restart.
-**Start / resume React** starts the profile command again; it does not restore
-application memory. Starting a job or frontend is blocked when another
-reachable FixLab dashboard owns that resource. Reconnect to that owner or
-explicitly confirm stopping its session before retrying.
-
-**Stop agent**, **Stop React**, and **Shutdown sessions** identify the owner
-and require confirmation. Shutdown stops that owner's agent, frontend and
-Playwright authentication processes, while leaving its dashboard available to
-resume. It does not stop unrelated processes or unverified/unreachable owners.
-Ownership records contain only loopback addresses and random owner IDs in a
-repository-keyed OS temporary directory; clean dashboard shutdown removes its
-record. An unavailable owner is shown explicitly and cannot be controlled.
-
-Executor starts are also fenced by an atomic per-repository lease, shared by
-linked Git worktrees. A timeout or stop request keeps that lease until actual
-executor termination is confirmed; resume remains disabled while stopping.
-An owner crash or unverifiable exit leaves an explicit reserved-lease blocker.
-Do not clear it merely because the dashboard is unreachable or a PID appears
-stale: recovery requires verifying that the owner and executor tree are
-quiescent. There is no automatic stale-owner takeover.
-
-FixLab-created pull-request titles use **FLAB:** followed by the coding change.
-Descriptions follow the repository's PR template with Markdown sections for
-the problem, changes, validation and risks, including explicit pending or
-blocked gates rather than success-shaped checkboxes.
-
-The dashboard remains **Not ready** until the profile also includes a frontend
-
-The dashboard remains **Not ready** until the profile also includes a frontend **Not ready** until the profile also includes a frontendstartup command, loopback health URL, Playwright test command, explicit
-authentication requirement, and a production-excluding data-safety policy.
-
-With `testSynthesis` enabled, FixLab converts the reported behavior into the
-smallest focused Playwright scenario and measurable assertions before browser
-execution. `synthetic-intercepted` supplies business data through local
-fixtures or route fulfillment, while `intercepted` prevents mutating requests
-from reaching external systems. The dashboard highlights the configured data
-source and mutation mode, then replaces the pending description with the
-scenario reported by the agent.
-
-Generated Playwright scenario files are temporary by default and are removed
-before the product diff is committed or proposed. FixLab does not add a new
-authenticated `*.auth.spec.ts` file unless the request explicitly asks for
-permanent browser-test coverage or repository instructions require that exact
-test.
-
-When the profile declares `non-production-read-only` and the user explicitly
-selects DEV or SIT, FixLab queries that environment first without intercepting
-business-data reads. If the backend is unavailable or has no safe records
-capable of exercising the required behavior, FixLab records the limitation and
-uses `synthetic-intercepted` for the focused UI assertion. It does not replace
-an expected empty-state check with synthetic data or claim that a synthetic
-pass validated the selected backend.
-
-Start terminal chat directly:
-
-```powershell
-fixlab chat
-```
-
-If no dashboard is running, FixLab uses the current onboarded repository or
-asks for the repository path, starts the loopback dashboard in the background,
-and connects. `fixlab chat C:\path\to\application` provides the path directly
-for scripts or non-interactive terminals. `fixlab dashboard` remains available
-when the browser UI should be started explicitly.
-
-This terminal chat and the browser dashboard share the job, runtime session,
-branch, evidence, and pull-request state. Closing chat does not stop the job.
-
-Installation and `fixlab init` do not start it automatically. The first chat
-connection can start it after the repository path is selected. The dashboard
-shows profile readiness, accepts `bug-fix` or `small-enhancement` requests, and
-offers fix-and-validate, validate-only, and Playwright-validation-only modes.
-Bug fix is the default request type. Start with validate-only when
-onboarding a repository; that mode prohibits edits, commits, pushes, and pull
-request changes.
-
-Choose **Playwright validation only** when a fix already exists and only the
-user-visible browser result needs confirmation. FixLab skips diagnosis,
-separate reproduction, implementation, review, non-browser validation, and
-pull-request work. It retains the required repository-profile setup,
-authentication check, application startup, focused Playwright journey, and
-exact browser evidence. Dependencies and authentication that are already
-available are reused.
-
-For multi-bug batches, FixLab defaults to **one common PR**: it implements all
-required fixes first and then runs shared validation against the combined diff.
-Select **Create a separate PR per bug** to isolate each bug's changes,
-validation evidence, and PR. Select **Run UI tests for all scenarios at the
-end** when the final gate must execute the repository's complete Playwright
-scenario set instead of only focused journeys.
-Select **Open React localhost for manual validation** to add an optional manual
-React check independently of Playwright. After the profile-defined frontend
-passes its health check, FixLab opens it in the default browser, keeps only its
-owned process running, and pauses before completion. Confirm **Passed** or
-**Failed** in the same dashboard job to stop the frontend and continue.
-
-Set `pullRequests.branchNaming.userId` during onboarding. With
-`"prefixTemplate": "users/{userId}"`, a configured user ID of `developer`
-produces branches beneath `users/developer/`.
-
-The Azure DevOps input accepts up to 20 comma-, space-, or newline-separated
-IDs or URLs for Bugs, User Stories, Tasks, or Features. FixLab authenticates
-once, loads the unique work items concurrently with their original types,
-descriptions, acceptance criteria, comments and bounded images,
-shows the selected list before submission, and creates one bounded request
-with a result row for every work item. Choose **Small enhancement** for scoped
-story, task or feature implementation. Loading a Feature does not expand its
-children or authorize an entire backlog, and loading any item does not change
-its Azure DevOps status. Outcomes distinguish repository fixes from
-already-fixed, expected, duplicate, no-change, blocked, and external causes.
-An external-system result identifies that system as the responsible boundary.
-FixLab creates a combined pull request only when at least one proven repository
-code change is needed; it does not create an empty pull request for
-external-only outcomes.
-While a job is running, the submit action changes to **Add to queue**. Up to 20
-pending jobs are shown by position. A passed job starts the next automatically;
-a blocked or failed job pauses the queue so its action-needed state remains
-available for same-session resume. An obsolete failed job can be dismissed
-explicitly; it remains failed in dashboard history and the next queued job
-starts without resuming the failed session.
-Select any waiting job and choose **Remove from queue** to cancel it before
-execution. The dashboard asks for confirmation, records the job as cancelled
-in history, removes its queued screenshot artifacts, and renumbers the
-remaining waiting jobs without interrupting the active job. Terminal chat also
-accepts `cancel waiting job 2`, `remove job <id> from the queue`, or
-`/cancel-job <id|position>`.
-Use **Add comment to current job** for a new instruction that belongs to the
-active bug batch or existing pull request. FixLab queues the text for the same
-session and delivers it after the current agent turn instead of creating a
-separate job.
-
-The request field should contain only the bug or required enhancement. Do not
-copy profile-owned paths, commands, ports, systems, or environment choices into
-the request. FixLab reads that validation context from
-`.github/fixlab/repository-profile.json`.
+See the [onboarding reference](repository-onboarding.md) for new worktrees,
+shared-checkout policy, API-only validation, and linked repositories. Linked
+applications keep their own profiles, ownership, changes, and pull requests;
+opening a linked workspace is not end-to-end integration evidence.
 
 ## Choose an intake path
 
-**Enter manually** is selected by default and is always available. Type the bug
-or required enhancement and optionally select screenshots.
+**Enter manually** is the default. Describe a bug or choose **Small enhancement**
+for bounded new behavior. Add screenshots only when they help explain it.
+Up to five PNG, JPEG, or WebP images are allowed: 2 MiB each and 8 MiB total.
+File selection, pasted images, and Azure DevOps images share these limits.
 
-To load Azure DevOps fields, paste one or more IDs or full URLs such as:
+For Azure DevOps intake, enter up to 20 unique work-item IDs or URLs:
 
 ```text
 https://dev.azure.com/your-organization/your-project/_workitems/edit/123
 456
 ```
 
-For ID-only entry, add optional repository-owned context:
-
-```json
-{
-  "azureDevOps": {
-    "organization": "your-organization",
-    "project": "your-project"
-  }
-}
-```
-
-FixLab uses the developer's current Azure CLI authentication. Run `az login`
-with access to the organization when loading fails because authentication is
-unavailable. The access token is used only by the local HTTPS request and is
-not shown or retained. FixLab loads the newest 20 non-deleted comments along
-with the work-item text fields. If comment access alone fails, the selected bug
-shows an explicit comments warning and remains available. Comment attachments
-or attached files that are PNG, JPEG, or WebP are loaded locally within the
-same screenshot limits. Non-image attachments are never downloaded
-automatically.
-
-Up to five PNG, JPEG, or WebP screenshots may be attached, with limits of
-2 MiB per file and 8 MiB total. Select files or copy an image and press
-`Ctrl+V` anywhere on the dashboard; a local thumbnail confirms the paste.
-Other browser-readable clipboard image formats are converted to PNG. Images
-loaded from Azure DevOps share these count and size limits. All images are
-stored locally with generated names outside tracked source, passed to the agent
-by local path, and excluded from durable metadata and metrics. Clean shutdown
-and job replacement remove them; directories older than seven days are pruned
-when the dashboard starts.
-
-After submission, the agent owns the complete lifecycle: acceptance or fix
-contract, diagnosis or affected-surface inspection, smallest required
-implementation, effective-diff self-review, focused tests/type-check/build,
-profile-defined application startup, repository-defined live testing against
-the allowed required system or environment, evidence collection, and the
-pull-request outcome. A pull request is created or updated only after required
-gates pass.
-
-Routine engineering steps require no human direction. Interaction is limited
-to authentication, unsafe-data approval, deployment or pull-request approval,
-or a genuine blocker. Environment choices are never hardcoded by the
-dashboard; the repository profile controls them.
-
-When a stage is blocked, the dashboard displays an **Action needed** panel.
-Enter the missing prerequisite, safe test record, approval, or manual result
-and resume. Failed jobs can be retried with corrected details, and completed
-jobs can accept one focused addition and update the existing pull request.
-FixLab resumes the same selected-runtime session rather than starting
-diagnosis again.
-A failed job that should not resume can use **Dismiss failed job and continue
-queue**. The dashboard asks for confirmation, retains the failed result in
-history, and starts the next queued job without changing repository work for
-the dismissed job.
-A controlled skip remains visibly recorded as an unverified risk.
-
-For efficient repeat work in the same repository, FixLab reads the profile and
-instructions first, checks git status and the effective diff, and searches only
-task-relevant symbols and files. It reuses the current job/session context and
-does not reread unchanged files, repeat completed diagnosis, reinstall
-available dependencies, or rerun broad checks unless new evidence requires it.
-Focused searches, focused tests, and risk-scaled validation are the default.
-
-The dashboard keeps concise stage summaries and a bounded local raw-log window.
-For Git repositories it also stores a small metadata-only cache in
-`.git\fixlab\dashboard-cache.json`, keyed by repository identity, `HEAD`, and
-profile-content hash. A matching later job can reuse sanitized profile shape,
-prior result, and stage summaries. Request text, raw logs, credentials,
-screenshots, and source contents are excluded, and the cache is limited to 20
-entries and 64 KiB.
-
-Workflow statistics are retained for the last 500 jobs in
-`.git\fixlab\dashboard-metrics.json` and can be filtered to 24 hours, 7 days,
-30 days, or all retained records. The cards show bugs queued, completed jobs,
-average execution time, and token totals when Copilot emits an exact terminal
-usage summary. Cache reuse is calculated as cached input divided by total
-input. It is not an exact token-reduction or cost-savings percentage without a
-comparable baseline. The metrics file excludes request text, comments,
-screenshots, credentials, raw logs, and source contents.
-
-`HEAD` or profile changes cause an automatic miss; instruction changes require
-the instructions to be reread. Non-Git repositories skip durable reuse. The
-cache is not a repository scan or source index, so the current diff and
-task-relevant files remain authoritative.
-
-Small enhancements follow a risk-scaled fast path. FixLab first records a
-concise acceptance contract, checks the affected surface, bounds the file
-scope, and uses the smallest existing focused test instead of inventing a
-failing defect reproduction. It skips broad suites and full builds unless the
-repository profile or user-visible/risk evidence requires them. This differs
-from a general coding agent because review, live-test, pull-request, and
-skipped-stage evidence remain mandatory, and unrelated changes remain
-prohibited.
-
-The installed prompt files provide the staged workflow:
-
-```text
-/fixlab.intake
-/fixlab.diagnose
-/fixlab.reproduce
-/fixlab.fix
-/fixlab.validate
-/fixlab.live-test
-/fixlab.pr
-```
-
-See [FixLab commands](commands.md) for the purpose and completion gate of each
-stage.
-
-Start with the template in
-[`templates/repository-profile.json`](../templates/repository-profile.json).
+ID-only intake requires the profile's `azureDevOps.organization` and
+`azureDevOps.project`. Sign in with `az login` using an authorized identity.
+FixLab loads supported fields, recent comments, and bounded images; loading
+items does not update their status or expand a Feature into its children.
+See [intake contracts](architecture.md#intake-sources) for limits and retention.
 
 ## Recommended first workflow
 
-Use validation-only mode for an existing pull request:
+Start with an existing change or PR in **Validate only** mode:
 
-1. Resolve the pull request source and target commits.
-2. Create an isolated worktree.
-3. Inspect the effective diff.
-4. Run focused tests selected from changed files.
-5. Run type checking and changed-file linting.
-6. Start only the applications required for the changed area.
-7. Execute the smallest browser journey that verifies the behavior.
-8. Capture logs, API assertions, and screenshots.
-9. Publish the result without modifying the pull request.
+```text
+Validate pull request 123 against its actual source commit using this
+repository's required checks. Do not edit source, commit, push, or update the PR.
+Report the evidence and every failed, blocked, skipped, or pending check.
+```
 
-After the team trusts validation-only runs, enable fix-and-validate mode with
-review and pull request controls.
+Verify the checkout and required authentication, run the relevant configured
+checks, and inspect the resulting evidence before enabling fix-and-validate.
+
+| Mode | Use it for |
+| --- | --- |
+| Fix and validate | A scoped bug fix or small enhancement, with publication only when authorized |
+| Validate only | Existing changes or PRs, without edits or publication |
+| Playwright validation only | A focused browser/API result check without implementation or PR work |
+
+Efficient delivery defaults to an authorized draft PR after focused regression
+checks, diff review, and required pre-publication gates. Optional broad
+tests/builds follow saved preferences. Strict delivery and explicitly required
+checks retain their requirements. A draft PR, successful startup, or HTTP 200
+is not proof that all validation passed.
+
+### Review evidence and approvals
+
+Inspect stages, configured gate results, scenario assertions, screenshots or
+API proof, and any PR link. Synthetic/intercepted browser checks must be labeled;
+they do not prove the real backend works. Temporary generated browser tests
+are removed before publication unless permanent coverage is explicitly required.
+
+Keep credentials and MFA in the normal authentication flow, not chat.
+**Connect Playwright** runs the configured sign-in command; **Check status**
+does not expose browser-state contents. If the persistent test browser is busy,
+preserve unsaved work and close it yourself before retrying. Do not kill another
+browser or copy its authentication state.
+
+Runtime permissions and workflow approvals are distinct. Review the actual
+command, path, or diff. An **Action needed** response is not a blanket grant,
+and a workflow reply cannot approve an unrelated native permission request.
+See [runtime permissions](commands.md#background-runtime-permissions).
+
+Local jobs can warm the configured React frontend alongside diagnosis. Reuse
+it only when it is healthy and serves the checkout being validated; a warm
+baseline server does not validate an isolated fix. Startup is not a passed
+live-test gate.
+
+### Queue and recover work
+
+| Action | Behavior |
+| --- | --- |
+| `new bug <details>` | Create a separate job; queue it when another job is active |
+| Add comment to current job | Retain guidance for the same session and existing PR |
+| Remove from queue | Cancel a waiting job without interrupting the executor |
+| Hold / resume | Retain job context and release/resume execution through owned lifecycle controls |
+| Restart | Create a new job/session while retaining the original result |
+| `show status`, `show logs`, `show evidence`, `show pull request` | Inspect the connected job from terminal chat |
+| `switch repository` | Select another repository without silently reassigning the current job |
+
+There is one active executor and at most 20 pending jobs. Blocked or failed
+jobs pause queue advancement; resolve the blocker, resume the same job, or
+explicitly dismiss the failed job. History cleanup excludes active, waiting,
+and held jobs.
+
+For an interrupted task, ask:
+
+```text
+Continue the same job. Preserve the branch, changes, existing PR, and completed
+evidence. Explain the current blocker and finish only the remaining required work.
+```
+
+Use session controls to reconnect to a verified owner. Stop/shutdown affects
+only that owner's tracked processes. An unreachable dashboard or stale-looking
+PID is not permission to clear an executor lease or take over another session.
+
+For multiple bugs, the default is one combined PR; select separate PRs when
+isolation is required. Optional manual localhost validation keeps the owned
+frontend available until you record Passed or Failed. It remains separate from
+Playwright evidence.
 
 ## Environment policy
 
-- Prefer local validation when dependencies can run safely.
-- Use a designated development environment for external integrations.
-- Use a designated integration environment only when development data is
-  insufficient.
-- Never select production automatically.
-- Keep environment URLs, client identifiers, and credentials outside this
-  documentation repository.
+Prefer local validation and select only profile-approved environments. Never
+silently fall back to another environment or select production automatically.
+Keep environment addresses, credentials, and sensitive test data out of public
+documentation.
+
+Use approved test data and intercept mutations where required. A synthetic
+fallback must state what it could not verify. Missing authentication, unsafe
+data access, or unavailable required validation remains a blocker.
+
+For operational details, use the [command reference](commands.md),
+[architecture reference](architecture.md), and [troubleshooting guide](troubleshooting.md).

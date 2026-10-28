@@ -7,6 +7,17 @@ FixLab.
 For known CLI, package-manager, private-feed, Playwright, authentication, and
 runtime failures, see [Troubleshooting](troubleshooting.md).
 
+Choose the setup path you need:
+
+- [Guided CLI setup](#recommended-path-install-then-run)
+- [Copy-paste Copilot installation prompt](#copy-paste-installation-prompt)
+- [Visual Studio Code custom agent](#install-and-use-in-visual-studio-code)
+- [Existing Copilot CLI session](#starting-from-an-existing-copilot-session)
+- [Optional dashboard MCP connection](#chat-with-an-existing-dashboard-from-copilot)
+- [Windows bootstrap](#intelligent-windows-bootstrap)
+
+After setup, use [Getting started](getting-started.md) for your first job.
+
 ## Recommended path: install, then run
 
 Once your supported runtime is installed and signed in, use just:
@@ -94,6 +105,90 @@ npm install --global github:MonaDevAI/FixLab
 fixlab --help
 ```
 
+### Copy-paste installation prompt
+
+Paste this into Copilot Chat in the application checkout instead of manually
+executing the setup steps. It requests reviewed shell operations, not a slash
+command or blanket permission grant.
+
+```text
+Set up FixLab for this checkout using --runtime copilot.
+
+1. Read repository instructions and git status. Preserve my branch, edits,
+   running applications, and existing dashboards.
+2. Check Git, supported Node/npm, PowerShell 7, the repository's .NET SDK
+   when required, and the selected Copilot runtime. Report missing tools
+   and ask before installing them.
+3. Reuse an approved FixLab installation. If installation or an update is
+   needed, propose this command and ask for approval before executing it:
+   npm install --global github:MonaDevAI/FixLab
+   Verify fixlab --help afterward. Do not silently uninstall anything.
+4. Inspect the real repository layout and existing profile. Propose the
+   onboarding plan and profile/scaffolding changes. Do not assume the
+   example frontend/backend directories exist.
+5. After approval, create missing workspace files with fixlab init.
+   Verify .github\agents\fixlab-autofix.agent.md exists. Configure actual
+   paths, commands, ports, safe environments, and authentication intent.
+6. Ask before restoring dependencies, installing Playwright, accessing
+   private feeds, authenticating, or starting services. I will complete
+   genuine sign-in and MFA myself.
+7. Run fixlab doctor --runtime copilot. Report every remaining blocker.
+   Register MCP only when dashboard coordination is requested and its
+   configuration has been reviewed.
+8. Start or reuse the matching dashboard only after readiness and my
+   approval. Verify the exact repository and dashboard identity.
+
+Do not modify application code, start a bug job, copy browser state,
+disable TLS, publish a PR, or grant blanket permissions.
+```
+
+The CLI, optional Copilot plugin/MCP connection, VS Code agent discovery,
+browser setup, and application sign-in are separate. A successful package
+installation is not evidence that the application is ready.
+
+### Install and use in Visual Studio Code
+
+FixLab uses its CLI and a repository custom agent; these steps do not require
+a separate FixLab Marketplace extension or VSIX.
+
+1. Install or enable GitHub Copilot in VS Code and sign in with an authorized
+   account. Open the actual application clone with **File > Open Folder** and
+   review Workspace Trust before enabling repository tools.
+2. Open **Terminal > New Terminal** at the application repository root. Reuse
+   an approved installation, or review and run:
+
+```powershell
+npm install --global github:MonaDevAI/FixLab
+fixlab --help
+fixlab init
+```
+
+3. Review `.github\fixlab\repository-profile.json` and
+   `.github\agents\fixlab-autofix.agent.md`. Initialization creates missing
+   files and preserves existing ones; configure the real application paths
+   and commands. Approve only the required setup, then run
+   `fixlab doctor --runtime copilot` for CLI/dashboard readiness.
+4. Open Copilot Chat and select **fixlab-autofix** from the agent selector.
+   If it is missing, verify the file is in the open workspace, run
+   **Developer: Reload Window**, and check workspace trust and agent visibility.
+   Typing an `@` mention does not register a custom agent.
+5. Start with a read-only readiness request:
+
+```text
+Read the FixLab profile and repository instructions.
+Explain readiness and missing validation prerequisites.
+Do not edit source, restore dependencies, start services, commit, push,
+or create a pull request.
+```
+
+After readiness and authentication are proven, submit one bounded defect with
+expected versus actual behavior. VS Code agent execution uses VS Code's own
+tools and permissions; it does not automatically connect to a dashboard job.
+CLI runtime sign-in, optional plugin installation, and MCP controls remain
+separate. See the official
+[VS Code custom-agent documentation](https://code.visualstudio.com/docs/agent-customization/custom-agents)
+and the [FixLab agent reference](commands.md#visual-studio-code-bugfix-agent).
+
 ### Starting from an existing Copilot session
 
 No separate terminal is required: Copilot can run installation/setup shell
@@ -126,20 +221,9 @@ there, as described below.
 3. Restart Copilot after plugin installation and select `/agent fixlab:fixlab`.
    If `fixlab` is not recognized, reopen Copilot so it receives the updated
    environment and follow [PATH troubleshooting](troubleshooting.md#fixlab-is-not-recognized).
-4. Ask the agent to onboard this checkout with the prompt below. Review and
-   approve proposed profile edits before allowing setup:
-
-```text
-Set up FixLab for this checkout using --runtime copilot. Inspect the existing
-profile and the repository's real frontend/backend folders and scripts.
-Propose profile corrections for my approval; do not assume the example
-frontend or backend paths exist. Preserve my branch, edits, and running apps.
-Show the onboarding plan, then ask before dependency restoration, browser
-installation, private-feed access, or application authentication.
-Run fixlab doctor --runtime copilot and report every remaining blocker.
-Start the dashboard only after readiness and required approvals pass.
-Do not change application code, grant blanket permissions, or run a bug job.
-```
+4. Ask the agent to onboard this checkout using the
+   [installation prompt](#copy-paste-installation-prompt). Review and approve
+   proposed profile edits before allowing setup.
 
 Generated profiles are examples, not automatic repository detection. Configure
 the actual component paths, validation working directories and commands,
