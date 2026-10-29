@@ -11,6 +11,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { componentRetrievalGuidance } from "../dashboard/affected-surface.js";
 import { createInterface } from "node:readline/promises";
 import { createServer as createNetServer } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -1048,6 +1049,8 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
 
   const guidance = [
     COPILOT_EXECUTION_GUIDANCE,
+    // Interactive sessions use the packaged agent guidance, keeping Windows argv bounded.
+    ...(request ? [componentRetrievalGuidance(profile, request)] : []),
     ...(profile.validation?.liveTestsRequired === false ? [UNIT_TEST_ONLY_GUIDANCE] : []),
     ...(!readOnly ? [CONCISE_PR_GUIDANCE] : []),
     ...(profile.browserAutomation?.mode === "api" ? [API_ONLY_PLAYWRIGHT_GUIDANCE] : []),

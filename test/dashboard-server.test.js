@@ -7154,6 +7154,69 @@ test("dashboard API-only policy preserves scope across recovery and explicit ful
   }
 });
 
+test("dashboard automatically routes component-only profiles and supplies bounded retrieval hints", async () => {
+  const repository = createGitRepository();
+  const profile = validProfile({
+    workflow: { mode: "efficient" },
+    components: [
+      { name: "backend", paths: ["api/src"], testPatterns: ["api/tests/**/*.cs"] },
+      { name: "frontend", paths: ["web/src"], testPatterns: ["web/tests/**/*.test.ts"] }
+    ],
+    validation: {
+      liveTestsRequired: false,
+      liveTestsDeferredReason: "Approved offline units; integration is deferred.",
+      gates: [
+        { id: "backend-tests", command: process.execPath, args: ["-e", "process.exit(0)"], workingDirectory: "api", kind: "tests", required: true, timeoutSeconds: 30 },
+        { id: "frontend-tests", command: process.execPath, args: ["-e", "process.exit(23)"], workingDirectory: "web", timeoutSeconds: 30 }
+      ]
+    }
+  });
+  profile.applications.frontend.workingDirectory = "web";
+  delete profile.browserAutomation;
+  mkdirSync(join(repository, "api", "src"), { recursive: true });
+  mkdirSync(join(repository, "web", "src"), { recursive: true });
+  writeFileSync(join(repository, "api", "src", "Service.cs"), "initial");
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  git(repository, ["add", "."]);
+  git(repository, ["commit", "--quiet", "-m", "Component-only profile"]);
+  git(repository, ["update-ref", "refs/remotes/origin/develop", "HEAD"]);
+  let prompt;
+  let finish;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); }
+    };
+  });
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", {
+      request: "Correct the exception at api/src/Service.cs.", mode: "validate-only"
+    });
+    assert.equal(started.response.status, 202, JSON.stringify(started.body));
+    const jobId = started.body.job.id;
+    assert.equal(started.body.job.validationIntent, "affected");
+    assert.match(prompt, /"component":"backend"/);
+    assert.doesNotMatch(prompt, /"component":"frontend"/);
+    assert.match(prompt, /complete verified Git diff, not report keywords/);
+    assert.match(prompt, /automatic component mappings/);
+    writeFileSync(join(repository, "api", "src", "Service.cs"), "fixed");
+    const excluded = await post("/api/validation/run", { jobId, gateId: "frontend-tests", repository });
+    assert.equal(excluded.body.outcome, "not-applicable");
+    const status = await jsonRequest(url, "/api/job");
+    assert.deepEqual(status.body.job.validation.components, ["backend"]);
+    assert.equal(status.body.job.validation.browserApplicable, false);
+    assert.equal(status.body.job.validation.gates[1].status, "not-applicable");
+    finish({ code: 0 });
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("API-only recovery retains failed frontend gates across an actual dashboard restart", async () => {
   const repository = createApiValidationRepository();
   let finish;

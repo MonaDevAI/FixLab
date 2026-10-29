@@ -42,6 +42,7 @@ import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
 import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
+import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "./repository-settings.js";
@@ -51,7 +52,7 @@ import { portalApiProofRevision } from "./portal-api-proof.js";
 import { prepareSharedWorktree, reviewSharedWorktree, sharedWorktreeConfig, sharedWorktreeGuidance, stashReviewedSharedWorktree, verifySharedWorktreeBranch } from "./shared-worktree.js";
 import { compactControlResult, conversationOperations } from "./conversation-operations.js";
 const windowsOwnedTrees = new WeakMap();
-import { ValidationSession, validationGates, selectedValidationGates } from "./validation-gates.js";
+import { ValidationSession, validationGates, selectedValidationGates, defaultValidationIntent } from "./validation-gates.js";
 import { repositoryState } from "../bin/structured-command.js";
 import {
   newPermissionRequest,
@@ -4052,6 +4053,7 @@ export function createDashboardServer({
         }
       }
       initializeJobValidation(job, resolvedRepository);
+      prompt += `\n${componentRetrievalGuidance(loadRepositoryProfile(resolvedRepository), job.request)}`;
       const validation = job.validationSession.summary();
       if (validation.status !== "unconfigured" && validation.gates.length > 0) {
         prompt += `\nDashboard-owned required validation:
@@ -4062,10 +4064,11 @@ export function createDashboardServer({
 - Required gate IDs: ${validation.gates.filter((gate) => gate.required).map((gate) => gate.id).join(", ") || "none"}.
 - Optional gate IDs: ${validation.gates.filter((gate) => !gate.required).map((gate) => gate.id).join(", ") || "none"}. Optional means runnable, not passed.
 - These operations return compact structured evidence. Do not run the same required commands separately.
-- Validation intent: ${job.validationSession.validationIntent ?? "full"}. ${job.validationSession.advisory ? "Efficient delivery separates applicability from publication requirements. Broad unit tests and optional builds run only by saved preference or explicit selection. Explicit required: true gates still run before publication." : "Full runs every configured gate."} Affected uses only the reviewed profile's change-aware policy; the dashboard, not the agent, determines applicability from the complete Git diff.
+- Validation intent: ${job.validationSession.validationIntent ?? "full"}. ${job.validationSession.advisory ? "Efficient delivery separates applicability from publication requirements. Broad unit tests and optional builds run only by saved preference or explicit selection. Explicit required: true gates still run before publication." : "Full runs every configured gate."} Affected uses explicit profile policies or conservative automatic component mappings; the dashboard, not the agent, determines applicability from the complete Git diff.
 - Invoke the configured gates after changes. An excluded gate returns NOT APPLICABLE, never PASS. Do not run its command separately or claim that it passed.
 - Report API-scope validation separately from full validation. Recheck scope after edits; frontend, contract, shared or unknown paths require every gate.
 - A validation.changeAware component policy combines every gate set matching the changed paths. Frontend paths require their mapped browser/type-check/build gates; unclassified or fullValidationPaths require every gate. Do not guess exclusions or weaken repository-required checks.
+- When validation reports automatic affected components, use its applications and browserApplicable metadata to avoid unrelated startup. These are applicability hints, not permission to waive required live gates, profile instructions, authentication, explicit manual localhost or all-UI requests. Recheck after edits and preserve every skipped-stage reason.
 - Do not infer that an API path guarantees unchanged public behavior. If requests, responses or frontend consumers may change beyond the policy's declared contract paths, require full validation instead of claiming API-only scope.
 - API-only scope does not require frontend startup or browser validation unless the user explicitly requests it or the profile declares applicable browser evidence. Record unnecessary stages skipped with the reason, not passed. Playwright-only mode, manual localhost checks and explicit all-UI requests retain their existing requirements.
 - Run required gates before reporting readiness. Stage markers cannot pass these gates.
@@ -6303,8 +6306,7 @@ export function createDashboardServer({
         return;
       }
       const validationIntent = body.validationIntent ??
-        ((loadRepositoryProfile(resolvedRepository).validation?.apiOnly ||
-          loadRepositoryProfile(resolvedRepository).validation?.changeAware) ? "affected" : "full");
+        defaultValidationIntent(loadRepositoryProfile(resolvedRepository), body.mode);
       if (!["scoped", "full", "affected"].includes(validationIntent)) {
         sendJson(response, 400, { error: "validationIntent must be scoped, full, or affected." });
         return;

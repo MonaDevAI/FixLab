@@ -281,6 +281,29 @@ An opt-in `validation.changeAware` policy generalizes API-only selection to
 reviewed component path-to-gate mappings. All matching scope gate sets are
 combined, with pinned-baseline and executed-history safeguards unchanged.
 Unknown, empty, unreadable and full-validation-path changes retain all gates.
+
+Efficient jobs also infer conservative affected-surface selection automatically
+when profiles declare literal component paths, test patterns, gate working
+directories and a configured target branch (`worktreeSetup.baseBranch` or
+`pullRequests.defaultTargetBranch`). Explicit `changeAware`/`apiOnly` policies
+take precedence; strict workflows do not infer a policy. Gates outside component
+directories and all explicitly required gates stay applicable. Overlapping
+components combine their gate sets. Shared code, contracts, dependency manifests,
+project/startup configuration, unknown paths, missing metadata or an unverifiable
+target baseline retain broader validation. Explicit full/UI/manual requests,
+previous failures and recovered-history safeguards are unchanged.
+
+Dashboard job and noninteractive CLI request prompts include bounded component-path/test-pattern retrieval
+hints, prioritizing a reported component or file path without caching source
+contents or indexing the repository. Hints are advisory: only the complete Git
+diff determines gate applicability at validation checkpoints, not report keywords.
+An automatically selected component scope also reports applicable applications
+and browser applicability, avoiding unrelated startup without waiving required
+live gates, authentication or repository instructions. Skipped startup/live work
+is never reported as passed.
+Interactive CLI sessions use the equivalent packaged agent guidance without
+adding component metadata to Windows' bounded interactive command line.
+
 The dashboard job form does not request optional folder preflight. An API/control
 client can explicitly set job `permissionPreflight` to pause before executor
 admission and use the existing exact-folder review/approval flow. It grants nothing by

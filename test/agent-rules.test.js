@@ -13,6 +13,29 @@ import {
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 
+test("focused retrieval and automatic affected-surface guidance stay aligned across runtimes", () => {
+  const root = join(testDirectory, "..");
+  for (const entryPoint of ["dashboard/server.js", "bin/fixlab.js"]) {
+    const content = readFileSync(join(root, entryPoint), "utf8");
+    assert.match(content, /componentRetrievalGuidance\(/u, entryPoint);
+  }
+  for (const entryPoint of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md", "dashboard/affected-surface.js"
+  ]) {
+    const content = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    for (const contract of [
+      /complete verified Git diff, not report keywords/u, /nearest existing regression/u,
+      /bounded symbol\/file reads/u, /explicitly required gates/u,
+      /strict mode and explicit full\/UI requests/u, /cache source contents/u,
+      /required local API\/runtime verification/u
+    ]) {
+      assert.match(content, contract, entryPoint);
+    }
+  }
+});
+
 test("agent rule governance accepts a bounded lifecycle corpus", () => {
   const root = mkdtempSync(join(tmpdir(), "fixlab-agent-rules-"));
   const instructions = join(root, ".github", "instructions");

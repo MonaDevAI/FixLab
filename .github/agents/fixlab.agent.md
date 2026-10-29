@@ -49,3 +49,18 @@ the repository's PR template, clear validation evidence and remaining risks.
 
 Run `npm run validate` for changes to FixLab itself and summarize exact evidence
 and remaining risks.
+
+Automatic affected-surface selection uses the complete verified Git diff, not
+report keywords. In efficient mode, use unambiguous profile component paths and
+gate working directories; explicit component policies take precedence. Keep
+global and explicitly required gates, prior failures, authentication and safety
+controls. Unknown, shared, contract, configuration or unreadable changes,
+strict mode and explicit full/UI requests retain broader validation.
+Start from the supplied stack trace or file and nearest existing regression;
+batch bounded symbol/file reads inside the matching component and expand only
+for concrete dependencies or uncertainty. Do not index the whole repository or
+cache source contents. Do not start an unrelated frontend/browser for a verified
+backend-only unit fix unless instructions, an applicable live gate or the user
+require it. Mark inapplicable startup/live stages skipped, never passed;
+required local API/runtime verification still needs the changed checkout and
+legitimate authentication.

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import test from "node:test";
-import { ValidationSession, validationGates } from "../dashboard/validation-gates.js";
+import { ValidationSession, validationGates, defaultValidationIntent } from "../dashboard/validation-gates.js";
 import { repositoryState, reusableValidationCommand } from "../bin/structured-command.js";
 import { createCacheContext } from "../dashboard/server.js";
 
@@ -63,6 +63,106 @@ function apiFixture() {
   git(repository, ["branch", "validation-base"]);
   return { repository, profile };
 }
+
+function automaticFixture() {
+  const { repository, profile } = apiFixture();
+  delete profile.validation.apiOnly;
+  profile.components = [
+    { name: "backend", paths: ["api"], testPatterns: ["api-tests/**/*.cs"] },
+    { name: "frontend", paths: ["web"], testPatterns: ["web/**/*.test.ts"] }
+  ];
+  profile.pullRequests = { defaultTargetBranch: "develop" };
+  profile.applications = { frontend: { workingDirectory: "web" }, backend: { workingDirectory: "api" } };
+  profile.browserAutomation = { workingDirectory: "web", testSynthesis: { requireScenarioEvidence: false } };
+  profile.validation.gates[0].workingDirectory = "api";
+  profile.validation.gates[1].workingDirectory = "web";
+  profile.validation.gates.push({
+    id: "global-check", command: process.execPath, args: ["-e", "process.exit(0)"],
+    workingDirectory: ".", timeoutSeconds: 30
+  });
+  mkdirSync(join(repository, "api-tests"));
+  writeFileSync(join(repository, "api-tests", "ServiceTest.cs"), "initial");
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  git(repository, ["add", "."]);
+  git(repository, ["-c", "user.name=FixLab Test", "-c", "user.email=fixlab@example.test", "commit", "--quiet", "-m", "Components"]);
+  git(repository, ["update-ref", "refs/remotes/origin/develop", "HEAD"]);
+  return { repository, profile };
+}
+
+test("component-only profiles automatically select affected gates and application hints", async () => {
+  const { repository, profile } = automaticFixture();
+  try {
+    writeFileSync(join(repository, "api", "service.cs"), "fixed");
+    const session = new ValidationSession(repository, profile, "fix-and-validate");
+    assert.equal(session.validationIntent, "affected");
+    assert.equal(defaultValidationIntent(profile), "affected");
+    assert.deepEqual(session.summary().components, ["backend"]);
+    assert.deepEqual(session.summary().applications, ["backend"]);
+    assert.equal(session.summary().browserApplicable, false);
+    assert.deepEqual(session.summary().gates.map((gate) => gate.required), [true, false, true]);
+    assert.equal((await session.run("frontend-tests", repository, profile)).outcome, "not-applicable");
+    assert.equal((await session.run("tests", repository, profile)).status, 0);
+    assert.equal((await session.run("global-check", repository, profile)).status, 0);
+    assert.equal(session.verify().status, "passed");
+    assert.equal(session.summary().gates[1].status, "not-applicable");
+    writeFileSync(join(repository, "web", "view.ts"), "also changed");
+    assert.deepEqual(session.verify().components, ["backend", "frontend"]);
+    assert.equal(session.summary().browserApplicable, true);
+    assert.equal((await session.run("frontend-tests", repository, profile)).status, 23);
+    writeFileSync(join(repository, "web", "view.ts"), "initial");
+    assert.equal(session.verify().gates[1].required, true);
+    assert.equal(session.summary().gates[1].status, "failed");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("automatic selection expands for contract or unknown changes and preserves explicit full, strict and recovered policy", () => {
+  const { repository, profile } = automaticFixture();
+  try {
+    writeFileSync(join(repository, "api-tests", "ServiceTest.cs"), "regression");
+    assert.equal(new ValidationSession(repository, profile, "fix-and-validate").summary().scope, "affected");
+    for (const options of [{ validationIntent: "full" }, { history: null }, { baseCommit: null }]) {
+      assert.equal(new ValidationSession(repository, profile, "fix-and-validate", options).summary().scope, "all");
+    }
+    for (const path of ["api/Contracts/response.cs", "unclassified.txt", "api/Project.csproj"]) {
+      writeFileSync(join(repository, path), "changed");
+      assert.equal(new ValidationSession(repository, profile, "fix-and-validate").summary().scope, "all", path);
+      if (path === "api/Contracts/response.cs") {
+        writeFileSync(join(repository, path), "initial");
+      } else {
+        rmSync(join(repository, path));
+      }
+    }
+    profile.workflow = { mode: "strict" };
+    assert.equal(defaultValidationIntent(profile), "full");
+    assert.equal(new ValidationSession(repository, profile, "fix-and-validate").summary().scope, "all");
+    assert.equal(defaultValidationIntent({ validation: { gates: [] } }, "playwright-only"), "full");
+    assert.deepEqual(new ValidationSession(repository, { validation: { gates: [] } }, "playwright-only").gates, []);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("automatic selection retains explicit required and live gates outside the changed component", () => {
+  const { repository, profile } = automaticFixture();
+  try {
+    profile.validation.gates[1].required = true;
+    profile.validation.gates[1].stage = "live-test";
+    writeFileSync(join(repository, "api", "service.cs"), "fixed");
+    const session = new ValidationSession(repository, profile, "fix-and-validate", { advisory: true });
+    assert.equal(session.summary().gates[1].required, true);
+    assert.equal(session.summary().browserApplicable, true);
+    profile.validation.apiOnly = {
+      baseRef: "origin/develop", paths: ["api"], fullValidationPaths: ["api/Contracts"], gateIds: ["tests"]
+    };
+    const explicit = new ValidationSession(repository, profile, "fix-and-validate", { validationIntent: "affected" });
+    assert.equal(explicit.summary().scope, "api-only");
+    assert.equal(explicit.summary().components, undefined);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
     test("reviewed component scopes select the union of applicable gates and retain executed failures", async () => {
       const { repository, profile } = apiFixture();
