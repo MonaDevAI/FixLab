@@ -6342,8 +6342,14 @@ export function createDashboardServer({
         });
         return;
       }
-      const validationIntent = body.validationIntent ??
-        defaultValidationIntent(loadRepositoryProfile(resolvedRepository), body.mode);
+      let validationIntent;
+      try {
+        validationIntent = body.validationIntent ??
+          defaultValidationIntent(loadRepositoryProfile(resolvedRepository), body.mode);
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       if (!["scoped", "full", "affected"].includes(validationIntent)) {
         sendJson(response, 400, { error: "validationIntent must be scoped, full, or affected." });
         return;

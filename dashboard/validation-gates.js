@@ -287,8 +287,10 @@ export class ValidationSession {
           ...(this.policy.automatic ? {
             components: [...componentNames],
             ...applications,
-            browserApplicable: applications.browserApplicable || this.gates.some((gate) =>
-              gate.stage === "live-test" && (gateIds.has(gate.id) || this.results.has(gate.id)))
+            browserApplicable: this.applicationProfile.browserAutomation?.mode !== "api" &&
+              this.applicationProfile.validation?.liveTestsRequired !== false &&
+              (applications.browserApplicable || this.gates.some((gate) =>
+                gate.stage === "live-test" && (gateIds.has(gate.id) || this.results.has(gate.id))))
           } : {}),
           reason: this.policy.automatic
             ? "Changed paths match profile components and gate working directories. Global and explicitly required gates plus previously executed gates remain required."

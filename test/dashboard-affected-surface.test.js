@@ -69,7 +69,8 @@ test("contract, shared, startup, dependency and instruction changes retain broad
     "api/src/Contracts/Request.cs", "api/src/App.PublicContract/Request.cs",
     "api/src/Shared/Helper.cs", "api/src/Common/Helper.cs",
     "api/Directory.Build.props", "api/Project.csproj", "api/appsettings.dev.json",
-    "api/src/Program.cs", "web/package.json", "web/pnpm-lock.yaml", "web/tsconfig.json", "api/AGENTS.md"
+    "api/src/Program.cs", "web/package.json", "web/pnpm-lock.yaml", "web/tsconfig.json", "api/AGENTS.md",
+    "api/NuGet.Config", "api/nuget.config", "api/packages.config", "api/packages.lock.json", "web/.npmrc"
   ]) {
     assert.equal(requiresFullValidation(path), true, path);
   }

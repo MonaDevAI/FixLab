@@ -295,6 +295,8 @@ An opt-in `validation.changeAware` policy generalizes API-only selection to
 reviewed component path-to-gate mappings. All matching scope gate sets are
 combined, with pinned-baseline and executed-history safeguards unchanged.
 Unknown, empty, unreadable and full-validation-path changes retain all gates.
+Invalid validation profiles are rejected at job admission with HTTP 400 rather
+than escaping the dashboard's asynchronous request handler.
 
 Efficient jobs also infer conservative affected-surface selection automatically
 when profiles declare literal component paths, test patterns, gate working
@@ -306,6 +308,8 @@ components combine their gate sets. Shared code, contracts, dependency manifests
 project/startup configuration, unknown paths, missing metadata or an unverifiable
 target baseline retain broader validation. Explicit full/UI/manual requests,
 previous failures and recovered-history safeguards are unchanged.
+Dependency restore configuration, including `NuGet.Config`, `packages.config`,
+`packages.lock.json` and `.npmrc`, also retains broader validation.
 
 Dashboard job and noninteractive CLI request prompts include bounded component-path/test-pattern retrieval
 hints, prioritizing a reported component or file path without caching source
@@ -315,6 +319,8 @@ An automatically selected component scope also reports applicable applications
 and browser applicability, avoiding unrelated startup without waiving required
 live gates, authentication or repository instructions. Skipped startup/live work
 is never reported as passed.
+API-only and unit-only profiles never infer browser startup from a gate's
+`live-test` stage; applicable and previously executed gates remain required.
 Interactive CLI sessions use the equivalent packaged agent guidance without
 adding component metadata to Windows' bounded interactive command line.
 

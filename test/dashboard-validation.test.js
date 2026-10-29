@@ -125,9 +125,12 @@ test("automatic selection expands for contract or unknown changes and preserves 
     for (const options of [{ validationIntent: "full" }, { history: null }, { baseCommit: null }]) {
       assert.equal(new ValidationSession(repository, profile, "fix-and-validate", options).summary().scope, "all");
     }
-    for (const path of ["api/Contracts/response.cs", "unclassified.txt", "api/Project.csproj"]) {
+    for (const path of ["api/Contracts/response.cs", "unclassified.txt", "api/Project.csproj",
+      "api/NuGet.Config", "api/packages.config", "api/packages.lock.json", "web/.npmrc"]) {
       writeFileSync(join(repository, path), "changed");
-      assert.equal(new ValidationSession(repository, profile, "fix-and-validate").summary().scope, "all", path);
+      const summary = new ValidationSession(repository, profile, "fix-and-validate").summary();
+      assert.equal(summary.scope, "all", path);
+      assert.ok(summary.gates.every((gate) => gate.required), path);
       if (path === "api/Contracts/response.cs") {
         writeFileSync(join(repository, path), "initial");
       } else {
@@ -139,6 +142,37 @@ test("automatic selection expands for contract or unknown changes and preserves 
     assert.equal(new ValidationSession(repository, profile, "fix-and-validate").summary().scope, "all");
     assert.equal(defaultValidationIntent({ validation: { gates: [] } }, "playwright-only"), "full");
     assert.deepEqual(new ValidationSession(repository, { validation: { gates: [] } }, "playwright-only").gates, []);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("API-only and unit-only live gates never imply browser startup", () => {
+  const { repository, profile } = automaticFixture();
+  try {
+    writeFileSync(join(repository, "api", "service.cs"), "fixed");
+    for (const contract of ["api-only", "unit-only"]) {
+      const configured = structuredClone(profile);
+      if (contract === "api-only") {
+        configured.browserAutomation.mode = "api";
+        configured.browserAutomation.workingDirectory = "api";
+      } else {
+        configured.validation.liveTestsRequired = false;
+      }
+      configured.validation.gates[0].stage = "live-test";
+      const applicable = new ValidationSession(repository, configured, "fix-and-validate").summary();
+      assert.equal(applicable.scope, "affected");
+      assert.equal(applicable.browserApplicable, false, contract);
+      assert.equal(applicable.gates[0].required, true);
+      configured.validation.gates[0].stage = "review";
+      configured.validation.gates[1].stage = "live-test";
+      const retained = new ValidationSession(repository, configured, "fix-and-validate", {
+        history: { complete: true, gates: [{ id: "frontend-tests", status: "failed", exitCode: 23 }] }
+      }).summary();
+      assert.equal(retained.browserApplicable, false, contract);
+      assert.equal(retained.gates[1].required, true);
+      assert.equal(retained.gates[1].status, "failed");
+    }
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
