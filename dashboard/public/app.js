@@ -96,6 +96,26 @@ const screenshotMessage = document.querySelector("#screenshot-message");
 const targetEnvironmentSelect = document.querySelector(
   "#target-environment"
 );
+const allowPostRequestsInput = document.querySelector("#allow-post-requests");
+let postUiBlocked = true;
+let postCheckboxEnvironment = null;
+
+function updatePostRequestsOption() {
+  const configured = [...targetEnvironmentSelect.options].map((option) => option.value).filter(Boolean);
+  const environment = (targetEnvironmentSelect.value ||
+    (configured.length === 1 ? configured[0] : "")).toLowerCase();
+  const available = !postUiBlocked && ["dev", "sit", "uat"].includes(environment) &&
+    !document.querySelector('[name="testMutationMode"]').value;
+  const key = available ? environment : "";
+  if (postCheckboxEnvironment !== key) {
+    allowPostRequestsInput.checked = available;
+    postCheckboxEnvironment = key;
+  }
+  allowPostRequestsInput.disabled = !available;
+}
+
+targetEnvironmentSelect.addEventListener("change", updatePostRequestsOption);
+document.querySelector('[name="testMutationMode"]').addEventListener("change", updatePostRequestsOption);
 const jobInputPanel = document.querySelector("#job-input-panel");
 const jobInputTitle = document.querySelector("#job-input-title");
 const jobInputCount = document.querySelector("#job-input-count");
@@ -415,7 +435,7 @@ function setRuntimeBusy(busy) {
 
 function renderRuntimeBatch(job, isActive) {
   const requests = isActive
-    ? (job?.runtimeRequests ?? []).filter((request) => request.kind === "permission" && request.canApprove === true)
+    ? (job?.runtimeRequests ?? []).filter((request) => request.kind === "permission" && request.canApprove === true && request.perAction !== true)
     : [];
   runtimeBatchReview.hidden = requests.length < 2;
   runtimeBatchAllow.disabled = runtimeBusy;
@@ -467,7 +487,7 @@ async function allowPendingPermissions() {
     if (current.instanceId !== selection.instanceId || current.job?.id !== selection.jobId ||
         current.job.status !== "running" || !Array.isArray(current.job.runtimeRequests) ||
         !selection.requests.every((reviewed) => current.job.runtimeRequests.some((request) =>
-          request.id === reviewed.id && request.kind === "permission" && request.canApprove === true &&
+          request.id === reviewed.id && request.kind === "permission" && request.canApprove === true && request.perAction !== true &&
           request.title === reviewed.title && request.details === reviewed.details))) {
       throw new Error("The reviewed permissions or live job changed. Review the current requests again.");
     }
@@ -501,9 +521,12 @@ async function allowPendingPermissions() {
 
 runtimeBatchAllow.addEventListener("click", () => void allowPendingPermissions());
 
-async function respondToRuntime(action, choice, scope, answer = runtimeAnswer.value) {
+async function respondToRuntime(action, choice, scope, answer = runtimeAnswer.value, recover = false) {
   const selection = runtimeSelection;
   if (!selection || runtimeBusy) {
+    return false;
+  }
+  if (recover && !window.confirm("Deny this exact operation and request safe recovery of the blocked stage? Copilot must reuse existing reviewed tests and helpers, preserve completed evidence and failures, and stop if a safe prerequisite is unavailable. No hidden operation or new permission is approved.")) {
     return false;
   }
   if (action === "allow" && !window.confirm(scope === "all-tools"
@@ -514,7 +537,9 @@ async function respondToRuntime(action, choice, scope, answer = runtimeAnswer.va
       ? "Allow this exact reviewed test command for this executor? Its working directory, reported paths and package.json are bound to this grant. Tests can have side effects: review the script before approving. Changed commands, network requests, sandbox escalation, business writes and managed human approvals are not separately authorized. The grant expires when the executor ends."
       : scope === "publication-batch"
         ? "Allow the reviewed staged checkpoint's routine commit, non-force origin push and explicit-provider PR creation for this executor? Review every listed path (including deletions), destination, source/target and draft policy above. Only one unchanged tree and its single-parent commit transition qualify. Untracked scratch is not staged or published. Changed content, destinations, required readiness, managed approvals, merge and deployment remain outside this grant."
-      : "Allow only this exact Copilot permission request once? Review its command, files, URLs and any sandbox escalation above. This does not override organization policy."
+      : selection.perAction
+        ? "Send this exact real non-production POST once? Review the selected environment, complete destination and every payload field above. This may change test data. Approval is single-use, expires after five minutes and cannot be reused for redirects, retries or other actions."
+        : "Allow only this exact Copilot permission request once? Review its command, files, URLs and any sandbox escalation above. This does not override organization policy."
   )) {
     return false;
   }
@@ -529,6 +554,7 @@ async function respondToRuntime(action, choice, scope, answer = runtimeAnswer.va
         requestId: selection.requestId,
         confirmed: true,
         action,
+        ...(recover ? { recover: true } : {}),
         ...(scope ? { scope } : {}),
         ...(choice === undefined ? { answer } : { choice })
       })
@@ -583,7 +609,11 @@ function renderRuntimeRequest(job, isActive) {
     runtimeAnswer.value = "";
     return;
   }
-  runtimeGuidance.textContent = pending.kind === "question"
+  runtimeGuidance.textContent = pending.perAction === true
+    ? "This is a real non-production POST action. Review its environment, exact destination and complete payload. It requires its own single-use confirmation, even when the job-start checkbox or Allow all is active."
+    : pending.kind === "permission" && !pending.canApprove
+      ? "This operation cannot be approved here. Read the specific reasons below. Safe recovery denies the operation; it never overrides a restriction or replays hidden details."
+    : pending.kind === "question"
     ? "This is a question, not a tool permission. Choose an answer below or reply from Message FixLab when freeform input is available. Allow all never supplies answers for you."
     : job.toolApprovalMode === "allow-all"
       ? pending.canAllowAll === true
@@ -594,7 +624,7 @@ function renderRuntimeRequest(job, isActive) {
   if (runtimeSelection?.key === key) {
     return;
   }
-  runtimeSelection = { key, instanceId: dashboardInstanceId, jobId: job.id, requestId: pending.id };
+  runtimeSelection = { key, instanceId: dashboardInstanceId, jobId: job.id, requestId: pending.id, perAction: pending.perAction === true };
   runtimeAnswer.value = "";
   runtimeMessage.textContent = "";
   document.querySelector("#runtime-request-heading").textContent = pending.title;
@@ -603,12 +633,12 @@ function renderRuntimeRequest(job, isActive) {
   runtimeActions.replaceChildren();
   runtimeAnswer.hidden = pending.kind !== "question" || !pending.allowFreeform;
   runtimeAnswerLabel.hidden = runtimeAnswer.hidden;
-  const button = (parent, label, action, choice, scope) => {
+  const button = (parent, label, action, choice, scope, recover = false) => {
     const element = document.createElement("button");
     element.type = "button";
     element.disabled = runtimeBusy;
     element.textContent = label;
-    element.addEventListener("click", () => void respondToRuntime(action, choice, scope));
+    element.addEventListener("click", () => void respondToRuntime(action, choice, scope, runtimeAnswer.value, recover));
     parent.append(element);
   };
   if (pending.kind === "permission") {
@@ -624,6 +654,9 @@ function renderRuntimeRequest(job, isActive) {
       } else if (pending.grantScope === "publication-batch") {
         button(runtimeActions, "Allow this reviewed publication checkpoint", "allow", undefined, pending.grantScope);
       }
+    }
+    if (pending.canRecover === true) {
+      button(runtimeActions, "Deny and request safe recovery", "deny", undefined, undefined, true);
     }
     button(runtimeActions, "Deny", "deny");
   } else {
@@ -1164,6 +1197,7 @@ function renderReadiness(readiness) {
   const apiOnly = readiness.playwrightMode === "api";
   const unitTestsOnly = readiness.unitTestsOnly === true;
   const noUi = apiOnly || unitTestsOnly;
+  postUiBlocked = noUi;
   for (const name of ["prestartFrontend", "manualLocalhostTest", "recordPlaywrightVideo", "runAllUiScenarios"]) {
     const input = document.querySelector(`[name="${name}"]`);
     if (input) {
@@ -1216,6 +1250,7 @@ function renderReadiness(readiness) {
   ) {
     targetEnvironmentSelect.value = selectedEnvironment;
   }
+  updatePostRequestsOption();
 }
 
 function renderRuntime(runtime) {
@@ -2433,6 +2468,7 @@ form.addEventListener("submit", async (event) => {
         runAllUiScenarios: data.get("runAllUiScenarios") === "on",
         targetEnvironment: data.get("targetEnvironment"),
         testMutationMode: data.get("testMutationMode") ?? "",
+        allowPostRequests: !allowPostRequestsInput.disabled && data.get("allowPostRequests") === "on",
         prestartFrontend: data.get("prestartFrontend") === "on",
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",

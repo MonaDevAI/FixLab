@@ -41,7 +41,7 @@ import { canonicalExecutionRepository, createExecutorLease } from "./executor-le
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
@@ -437,7 +437,16 @@ export function validateLiveTestProfile(profile, repository) {
   };
 }
 
-export function configuredTestSynthesis(profile, selectedMutationMode = "") {
+export function configuredTestSynthesis(profile, selectedMutationMode = "", allowPostRequests) {
+  if (allowPostRequests !== undefined && typeof allowPostRequests !== "boolean") {
+    throw new Error("allowPostRequests must be a boolean.");
+  }
+  if (allowPostRequests === true &&
+      (selectedMutationMode || profile?.validation?.liveTestsRequired === false ||
+        profile?.browserAutomation?.mode === "api" ||
+        profile?.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly === true)) {
+    throw new Error("POST requests cannot override explicit read-only/intercepted, API-only, unit-only or production-backed policy.");
+  }
   if (profile?.validation?.liveTestsRequired === false) {
     if (selectedMutationMode) {
       throw new Error("Unit-test-only validation does not permit live mutation-mode selection.");
@@ -470,6 +479,7 @@ export function configuredTestSynthesis(profile, selectedMutationMode = "") {
       configuration?.requireScenarioEvidence !== false,
     reported: false,
     scenario: "",
+    ...(typeof allowPostRequests === "boolean" ? { allowPostRequests } : {}),
     ...(selectedMutationMode ? { selectedMutationMode } : {})
   };
   if ((result.source === "production-read-only") !== (result.productionDatabaseReadOnly === true) ||
@@ -640,6 +650,9 @@ function dashboardSnapshot(job) {
       mutationMode: job.testEvidence.mutationMode,
       ...(job.testEvidence.selectedMutationMode
         ? { selectedMutationMode: job.testEvidence.selectedMutationMode }
+        : {}),
+      ...(typeof job.testEvidence.allowPostRequests === "boolean"
+        ? { allowPostRequests: job.testEvidence.allowPostRequests }
         : {}),
       requireScenarioEvidence: job.testEvidence.requireScenarioEvidence,
       reported: job.testEvidence.reported,
@@ -1202,6 +1215,7 @@ ${intakeSummary.length ? `Loaded work items: ${JSON.stringify(intakeSummary)}\n`
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all applicable repository instructions; preserve their safety, authentication, environment and process-ownership requirements.
 ${COPILOT_EXECUTION_GUIDANCE}
+${RUNTIME_RECOVERY_GUIDANCE}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : EXISTING_APPLICATION_GUIDANCE}
 ${requestGuidance}
 - Skip source diagnosis, separate reproduction, implementation, diff review and unrelated non-browser gates. The diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped unless their own required prerequisite fails.
@@ -1263,6 +1277,7 @@ Use this concise metadata only to avoid repeated discovery. Verify task-specific
 Repository requirements:
 - Read .github/fixlab/repository-profile.json and all repository-owned instructions before acting.
 ${COPILOT_EXECUTION_GUIDANCE}
+${RUNTIME_RECOVERY_GUIDANCE}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : ""}
 - For a fix request, begin with the smallest known reproduction, using an approved existing application when appropriate; prepare the local stack only when needed to exercise changed code. Do not claim a deployed baseline proves an unpublished fix.
 - Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
@@ -1990,6 +2005,10 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
     toolApprovalMode = "ask",
     fileAccess,
     dashboardPort,
+    targetEnvironment,
+    testMutationMode,
+    selectedTestMutationMode,
+    allowPostRequests,
     protectedPaths,
     onOutput,
     onUsage = () => {},
@@ -2026,7 +2045,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
       invocation = {
         args: [join(packageRoot, "dashboard", "copilot-session.js")],
         input: JSON.stringify({
-          type: "start", packageRoot, repository, prompt, sessionId, resume, usage, mode, inputTokenLimit, toolApprovalMode, protectedPaths, fileAccess, dashboardPort,
+          type: "start", packageRoot, repository, prompt, sessionId, resume, usage, mode, inputTokenLimit, toolApprovalMode, protectedPaths, fileAccess, dashboardPort, targetEnvironment, testMutationMode, selectedTestMutationMode, allowPostRequests,
           model: model ?? defaultModel,
           additionalDirs: [
             ...linkedDependencyDirectories(repository), ...artifactDirectories, ...runtimeDirectories
@@ -3786,7 +3805,8 @@ export function createDashboardServer({
       manualLocalhostResult: null,
       testEvidence: configuredTestSynthesis(
         loadRepositoryProfile(resolvedRepository),
-        sourceJob.testEvidence.selectedMutationMode ?? ""
+        sourceJob.testEvidence.selectedMutationMode ?? "",
+        sourceJob.testEvidence.allowPostRequests
       ),
       stages: Object.fromEntries(
         FIXLAB_STAGES.map((stage) => [
@@ -3924,6 +3944,11 @@ export function createDashboardServer({
       job.browserBlocker = null;
       job.browserPreflightBlocked = false;
       job.browserSessionNotStarted = false;
+    }
+    if (typeof job.testEvidence.allowPostRequests === "boolean") {
+      configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "",
+        job.testEvidence.allowPostRequests);
+      prompt += `\nThe job-start POST checkbox was ${job.testEvidence.allowPostRequests ? "selected" : "not selected"}. For DEV/SIT/UAT, ${job.testEvidence.allowPostRequests ? "POST request support is enabled" : "ask for an exact POST action when needed"} through fixlab_nonproduction_post only. Every data-changing action still requires separate exact destination/payload confirmation. No blanket write approval exists. Approved per-environment endpoint/test-record configuration and an existing authentication helper are required; if missing, name that prerequisite and block only the action. Explicit read-only/intercepted modes, API-only/unit-only contracts and production remain restricted. Keep ordinary validation read-only unless this separate per-action approval is actually granted; report approved-write evidence honestly after a real action.`;
     }
     if (job.testEvidence.selectedMutationMode) {
       const effective = configuredTestSynthesis(
@@ -4170,6 +4195,11 @@ export function createDashboardServer({
         toolApprovalMode: job.toolApprovalMode ?? "ask",
         fileAccess: validateJobFileAccess(job.fileAccess, resolvedRepository, job.id, job.mode),
         dashboardPort: server.address().port,
+        targetEnvironment: job.targetEnvironment,
+        testMutationMode: job.testEvidence.mutationMode,
+        selectedTestMutationMode: job.testEvidence.selectedMutationMode ?? "",
+        allowPostRequests: job.testEvidence.apiOnly || job.testEvidence.unitTestsOnly
+          ? undefined : job.testEvidence.allowPostRequests,
         protectedPaths,
         mode: job.mode,
         onUsage(usage) {
@@ -5267,6 +5297,11 @@ export function createDashboardServer({
           sendJson(response, 400, { error: "Explicit confirmation is required." });
           return;
         }
+        if (body.recover !== undefined &&
+            (body.recover !== true || body.action !== "deny" || pending.canRecover !== true)) {
+          sendJson(response, 400, { error: "Guided recovery is not available for this exact request." });
+          return;
+        }
         if (body.scope === "all-tools" &&
             (body.action !== "allow" || pending.kind !== "permission" || pending.canAllowAll !== true)) {
           sendJson(response, 400, { error: "Allow all is not available for this runtime request." });
@@ -5287,7 +5322,9 @@ export function createDashboardServer({
               ? "The user explicitly reviewed a job-scoped native permission. It expires when this executor ends; other scopes and managed human approvals remain manual."
               : "The user approved one exact native runtime request. No future or blanket approval was granted."
             : body.action === "deny"
-              ? "The user denied the native runtime permission request. That operation was not authorized."
+              ? body.recover
+                ? "The user denied this exact operation and requested safe recovery of the blocked stage using existing reviewed tests and helpers. No hidden operation or new permission was approved."
+                : "The user denied the native runtime permission request. That operation was not authorized."
               : body.action === "cancel"
                 ? "The user cancelled the native runtime question. No answer was inferred."
                 : "The user answered the live runtime question. The answer is not copied into dashboard logs or history."
@@ -6439,12 +6476,27 @@ export function createDashboardServer({
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       let testEvidence;
       try {
+        if (body.allowPostRequests !== undefined && typeof body.allowPostRequests !== "boolean") {
+          throw new Error("allowPostRequests must be a boolean.");
+        }
+        if (body.allowPostRequests !== undefined && !targetEnvironment &&
+            allowedEnvironments.length === 1 &&
+            ["dev", "sit", "uat"].includes(allowedEnvironments[0].toLowerCase()) &&
+            repositoryProfile.browserAutomation?.mode !== "api" &&
+            repositoryProfile.validation?.liveTestsRequired !== false) {
+          targetEnvironment = allowedEnvironments[0];
+        }
+        if (body.allowPostRequests === true &&
+            !["dev", "sit", "uat"].includes(targetEnvironment.toLowerCase())) {
+          throw new Error("POST support is available only for an explicitly selected DEV, SIT or UAT environment.");
+        }
         if (repositoryProfile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly &&
             repositoryProfile.browserAutomation.mode !== "api") {
           throw new Error("Production database approval does not authorize portal UI jobs; use an API-only profile.");
         }
         testEvidence = configuredTestSynthesis(repositoryProfile,
-          body.testMutationMode === undefined ? "" : body.testMutationMode);
+          body.testMutationMode === undefined ? "" : body.testMutationMode,
+          body.allowPostRequests);
         if (testEvidence.productionDatabaseReadOnly && targetEnvironment && targetEnvironment !== "local") {
           throw new Error("The production database read-only exception permits only the local API environment.");
         }

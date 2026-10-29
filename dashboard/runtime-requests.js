@@ -11,6 +11,21 @@ export function validateToolApprovalMode(value = "ask") {
 const secret = /authorization|bearer\s|(?:password|passwd|secret|token|cookie|api[_-]?key)\s*["':=]|(?:gh[pousr]_|github_pat_|eyJ)[A-Za-z0-9_-]{16,}|https?:\/\/[^/\s]+:[^/\s]+@|[?&](?:sig|code|key|access_token|client_secret)=|-----BEGIN [A-Z ]*PRIVATE KEY-----/i;
 const credentialQuestion = /(?:enter|provide|paste|type|share|input|tell|send|copy|what is|what's).{0,80}(?:password|verification code|one.time code|MFA code|access token|cookie|secret)/i;
 const credentialPath = /(?:^|[\\/])(?:\.auth|\.edge-profile|\.ssh|\.aws|\.azure|\.env(?:\.[^\\/]*)?|credentials(?:\.[^\\/]*)?)(?:[\\/]|$)/i;
+const permissionBlockReasons = {
+  unsupported: "The runtime supplied an unsupported or incomplete request.",
+  oversized: "The complete review exceeds the 8192-character display limit.",
+  "sensitive-path": "The destination may contain credentials or browser state.",
+  "sensitive-content": "The details contain credential-like text, which can include authentication-related source code.",
+  "control-characters": "The details contain unsupported control characters."
+};
+
+export const PERMISSION_RECOVERY_GUIDANCE =
+  "The user denied this exact operation and requested safe recovery of the blocked stage. " +
+  "Do not replay, encode, conceal, split or repackage the rejected operation to evade review. " +
+  "Reuse existing reviewed repository-owned tests, configured runner commands and authentication helpers. " +
+  "Do not create or modify credential-handling code as a workaround. Keep completed evidence and existing failures. " +
+  "Human sign-in, managed policy and normal permissions remain required. This grants no new file access, " +
+  "external writes or publication. If a safe prerequisite is unavailable, explain the exact blocker and stop that stage.";
 
 export function safeRuntimeText(value, limit = 8192) {
   return typeof value === "string" && value.length <= limit &&
@@ -61,11 +76,27 @@ export function runtimePermissionPrompt(request) {
     sandboxReason: request?.requestSandboxBypassReason,
     managedHumanApprovalRequired: request?.managedApprovalRequired === true
   };
-  const details = JSON.stringify(fields, null, 2);
+  let hasControlCharacters = false;
+  const details = JSON.stringify(fields, (_key, value) => {
+    if (typeof value === "string" && /[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value)) {
+      hasControlCharacters = true;
+    }
+    return value;
+  }, 2);
   const sensitivePath = ["read", "write"].includes(request?.kind) &&
     credentialPath.test(request.path ?? request.fileName ?? "");
-  const reviewable = supported && !sensitivePath && safeRuntimeText(details);
-  const canUseFileTrust = request?.kind === "write" && supported && !sensitivePath &&
+  const reviewable = supported && !sensitivePath && !hasControlCharacters && safeRuntimeText(details);
+  const blockedReasons = [
+    ...(!supported ? ["unsupported"] : []),
+    ...(details.length > 8192 ? ["oversized"] : []),
+    ...(sensitivePath ? ["sensitive-path"] : []),
+    ...(secret.test(details) ? ["sensitive-content"] : []),
+    ...(hasControlCharacters ? ["control-characters"] : [])
+  ];
+  const canRecover = !reviewable && supported && !sensitivePath &&
+    !request.managedApprovalRequired && !request.requestSandboxBypass &&
+    !request.requestSandboxPermissive && !request.sandboxPathGrant && !request.warning;
+  const canUseFileTrust = request?.kind === "write" && supported && !sensitivePath && !hasControlCharacters &&
     Buffer.byteLength(details, "utf8") <= MAX_RUNTIME_FRAME_BYTES &&
     safeRuntimeText(request.diff, MAX_RUNTIME_FRAME_BYTES) &&
     safeRuntimeText(details, MAX_RUNTIME_FRAME_BYTES);
@@ -73,9 +104,14 @@ export function runtimePermissionPrompt(request) {
     kind: "permission",
     title: "Copilot requests permission",
     details: reviewable ? details :
-      "This request has unsupported, sensitive or oversized details. Approval is unavailable; deny it and inspect it in an interactive Copilot session.",
+      `Approval is unavailable. Original details are hidden.\n${blockedReasons.map((reason) => permissionBlockReasons[reason]).join("\n")}\n` +
+      (canRecover
+        ? "Deny and request safe recovery to reuse existing reviewed tests and helpers in this same job. The rejected operation will not be approved or replayed."
+        : "Deny this operation. Complete human sign-in or resolve the underlying policy/prerequisite before retrying; no restriction can be overridden here."),
     canApprove: reviewable,
     canUseFileTrust,
+    ...(blockedReasons.length ? { blockedReasons } : {}),
+    ...(canRecover ? { canRecover: true } : {}),
     choices: [],
     allowFreeform: false
   };
@@ -116,6 +152,18 @@ export function createRuntimeRequestBridge({ send, onChange }) {
           value.choices.some((choice) => !safeRuntimeText(choice, 1000)) ||
           typeof value.canApprove !== "boolean" ||
           typeof value.allowFreeform !== "boolean" ||
+          (value.perAction !== undefined &&
+            (value.perAction !== true || value.kind !== "permission" || !value.canApprove ||
+              value.canAllowAll === true || value.grantScope !== undefined)) ||
+          (value.blockedReasons !== undefined &&
+            (value.kind !== "permission" || value.canApprove ||
+              !Array.isArray(value.blockedReasons) || !value.blockedReasons.length ||
+              value.blockedReasons.length > Object.keys(permissionBlockReasons).length ||
+              new Set(value.blockedReasons).size !== value.blockedReasons.length ||
+              value.blockedReasons.some((reason) => !Object.hasOwn(permissionBlockReasons, reason)))) ||
+          (value.canRecover !== undefined &&
+            (value.canRecover !== true || value.kind !== "permission" ||
+              value.canApprove || !value.blockedReasons?.length)) ||
           (value.canAllowAll !== undefined &&
             (typeof value.canAllowAll !== "boolean" ||
               (value.canAllowAll && (value.kind !== "permission" || !value.canApprove)))) ||
@@ -132,6 +180,9 @@ export function createRuntimeRequestBridge({ send, onChange }) {
         choices: [...value.choices],
         canApprove: value.canApprove,
         allowFreeform: value.allowFreeform,
+        ...(value.perAction === true ? { perAction: true } : {}),
+        ...(value.blockedReasons ? { blockedReasons: [...value.blockedReasons] } : {}),
+        ...(value.canRecover === true ? { canRecover: true } : {}),
         ...(value.canAllowAll === true ? { canAllowAll: true } : {}),
         ...(value.grantScope ? { grantScope: value.grantScope } : {})
       });
@@ -144,6 +195,12 @@ export function createRuntimeRequestBridge({ send, onChange }) {
       }
       const { action, choice, answer } = response;
       let result = { type: "response", id, action };
+      if (response.recover !== undefined) {
+        if (response.recover !== true || action !== "deny" || request.canRecover !== true) {
+          throw new Error("Guided recovery is not available for this request.");
+        }
+        result.recover = true;
+      }
       if (response.scope !== undefined) {
         if (action !== "allow" || (response.scope === "all-tools"
           ? request.canAllowAll !== true

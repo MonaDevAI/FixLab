@@ -7,6 +7,20 @@ installation and usage guides.
 
 FixLab separates orchestration from repository-specific behavior.
 
+Native runtime request classification supplies redacted, reason-specific
+diagnostics. Eligible blocked operations expose **Deny and request safe recovery**:
+the runtime receives a rejection with fixed recovery feedback, not a permission
+grant or automatic replay. Existing stage evidence remains authoritative.
+Separately, `fixlab_nonproduction_post` mediates DEV/SIT/UAT writes through each
+environment's existing authentication helper and exact endpoint/test-record
+allowlist. The job-start checkbox enables requests; unchecked requests can ask
+for one action later. The checkbox never grants business-write permission. Its
+complete payload review is individually confirmed, single-use and expiring;
+Allow all and batch approval do not apply. This native dashboard capability
+does not expand API-only/read-only or other-environment contracts. See the
+[security model](security.md#individually-confirmed-non-production-post) for configuration
+and the privileged-execution boundary.
+
 FixLab is distributed and versioned as its own product. It supports Agency
 Copilot as the default compatibility runtime and GitHub Copilot CLI as an
 optional direct runtime. Both provide agent execution, authentication, plugin

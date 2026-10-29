@@ -26,6 +26,29 @@ pull-request policy. If the profile is absent or does not describe the affected
 component, stop and explain that `fixlab init` or a profile update is required.
 Do not invent repository commands or silently widen the component boundary.
 
+Prefer reviewable repository-owned transient tests and configured runner commands
+over oversized inline scripts. Keep credentials inside existing reviewed
+authentication helpers. After a denial, never replay, encode, conceal, split or
+repackage the rejected operation to evade review. **Deny and request safe recovery**
+reuses existing reviewed tests/helpers in the same blocked stage; preserve
+completed evidence and failures, and stop if a safe prerequisite is missing.
+
+For individually authorized DEV/SIT/UAT POST actions, discover
+`fixlab_nonproduction_post` in a native Copilot dashboard job. The **Allow POST
+requests** start checkbox enables requests; unchecked, ask when an action is needed.
+It never approves writes. `dataSafety.post.dev`, `.sit` and `.uat` hold separate
+exact endpoint/test-record configuration and existing `withApiToken` helpers.
+Legacy DEV `fixlab_dev_post` and `dataSafety.devPost` remain supported.
+Each exact URL and complete
+synthetic/approved test payload requires expiring, single-use human confirmation;
+Allow all and batch approval never apply. No credentials or response body enter
+the result. Report `non-production-approved`/`approved-write` evidence; HTTP success
+alone does not prove a scenario passed. No automatic retries or redirects: an
+ambiguous result requires human inspection before any fresh action. Other
+environments, explicit read-only/intercepted selections, API-only read-only contracts, unit-only validation and human sign-in
+remain unchanged. If the tool or its prerequisites are unavailable, block that
+action; never substitute a shell/browser POST or relax the profile.
+
 When `validation.liveTestsRequired` is `false`, follow unit-test-only validation:
 run configured local unit tests and required offline checks, without application
 startup, authentication, API requests or remote database access. This overrides
