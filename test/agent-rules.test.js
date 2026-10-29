@@ -13,6 +13,50 @@ import {
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 
+test("safe recovery and per-action DEV/SIT/UAT POST guidance stay aligned across execution surfaces", () => {
+  const root = join(testDirectory, "..");
+  for (const entryPoint of ["dashboard/server.js", "bin/fixlab.js"]) {
+    assert.match(readFileSync(join(root, entryPoint), "utf8"), /RUNTIME_RECOVERY_GUIDANCE/u);
+  }
+  for (const entryPoint of [
+    "dashboard/workflow-policy.js", "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md", ".github/agents/fixlab.agent.md"
+  ]) {
+    const text = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    for (const contract of [
+      /oversized inline scripts/u, /repackage the rejected operation to evade review/u,
+      /Deny and request safe recovery/u, /fixlab_dev_post/u, /dataSafety\.devPost/u,
+      /DEV\/SIT\/UAT/u, /fixlab_nonproduction_post/u, /dataSafety\.post/u,
+      /checkbox/u, /unchecked/u,
+      /single-use human confirmation/u, /Allow all and batch approval never apply/u,
+      /API-only read-only contracts/u, /never substitute a shell\/browser POST/u
+    ]) { assert.match(text, contract, entryPoint); }
+  }
+});
+
+test("focused retrieval and automatic affected-surface guidance stay aligned across runtimes", () => {
+  const root = join(testDirectory, "..");
+  for (const entryPoint of ["dashboard/server.js", "bin/fixlab.js"]) {
+    const content = readFileSync(join(root, entryPoint), "utf8");
+    assert.match(content, /componentRetrievalGuidance\(/u, entryPoint);
+  }
+  for (const entryPoint of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md", "dashboard/affected-surface.js"
+  ]) {
+    const content = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    for (const contract of [
+      /complete verified Git diff, not report keywords/u, /nearest existing regression/u,
+      /bounded symbol\/file reads/u, /explicitly required gates/u,
+      /strict mode and explicit full\/UI requests/u, /cache source contents/u,
+      /required local API\/runtime verification/u
+    ]) {
+      assert.match(content, contract, entryPoint);
+    }
+  }
+});
+
 test("agent rule governance accepts a bounded lifecycle corpus", () => {
   const root = mkdtempSync(join(tmpdir(), "fixlab-agent-rules-"));
   const instructions = join(root, ".github", "instructions");

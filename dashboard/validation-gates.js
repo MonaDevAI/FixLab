@@ -6,6 +6,7 @@ import {
   repositoryState,
   reusableValidationCommand
 } from "../bin/structured-command.js";
+import { automaticValidationPolicy, affectedApplications, requiresFullValidation } from "./affected-surface.js";
 
 function gitPath(repository, argument) {
   const result = spawnSync("git", ["rev-parse", argument], {
@@ -85,7 +86,7 @@ function validationScopePolicy(profile, gates) {
   }
   const policy = profile.validation?.apiOnly;
   if (policy === undefined) {
-    return null;
+    return automaticValidationPolicy(profile, gates);
   }
   if (!policy || typeof policy !== "object" || Array.isArray(policy) ||
       typeof policy.baseRef !== "string" || !policy.baseRef.trim() ||
@@ -199,14 +200,19 @@ export function selectedValidationGates(gates, selection, value) {
   return selected;
 }
 
+export function defaultValidationIntent(profile, mode = "fix-and-validate") {
+  if (mode === "playwright-only") { return "full"; }
+  return validationScopePolicy(profile, validationGates(profile, "fix-and-validate")) ? "affected" : "full";
+}
+
 export class ValidationSession {
   constructor(repository, profile, mode, {
-    validationIntent = "full", baseCommit, history = { complete: true, gates: [] }, advisory = false
+    validationIntent, baseCommit, history = { complete: true, gates: [] }, advisory = false
   } = {}) {
     this.repository = realpathSync(repository);
     this.gates = validationGates(profile, mode);
     this.policy = mode === "playwright-only" ? null : validationScopePolicy(profile, this.gates);
-    this.validationIntent = validationIntent;
+    this.validationIntent = validationIntent ?? defaultValidationIntent(profile, mode);
     this.advisory = advisory && profile.workflow?.mode !== "strict";
     this.baseCommit = null;
     this.scopeWarning = "";
@@ -227,6 +233,7 @@ export class ValidationSession {
       }
     }
     this.profile = JSON.stringify(profile);
+    this.applicationProfile = profile;
     const restored = restoredValidationHistory(this.gates, history);
     this.results = restored.results;
     this.historyComplete = restored.complete;
@@ -260,19 +267,32 @@ export class ValidationSession {
       }
       const scopes = this.policy.scopes ?? [{ paths: this.policy.paths, gateIds: this.policy.gateIds }];
       const gateIds = new Set();
+      const componentNames = new Set();
       for (const path of changes) {
         const matching = scopes.filter((scope) => matchesScopePath(path, scope.paths));
-        if (matchesScopePath(path, this.policy.fullValidationPaths) || matching.length === 0) {
+        if (matchesScopePath(path, this.policy.fullValidationPaths) || matching.length === 0 ||
+            (this.policy.automatic && requiresFullValidation(path))) {
           return { scope: "all", reason: "Changes include contract, shared, frontend, or unclassified paths; all configured gates are required." };
         }
         for (const scope of matching) {
           scope.gateIds.forEach((id) => gateIds.add(id));
+          if (scope.name) { componentNames.add(scope.name); }
         }
       }
       if (this.policy.scopes) {
+        const applications = this.policy.automatic
+          ? affectedApplications(this.applicationProfile, [...componentNames]) : null;
         return {
           scope: "affected", gateIds: [...gateIds],
-          reason: "Changed paths match reviewed component scopes; their combined gate sets are required. Previously executed gates remain required."
+          ...(this.policy.automatic ? {
+            components: [...componentNames],
+            ...applications,
+            browserApplicable: applications.browserApplicable || this.gates.some((gate) =>
+              gate.stage === "live-test" && (gateIds.has(gate.id) || this.results.has(gate.id)))
+          } : {}),
+          reason: this.policy.automatic
+            ? "Changed paths match profile components and gate working directories. Global and explicitly required gates plus previously executed gates remain required."
+            : "Changed paths match reviewed component scopes; their combined gate sets are required. Previously executed gates remain required."
         };
       }
       return { scope: "api-only", reason: "API-only changes match the reviewed repository policy; unexecuted gates outside the API gate set are not applicable. Previously executed gates remain required." };
@@ -331,6 +351,11 @@ export class ValidationSession {
       status,
       scope,
       reason,
+      ...(this.scopeResult.components && this.validationIntent === "affected" ? {
+        components: this.scopeResult.components,
+        applications: this.scopeResult.applications,
+        browserApplicable: this.scopeResult.browserApplicable
+      } : {}),
       fullValidationPassed: !this.error && this.gates !== null && this.gates.every((gate) =>
         !this.required(gate, scope) || this.results.get(gate.id)?.status === "passed"),
       message: this.error ?? (this.gates === null

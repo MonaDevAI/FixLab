@@ -142,6 +142,79 @@ its executor lease while a human is answering. This local interface, like other
 dashboard controls, is not an authorization boundary against another process
 running as the same OS user.
 
+Blocked native requests explain unsupported input, size limits, credential-like
+text, credential paths and control characters without exposing original details.
+Eligible requests offer **Deny and request safe recovery**. This sends a rejection
+with fixed guidance to reuse existing reviewed tests/helpers in the same stage;
+it never approves, hides or replays the rejected operation. Managed escalation
+and sensitive-path requests do not offer recovery. Existing evidence and failed
+checks remain authoritative; a missing safe prerequisite still blocks the stage.
+
+### Individually confirmed non-production POST
+
+Native Copilot dashboard jobs expose `fixlab_nonproduction_post` for DEV, SIT and
+UAT. The **Allow POST requests in the selected environment** start checkbox is
+selected by default for those environments, unless an explicit read-only or
+intercepted mode was selected. Unchecking it defers the exact-action request
+until POST is needed; it never waives later confirmation. The checkbox is a
+capability preference, not business-write approval. Ordinary validation retains
+its default read-only/intercepted behavior until an exact action is approved.
+API-only, explicit read-only/intercepted, unit-test-only, production-backed and
+other-environment contracts are unchanged.
+Agency and interactive CLI sessions do not expose this tool and must block such
+actions rather than substituting a shell or browser write.
+
+Configure each environment separately under
+`browserAutomation.dataSafety.post.dev`, `.sit` or `.uat`. Missing setup explicitly
+blocks the action, not unrelated work. The configuration names an existing
+reviewed `.mjs` `sessionHelper` exporting
+`withApiToken({ scope, interactive }, callback)`, the approved API `scope`, and
+1-16 `actions`. Each action binds an exact credential-free HTTPS `url` and a
+`testRecord` containing a top-level payload `field` and exact approved synthetic
+test-record `value`. No wildcard URLs, queries, production-named hosts or
+credential-like/oversized payloads qualify. For example, inside `dataSafety`:
+
+```json
+{
+  "productionAllowed": false,
+  "post": {
+    "dev": {
+      "sessionHelper": "tools/dev-session.mjs",
+      "scope": "api://example-service/access",
+      "actions": [
+        {
+          "url": "https://api.dev.example.test/items",
+          "testRecord": { "field": "name", "value": "FIXLAB_TEST_001" }
+        }
+      ]
+    }
+  }
+}
+```
+
+Add separately approved `sit` and `uat` entries with their own destinations,
+test records and authentication configuration; no environment inherits another's
+allowlist. The profile must also declare the selected environment. Legacy
+`dataSafety.devPost` and `fixlab_dev_post` remain supported for DEV. Old snapshots
+do not gain POST capability automatically, and their existing approved-write
+requirements are preserved.
+
+An endpoint being labeled non-production in configuration is an operator assertion, not
+proof of its deployment identity. Review the real destination and test data.
+The helper must already exist and use legitimate authentication; the tool never
+collects credentials or starts interactive sign-in. Credentials stay in memory.
+Credential-sensitive debug logging must be disabled.
+Every exact URL and complete JSON payload receives a separate human review,
+including while Allow all is active. These requests are excluded from batch
+approval and expire after five minutes. Profile/helper revisions are checked
+again before dispatch. One approval permits one attempt: redirects are not
+followed, ambiguous outcomes and failures are not retried, and repeating an
+action requires fresh confirmation after inspecting its effects. Response bodies
+and credentials never enter results or job history; only status metadata returns.
+An HTTP success is not a passed scenario assertion. Existing arbitrary tool
+execution remains privileged: this constrained helper is not an OS network
+sandbox and cannot enforce the contract against an unrelated same-user process.
+
 A reported text-only non-interactive denial pauses the owned executor without automatic
 retries; approval remains unavailable until its termination is verified.
 

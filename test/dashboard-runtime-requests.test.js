@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   createRuntimeRequestBridge,
   MAX_RUNTIME_REQUESTS,
+  PERMISSION_RECOVERY_GUIDANCE,
   runtimePermissionPrompt,
   runtimeQuestionPrompt,
   validateRuntimeUsage
@@ -32,6 +33,72 @@ function fixture() {
   });
   return { bridge, sent, permission, get requests() { return requests; } };
 }
+
+test("blocked permission diagnostics distinguish causes without exposing original details", () => {
+  for (const [request, expected] of [
+    [{ kind: "shell", fullCommandText: "x".repeat(8193) }, ["oversized"]],
+    [{ kind: "write", fileName: "test.js", diff: 'const token = "synthetic-private-value";' }, ["sensitive-content"]],
+    [{ kind: "shell", fullCommandText: "test\u0000command" }, ["control-characters"]],
+    [{ kind: "read", path: ".auth/user.json" }, ["sensitive-path"]],
+    [{ kind: "unknown" }, ["unsupported"]]
+  ]) {
+    const view = runtimePermissionPrompt(request);
+    assert.equal(view.canApprove, false);
+    assert.deepEqual(view.blockedReasons, expected);
+    assert.doesNotMatch(view.details, /synthetic-private-value|x{100}/u);
+    const state = fixture();
+    state.bridge.receive({ ...view, id: randomUUID() });
+    assert.deepEqual(state.requests[0].blockedReasons, expected);
+  }
+});
+
+test("guided recovery denies only the exact request, never creates a grant and cannot be replayed", () => {
+  const state = fixture();
+  const request = state.permission("x".repeat(8193));
+  state.bridge.receive(request);
+  assert.equal(state.requests[0].canRecover, true);
+  assert.throws(() => state.bridge.respond(request.id, { action: "allow", recover: true }), /not available/u);
+  assert.throws(() => state.bridge.respond(request.id, { action: "deny", recover: true, scope: "all-tools" }), /not available/u);
+  state.bridge.respond(request.id, { action: "deny", recover: true });
+  assert.deepEqual(state.sent[0], { type: "response", id: request.id, action: "deny", recover: true });
+  assert.throws(() => state.bridge.respond(request.id, { action: "deny", recover: true }), /stale/u);
+  for (const source of [
+    { kind: "read", path: ".auth/user.json" },
+    { kind: "shell", fullCommandText: "x".repeat(8193), managedApprovalRequired: true },
+    { kind: "shell", fullCommandText: "x".repeat(8193), requestSandboxBypass: true }
+  ]) {
+    const view = { ...runtimePermissionPrompt(source), id: randomUUID() };
+    assert.equal(view.canRecover, undefined);
+    state.bridge.receive(view);
+    assert.throws(() => state.bridge.respond(view.id, { action: "deny", recover: true }), /not available/u);
+  }
+});
+
+test("SDK safe recovery returns a denial with bounded feedback rather than approving the hidden operation", async () => {
+  let decisions = 0;
+  await runCopilotSession({ repository: "synthetic-repository", prompt: "Recover safely.", toolApprovalMode: "allow-all" }, {
+    output() {},
+    async ask(prompt) {
+      decisions++;
+      assert.equal(prompt.canRecover, true);
+      assert.equal(prompt.canApprove, false);
+      return { action: "deny", recover: true };
+    },
+    client: {
+      async start() {},
+      async createSession(options) {
+        return { rpc: managedPolicyRpc(), on() {}, async sendAndWait() {
+          assert.deepEqual(await options.onPermissionRequest({ kind: "shell", fullCommandText: "x".repeat(8193) }),
+            { kind: "reject", feedback: PERMISSION_RECOVERY_GUIDANCE });
+        } };
+      },
+      async stop() { return []; }
+    }
+  });
+  assert.equal(decisions, 1);
+  assert.match(PERMISSION_RECOVERY_GUIDANCE, /Do not replay, encode, conceal, split or repackage/u);
+  assert.match(PERMISSION_RECOVERY_GUIDANCE, /Keep completed evidence and existing failures/u);
+});
 
 test("runtime permission approval is exact, single-use and never session-wide", () => {
   const state = fixture();

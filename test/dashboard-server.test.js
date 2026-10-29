@@ -1564,6 +1564,95 @@ test("per-run interception keeps defaults unchanged and never grants live writes
   assert.throws(() => configuredTestSynthesis(profile, "none"), /permits non-production backend reads/);
 });
 
+test("POST start preference preserves default read-only evidence and cannot waive explicit safety", () => {
+  const profile = validProfile();
+  profile.browserAutomation.testSynthesis = {
+    ...profile.browserAutomation.testSynthesis,
+    defaultDataSource: "non-production-read-only", mutationMode: "none"
+  };
+  for (const enabled of [true, false]) {
+    const result = configuredTestSynthesis(profile, "", enabled);
+    assert.equal(result.allowPostRequests, enabled);
+    assert.equal(result.source, "non-production-read-only");
+    assert.equal(result.mutationMode, "none", "no POST has been approved or sent");
+  }
+  for (const selection of ["none", "intercepted"]) {
+    assert.throws(() => configuredTestSynthesis(profile, selection, true), /cannot override/u);
+    assert.equal(configuredTestSynthesis(profile, selection, false).allowPostRequests, false);
+  }
+  for (const value of ["true", null, 1, {}]) {
+    assert.throws(() => configuredTestSynthesis(profile, "", value), /boolean/u);
+  }
+  assert.throws(() => configuredTestSynthesis(apiProfile(), "", true), /cannot override/u);
+  assert.throws(() => configuredTestSynthesis(unitOnlyProfile(), "", true), /cannot override/u);
+});
+
+test("POST admission resolves a sole DEV environment and rejects invalid flags or overrides", async () => {
+  const repository = createGitRepository();
+  const profile = validProfile();
+  profile.environments = ["dev"];
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  const running = await startDashboard(repository, () => ({ completion: new Promise(() => {}) }));
+  const create = (changes) => jsonRequest(running.url, "/api/jobs", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ request: "Synthetic POST preference.", mode: "validate-only", ...changes })
+  });
+  try {
+    for (const changes of [
+      { allowPostRequests: "yes" }, { allowPostRequests: null },
+      { allowPostRequests: true, testMutationMode: "none" },
+      { allowPostRequests: true, testMutationMode: "intercepted" }
+    ]) {
+      const rejected = await create(changes);
+      assert.equal(rejected.response.status, 400, rejected.body.error);
+    }
+    const accepted = await create({ allowPostRequests: true });
+    assert.equal(accepted.response.status, 202, accepted.body.error);
+    assert.equal(accepted.body.job.targetEnvironment, "dev");
+    assert.equal(accepted.body.job.testEvidence.allowPostRequests, true);
+  } finally {
+    await running.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("DEV/SIT/UAT POST preferences reach the executor, queue and recovered job without grants", async () => {
+  const repository = createGitRepository();
+  const profile = validProfile();
+  profile.environments = ["dev", "sit", "uat"];
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  const launches = [];
+  const executor = (input) => {
+    launches.push(input);
+    return { completion: new Promise(() => {}) };
+  };
+  let running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
+  try {
+    for (const [environment, enabled] of [["dev", true], ["sit", false], ["uat", true]]) {
+      const created = await jsonRequest(running.url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Synthetic per-action POST preference.", mode: "validate-only",
+          targetEnvironment: environment, allowPostRequests: enabled })
+      });
+      assert.equal(created.response.status, 202, created.body.error);
+      const job = created.body.queuedJob ?? created.body.job;
+      assert.equal(job.targetEnvironment, environment);
+      assert.equal(job.testEvidence.allowPostRequests, enabled);
+    }
+    assert.equal(launches.length, 1);
+    assert.equal(launches[0].allowPostRequests, true);
+    assert.match(launches[0].prompt, /Every data-changing action still requires separate exact destination\/payload confirmation/u);
+    await running.dashboard.close();
+    running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
+    const restored = await jsonRequest(running.url, "/api/job");
+    assert.equal(restored.body.job.testEvidence.allowPostRequests, true);
+    assert.equal(restored.body.job.toolApprovalMode, "ask");
+  } finally {
+    await running.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("reviewed file trust is exact-job bound, persists on resume/restart and is never inherited by new jobs", async () => {
   const repository = createGitRepository();
   let finish;
@@ -7148,6 +7237,69 @@ test("dashboard API-only policy preserves scope across recovery and explicit ful
     status = await jsonRequest(url, "/api/job");
     assert.equal(status.body.job.validation.status, "blocked");
     assert.equal(status.body.job.pullRequestReadiness.ready, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("dashboard automatically routes component-only profiles and supplies bounded retrieval hints", async () => {
+  const repository = createGitRepository();
+  const profile = validProfile({
+    workflow: { mode: "efficient" },
+    components: [
+      { name: "backend", paths: ["api/src"], testPatterns: ["api/tests/**/*.cs"] },
+      { name: "frontend", paths: ["web/src"], testPatterns: ["web/tests/**/*.test.ts"] }
+    ],
+    validation: {
+      liveTestsRequired: false,
+      liveTestsDeferredReason: "Approved offline units; integration is deferred.",
+      gates: [
+        { id: "backend-tests", command: process.execPath, args: ["-e", "process.exit(0)"], workingDirectory: "api", kind: "tests", required: true, timeoutSeconds: 30 },
+        { id: "frontend-tests", command: process.execPath, args: ["-e", "process.exit(23)"], workingDirectory: "web", timeoutSeconds: 30 }
+      ]
+    }
+  });
+  profile.applications.frontend.workingDirectory = "web";
+  delete profile.browserAutomation;
+  mkdirSync(join(repository, "api", "src"), { recursive: true });
+  mkdirSync(join(repository, "web", "src"), { recursive: true });
+  writeFileSync(join(repository, "api", "src", "Service.cs"), "initial");
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  git(repository, ["add", "."]);
+  git(repository, ["commit", "--quiet", "-m", "Component-only profile"]);
+  git(repository, ["update-ref", "refs/remotes/origin/develop", "HEAD"]);
+  let prompt;
+  let finish;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    return {
+      completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); }
+    };
+  });
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", {
+      request: "Correct the exception at api/src/Service.cs.", mode: "validate-only"
+    });
+    assert.equal(started.response.status, 202, JSON.stringify(started.body));
+    const jobId = started.body.job.id;
+    assert.equal(started.body.job.validationIntent, "affected");
+    assert.match(prompt, /"component":"backend"/);
+    assert.doesNotMatch(prompt, /"component":"frontend"/);
+    assert.match(prompt, /complete verified Git diff, not report keywords/);
+    assert.match(prompt, /automatic component mappings/);
+    writeFileSync(join(repository, "api", "src", "Service.cs"), "fixed");
+    const excluded = await post("/api/validation/run", { jobId, gateId: "frontend-tests", repository });
+    assert.equal(excluded.body.outcome, "not-applicable");
+    const status = await jsonRequest(url, "/api/job");
+    assert.deepEqual(status.body.job.validation.components, ["backend"]);
+    assert.equal(status.body.job.validation.browserApplicable, false);
+    assert.equal(status.body.job.validation.gates[1].status, "not-applicable");
+    finish({ code: 0 });
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

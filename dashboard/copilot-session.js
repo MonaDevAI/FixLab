@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   MAX_RUNTIME_FRAME_BYTES,
   MAX_RUNTIME_REQUESTS,
+  PERMISSION_RECOVERY_GUIDANCE,
   runtimePermissionPrompt,
   runtimeQuestionPrompt,
   runtimeRequestId,
@@ -12,6 +13,7 @@ import {
 } from "./runtime-requests.js";
 import { createRuntimePermissionPolicy, validateJobFileAccess } from "./runtime-permission-policy.js";
 import { createPublicationPermissions, publicationCommand } from "./publication-permissions.js";
+import { createNonProductionPostTool } from "./dev-post.js";
 
 export function extensionLaunchProvider(bootstrap) {
   return {
@@ -82,6 +84,13 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
     error.code = "INPUT_TOKEN_LIMIT";
     return error;
   };
+  const devPost = createNonProductionPostTool({
+    repository: config.repository, targetEnvironment: config.targetEnvironment, ask,
+    mutationMode: config.testMutationMode,
+    selectedMutationMode: config.selectedTestMutationMode,
+    allowPostRequests: config.allowPostRequests,
+    isReady: () => policyReady && !budgetReached
+  });
   const options = {
     sessionId: config.sessionId,
     workingDirectory: config.repository,
@@ -96,6 +105,7 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
     extensionSdkPath: config.extensionSdkPath,
     streaming: true,
     additionalDirectories: config.additionalDirs,
+    ...(devPost ? { tools: [devPost] } : {}),
     ...(config.model ? { model: config.model } : {}),
     ...(config.model === "hydrafusion" ? { enableExperimentalMode: true } : {}),
     onPermissionRequest: async (request) => {
@@ -158,6 +168,12 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
       }
       if (response.action === "allow" && !prompt.canApprove) {
         throw new Error("An unreviewable permission request cannot be approved.");
+      }
+      if (response.recover !== undefined) {
+        if (response.recover !== true || response.action !== "deny" || prompt.canRecover !== true) {
+          throw new Error("Guided recovery was not offered for this request.");
+        }
+        return { kind: "reject", feedback: PERMISSION_RECOVERY_GUIDANCE };
       }
       if (response.scope !== undefined) {
         if (response.action !== "allow" || (response.scope === "all-tools"

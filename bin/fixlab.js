@@ -11,6 +11,7 @@ import {
   writeFileSync
 } from "node:fs";
 import { dirname, join, resolve } from "node:path";
+import { componentRetrievalGuidance } from "../dashboard/affected-surface.js";
 import { createInterface } from "node:readline/promises";
 import { createServer as createNetServer } from "node:net";
 import { fileURLToPath } from "node:url";
@@ -49,7 +50,7 @@ import { runValidationGate } from "./validation-gate-client.js";
 import { installNotifications } from "./notifications.js";
 import { linkedApiProofPlan, runLinkedApiProof } from "../dashboard/linked-api-proof.js";
 import { runPortalApiProof } from "../dashboard/portal-api-proof.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "../dashboard/workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "../dashboard/workflow-policy.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -1048,6 +1049,9 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
 
   const guidance = [
     COPILOT_EXECUTION_GUIDANCE,
+    ...(request ? [RUNTIME_RECOVERY_GUIDANCE] : []),
+    // Interactive sessions use the packaged agent guidance, keeping Windows argv bounded.
+    ...(request ? [componentRetrievalGuidance(profile, request)] : []),
     ...(profile.validation?.liveTestsRequired === false ? [UNIT_TEST_ONLY_GUIDANCE] : []),
     ...(!readOnly ? [CONCISE_PR_GUIDANCE] : []),
     ...(profile.browserAutomation?.mode === "api" ? [API_ONLY_PLAYWRIGHT_GUIDANCE] : []),

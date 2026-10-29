@@ -246,6 +246,39 @@ test("dashboard submits per-run interception without optional folder preflight",
   await expect(page.locator("#job-test-mutation-mode")).toHaveValue("none");
 });
 
+test("POST checkbox supports DEV/SIT/UAT and keeps unchecked requests on confirmation", async ({ page }) => {
+  const posts = [];
+  await mockChatWorkspace(page, { environments: ["dev", "sit", "uat"] });
+  await page.route("**/api/jobs", async (route) => {
+    posts.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", status: 202,
+      body: JSON.stringify({ job: { id: "post-preference", request: "Synthetic POST preference.",
+        mode: "validate-only", status: "running", stages: {}, bugs: [], logs: [], activity: [] },
+      queue: [], history: [] }) });
+  });
+  await openWorkflowControls(page, baseUrl);
+  const checkbox = page.locator("#allow-post-requests");
+  await expect(checkbox).toBeDisabled();
+  for (const environment of ["dev", "sit", "uat"]) {
+    await page.locator("#target-environment").selectOption(environment);
+    await expect(checkbox).toBeEnabled();
+    await expect(checkbox).toBeChecked();
+  }
+  await checkbox.uncheck();
+  await page.waitForResponse("**/api/status");
+  await expect(checkbox).not.toBeChecked();
+  await expect(page.locator("#post-requests-guidance")).toContainText("If unchecked");
+  await page.locator("#request").fill("Synthetic POST preference.");
+  await page.locator('input[name="mode"][value="validate-only"]').check();
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0].targetEnvironment).toBe("uat");
+  expect(posts[0].allowPostRequests).toBe(false);
+  await page.locator("#job-test-mutation-mode").selectOption("none");
+  await expect(checkbox).toBeDisabled();
+  await expect(checkbox).not.toBeChecked();
+});
+
 test("Allow all is default-off, confirms submission and is cleared for the next job", async ({ page }) => {
   const posts = [];
   await mockChatWorkspace(page);
@@ -305,6 +338,48 @@ test("live Allow all requires confirmation and is absent without an offered capa
   await page.reload();
   await expect(page.getByRole("button", { name: "Allow once", exact: true })).toBeVisible();
   await expect(allow).toHaveCount(0);
+});
+
+test("safe recovery denies the hidden request and per-action DEV POST never enters batch approval", async ({ page }) => {
+  const job = pendingApprovalJob(["npm test"]);
+  const hidden = { ...runtimePermissionPrompt({ kind: "shell", fullCommandText: "x".repeat(8193) }), id: randomUUID() };
+  job.runtimeRequests = [hidden];
+  const posts = [];
+  await mockChatWorkspace(page, { job });
+  await page.route("**/api/job/runtime-response", async (route) => {
+    posts.push(route.request().postDataJSON());
+    job.runtimeRequests = [];
+    await route.fulfill({ contentType: "application/json", body: JSON.stringify({ job }) });
+  });
+  await page.goto(baseUrl);
+  await expect(page.locator("#runtime-request-details")).toContainText("8192-character");
+  await expect(page.getByRole("button", { name: "Allow once", exact: true })).toHaveCount(0);
+  const recover = page.getByRole("button", { name: "Deny and request safe recovery", exact: true });
+  page.once("dialog", (dialog) => dialog.dismiss());
+  await recover.click();
+  expect(posts).toHaveLength(0);
+  page.once("dialog", (dialog) => dialog.accept());
+  await recover.click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0]).toMatchObject({ requestId: hidden.id, action: "deny", recover: true, confirmed: true });
+  job.runtimeRequests = [{
+    id: randomUUID(), kind: "permission", title: "Confirm one DEV POST action",
+    details: '{"environment":"DEV","method":"POST","url":"https://api.dev.example.test/items","payload":{"name":"FIXLAB_TEST_001"}}',
+    canApprove: true, perAction: true, choices: [], allowFreeform: false
+  }];
+  job.toolApprovalMode = "allow-all";
+  await page.reload();
+  await expect(page.locator("#runtime-request-guidance")).toContainText("real non-production POST action");
+  await expect(page.locator("#runtime-batch-review")).toBeHidden();
+  await expect(page.getByRole("button", { name: "Allow all for this run", exact: true })).toHaveCount(0);
+  page.once("dialog", async (dialog) => {
+    expect(dialog.message()).toContain("exact real non-production POST once");
+    await dialog.accept();
+  });
+  await page.getByRole("button", { name: "Allow once", exact: true }).click();
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts[1]).toMatchObject({ action: "allow", confirmed: true });
+  expect(posts[1].scope).toBeUndefined();
 });
 
 test("chat composer replies answer the current question instead of creating another job", async ({ page }) => {
@@ -550,6 +625,17 @@ test("native Copilot prompts allow once, deny and answer choices in the same liv
         type: "response", id: request.id, action: "allow", scope: grantScope
       });
     }
+    const hidden = {
+      ...runtimePermissionPrompt({ kind: "write", fileName: "test.js", diff: 'const token = "synthetic-private-value";' }),
+      id: randomUUID()
+    };
+    bridge.receive(hidden);
+    await expect(page.locator("#runtime-request-details")).toContainText("authentication-related source code");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Deny and request safe recovery", exact: true }).click();
+    await expect.poll(() => sent.at(-1)?.recover).toBe(true);
+    expect(sent.at(-1)).toEqual({ type: "response", id: hidden.id, action: "deny", recover: true });
+    expect(launches).toBe(1);
   } finally {
     await instance.close();
     rmSync(directory, { recursive: true, force: true });
@@ -1967,13 +2053,13 @@ test("dashboard exposes explicit pull-request approval when validation is comple
   expect(submittedInput.details).toContain("explicitly approve");
 });
 
-async function mockChatWorkspace(page, { job = null, queue = [], history = [] } = {}) {
+async function mockChatWorkspace(page, { job = null, queue = [], history = [], environments } = {}) {
   await page.route("**/api/status", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
       instanceId: "workspace-owner",
       readiness: { repositoryReady: true, profileReady: true,
-        repository: "C:\\code\\alpha", profileName: "Alpha workspace" },
+        repository: "C:\\code\\alpha", profileName: "Alpha workspace", environments },
       runtime: { name: "copilot", supportsModelSelection: true, defaultModel: "" },
       job, queue, held: [], history
     })

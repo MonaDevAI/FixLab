@@ -284,6 +284,8 @@
             <option value="none">Live read-only (no added interception)</option>
           </select>
           <p class="guidance">This choice applies only to this job, not shared defaults. Intercepted mode can keep permitted backend reads real. Live read-only prohibits writes and requires a profile allowing non-production reads; repository-required guards remain authoritative. Neither option authorizes Save, Submit, Approve or other real writes.</p>
+          <label><input id="allow-post-requests" type="checkbox" name="allowPostRequests"> Allow POST requests in the selected environment</label>
+          <p id="post-requests-guidance" class="guidance">DEV, SIT and UAT only. If unchecked, FixLab can ask when a POST is needed. Every data-changing POST still requires its own destination/payload confirmation and saved endpoint/test-record/authentication configuration. Explicit read-only/intercepted modes block writes. Production is excluded.</p>
           <fieldset>
             <legend>Batch completion</legend>
             <label><input type="checkbox" name="separatePullRequests"> Create a separate PR per bug</label>
