@@ -75,7 +75,7 @@ export function automaticValidationPolicy(profile, gates) {
 
 export function requiresFullValidation(path) {
   return /(?:^|[/.])(?:contracts?|publiccontract|shared|common)(?:[/.]|$)/iu.test(path) ||
-    /(?:^|\/)(?:AGENTS\.md|package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|global\.json|\.env[^/]*|[^/]*(?:config|configuration|settings)[^/]*\.(?:[cm]?[jt]s|json|ya?ml|cs)|(?:Program|Startup)\.cs|[^/]+\.(?:csproj|sln|slnx|props|targets|ya?ml))$/iu.test(path);
+    /(?:^|\/)(?:AGENTS\.md|package(?:-lock)?\.json|pnpm-lock\.yaml|yarn\.lock|global\.json|NuGet\.Config|packages\.(?:config|lock\.json)|\.npmrc|\.env[^/]*|[^/]*(?:config|configuration|settings)[^/]*\.(?:[cm]?[jt]s|json|ya?ml|cs)|(?:Program|Startup)\.cs|[^/]+\.(?:csproj|sln|slnx|props|targets|ya?ml))$/iu.test(path);
 }
 
 export function affectedApplications(profile, names) {

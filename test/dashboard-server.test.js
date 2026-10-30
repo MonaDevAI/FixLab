@@ -1546,6 +1546,39 @@ async function approvePreflightDirectory(url, job, directory) {
   });
 }
 
+test("job admission rejects invalid default validation profiles without stopping the dashboard", async () => {
+  const repository = createGitRepository();
+  let executions = 0;
+  const { dashboard, url } = await startDashboard(repository, () => {
+    executions += 1;
+    return { completion: Promise.resolve({ code: 0 }) };
+  });
+  try {
+    const gate = { id: "tests", command: process.execPath, args: ["--version"],
+      workingDirectory: ".", timeoutSeconds: 30 };
+    for (const [validation, expected] of [
+      [{ gates: [] }, /validation\.gates/u],
+      [{ gates: [gate], changeAware: { baseRef: "HEAD", fullValidationPaths: [".github"],
+        scopes: [{ paths: ["api"], gateIds: ["unknown-gate"] }] } }, /unique gateIds/u]
+    ]) {
+      writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"),
+        JSON.stringify(validProfile({ validation })));
+      const rejected = await jsonRequest(url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Validate safe invalid-profile admission.", mode: "validate-only" }),
+        signal: AbortSignal.timeout(5000)
+      });
+      assert.equal(rejected.response.status, 400);
+      assert.match(rejected.body.error, expected);
+      assert.equal((await jsonRequest(url, "/api/status")).response.status, 200);
+    }
+    assert.equal(executions, 0);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("per-run interception keeps defaults unchanged and never grants live writes", () => {
   const profile = validProfile();
   profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
