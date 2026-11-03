@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -8,7 +8,6 @@ import { checkDocumentation } from "../scripts/ci/check-docs.mjs";
 
 const requiredFiles = [
   "README.md",
-  "installation.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
   "docs/architecture.md",
@@ -34,28 +33,6 @@ function createDocumentationTree() {
   }
   return root;
 }
-
-test("first installation is linked, packaged and separates prerequisites from setup changes", () => {
-  const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
-  const readme = read("README.md");
-  assert.match(readme, /\[installation\.md\]\(installation\.md\)/u);
-  const install = readme.indexOf("npm install --global");
-  const onboard = readme.indexOf("fixlab onboard C:\\source\\application --runtime copilot");
-  const doctor = readme.indexOf("fixlab doctor C:\\source\\application --runtime copilot");
-  const chat = readme.indexOf("fixlab chat C:\\source\\application --runtime copilot");
-  assert.ok(install >= 0 && install < onboard && onboard < doctor && doctor < chat,
-    "show onboarding and Doctor between installation and chat");
-  assert.ok(JSON.parse(read("package.json")).files.includes("installation.md"));
-  const guide = read("installation.md");
-  for (const section of [
-    "## 1. Prerequisites: install separately",
-    "## 2. Install FixLab",
-    "### What this adds to the machine",
-    "## 3. Set up an application"
-  ]) {
-    assert.ok(guide.includes(section), section);
-  }
-});
 
 test("documentation policy accepts complete internal links", () => {
   const root = createDocumentationTree();

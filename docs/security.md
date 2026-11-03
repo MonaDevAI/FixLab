@@ -153,19 +153,12 @@ checks remain authoritative; a missing safe prerequisite still blocks the stage.
 ### Individually confirmed non-production POST
 
 Native Copilot dashboard jobs expose `fixlab_nonproduction_post` for DEV, SIT and
-UAT. The **Allow POST writes for this job in the selected environment** checkbox
-is off by default. Selecting it and starting the job explicitly authorizes writes
-to that environment's configured endpoints and test records without repeated
-payload confirmations. This is business-write approval, not just tool access.
-Unchecked jobs require separate exact-action confirmation when POST is needed.
-Only the native Copilot dashboard supports job-scoped write approval.
-Approval is bound to the exact job, environment and profile/helper revision.
-It is memory-only and expires on executor end, stop, hold, completion or restart.
-Recovered jobs and saved legacy POST preferences never inherit it. Fresh queued
-jobs retain only their explicit choice while the current dashboard remains alive.
-Changing configuration requires a newly reviewed job. Missing configuration
-blocks the action; adding it later does not expand the original approval.
-The browser/auth guard is not removed or bypassed.
+UAT. The **Allow POST requests in the selected environment** start checkbox is
+selected by default for those environments, unless an explicit read-only or
+intercepted mode was selected. Unchecking it defers the exact-action request
+until POST is needed; it never waives later confirmation. The checkbox is a
+capability preference, not business-write approval. Ordinary validation retains
+its default read-only/intercepted behavior until an exact action is approved.
 API-only, explicit read-only/intercepted, unit-test-only, production-backed and
 other-environment contracts are unchanged.
 Agency and interactive CLI sessions do not expose this tool and must block such
@@ -203,25 +196,20 @@ Add separately approved `sit` and `uat` entries with their own destinations,
 test records and authentication configuration; no environment inherits another's
 allowlist. The profile must also declare the selected environment. Legacy
 `dataSafety.devPost` and `fixlab_dev_post` remain supported for DEV. Old snapshots
-do not gain job-scoped write approval automatically; they retain per-action
-confirmation.
+do not gain POST capability automatically, and their existing approved-write
+requirements are preserved.
 
 An endpoint being labeled non-production in configuration is an operator assertion, not
 proof of its deployment identity. Review the real destination and test data.
 The helper must already exist and use legitimate authentication; the tool never
 collects credentials or starts interactive sign-in. Credentials stay in memory.
 Credential-sensitive debug logging must be disabled.
-Without current job-scoped approval, every exact URL and complete JSON payload
-receives separate human review, including while Allow all is active. These
-requests are excluded from batch approval and expire after five minutes.
-With checkbox approval, payloads still require the exact configured test-record
-field/value, credential screening and size limits. Review the endpoint contract:
-it must scope the operation to that test record; the marker alone cannot prove
-the business meaning of other payload fields.
-Profile/helper revisions are rechecked before dispatch in both modes.
-Redirects are not followed and failures are not retried. Any unsuccessful or
-ambiguous attempt stops job-scoped write approval; inspect its effects and start
-a newly reviewed job before another write. Response bodies
+Every exact URL and complete JSON payload receives a separate human review,
+including while Allow all is active. These requests are excluded from batch
+approval and expire after five minutes. Profile/helper revisions are checked
+again before dispatch. One approval permits one attempt: redirects are not
+followed, ambiguous outcomes and failures are not retried, and repeating an
+action requires fresh confirmation after inspecting its effects. Response bodies
 and credentials never enter results or job history; only status metadata returns.
 An HTTP success is not a passed scenario assertion. Existing arbitrary tool
 execution remains privileged: this constrained helper is not an OS network
