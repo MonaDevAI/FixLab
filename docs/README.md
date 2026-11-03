@@ -8,6 +8,7 @@ installation quickstart is a convenience copy; use the online guides for updates
 
 | Guide | What it covers |
 | --- | --- |
+| [Copilot-first setup](FIXLAB-SETUP.md) | First installation with a reviewed Copilot request; manual fallback if the guide is unavailable |
 | [First installation](../installation.md) | Prerequisites, machine changes, and reviewed setup |
 | [Detailed installation](installation.md) | Guided/manual setup, updates, and uninstall |
 | [Word installation quickstart](FixLab-Installation-Guide-Quickstart.docx) | Downloadable fresh Windows setup and installation troubleshooting |

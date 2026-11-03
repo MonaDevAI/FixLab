@@ -1,8 +1,37 @@
 # Install FixLab
 
-Start here for a first installation. Use the
-[detailed installation guide](docs/installation.md) for manual setup,
-enterprise distribution, updates, and troubleshooting.
+## Copilot-first setup (recommended)
+
+**Option 1: paste one prompt (fastest).** Open Copilot in the application
+checkout, then paste:
+
+```text
+Install or reuse FixLab, register its MCP server, and onboard this repository
+with --runtime copilot. Review the real repository profile and setup plan
+with me before applying changes. Prepare Playwright and genuine live
+authentication when required by the profile, run Doctor, and start or reuse
+the matching dashboard. Ask before changes, preserve my application code,
+and do not start a job.
+```
+
+**Option 2: use a Markdown file.** Copy
+[FIXLAB-SETUP.md](docs/FIXLAB-SETUP.md) into the checkout root without
+overwriting an existing guide, then paste:
+
+```text
+Read @FIXLAB-SETUP.md and set up FixLab for this repository.
+Show the plan and ask before applying changes.
+```
+
+If it is elsewhere, attach it or provide its actual path. In either path,
+approve each reviewed setup change and complete genuine sign-in/MFA yourself.
+The guide is not an automatic installer or a permission grant.
+The [Word quickstart](docs/FixLab-Installation-Guide-Quickstart.docx) remains
+available as a download.
+
+If Copilot or the file is unavailable, continue with the complete manual steps
+below. Use the [detailed installation guide](docs/installation.md) for enterprise
+distribution, additional setup paths, updates, and troubleshooting.
 
 ## 1. Prerequisites: install separately
 

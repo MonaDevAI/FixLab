@@ -6536,7 +6536,7 @@ test("terminal chat confirms and switches the connected repository", async () =>
     const alternate = url.startsWith("http://127.0.0.1:4318");
     return new Response(JSON.stringify({
       readiness: {
-        repository: alternate ? "C:\\repos\\admin-ui" : "C:\\repos\\storefront",
+        repository: alternate ? "C:\\repos\\catalog" : "C:\\repos\\storefront",
         repositoryReady: true,
         profileReady: true
       },
@@ -6562,7 +6562,7 @@ test("terminal chat confirms and switches the connected repository", async () =>
 
   assert.equal(exitCode, 0);
   assert.ok(requests.some((url) => url.startsWith("http://127.0.0.1:4318")));
-  assert.match(output, /FixLab repository: C:\\repos\\admin-ui/);
+  assert.match(output, /FixLab repository: C:\\repos\\catalog/);
 });
 
 test("terminal chat recognizes natural operational commands", () => {
@@ -6579,10 +6579,10 @@ test("terminal chat recognizes natural operational commands", () => {
     details: ""
   });
   assert.deepEqual(
-    parseNaturalChatCommand("switch repository to C:\\repos\\admin-ui"),
+    parseNaturalChatCommand("switch repository to C:\\repos\\catalog"),
     {
       command: "/repository",
-      details: "C:\\repos\\admin-ui"
+      details: "C:\\repos\\catalog"
     }
   );
   assert.deepEqual(parseNaturalChatCommand("add a bug: Save button is disabled"), {

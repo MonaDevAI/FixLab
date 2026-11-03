@@ -39,14 +39,20 @@ test("first installation is linked, packaged and separates prerequisites from se
   const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
   const readme = read("README.md");
   assert.match(readme, /\[installation\.md\]\(installation\.md\)/u);
-  const install = readme.indexOf("npm install --global");
-  const onboard = readme.indexOf("fixlab onboard C:\\source\\application --runtime copilot");
-  const doctor = readme.indexOf("fixlab doctor C:\\source\\application --runtime copilot");
-  const chat = readme.indexOf("fixlab chat C:\\source\\application --runtime copilot");
-  assert.ok(install >= 0 && install < onboard && onboard < doctor && doctor < chat,
-    "show onboarding and Doctor between installation and chat");
-  assert.ok(JSON.parse(read("package.json")).files.includes("installation.md"));
+  for (const instruction of [
+    "register its MCP server", "--runtime copilot", "FIXLAB-SETUP.md",
+    "otherwise use:", "run Doctor", "Do not start a job or publish changes"
+  ]) {
+    assert.ok(readme.includes(instruction), instruction);
+  }
   const guide = read("installation.md");
+  const install = guide.indexOf("npm install --global");
+  const onboard = guide.indexOf("fixlab onboard C:\\source\\application --runtime copilot");
+  const doctor = guide.indexOf("fixlab doctor C:\\source\\application --runtime copilot");
+  const chat = guide.indexOf("fixlab chat C:\\source\\application --runtime copilot");
+  assert.ok(install >= 0 && install < onboard && onboard < doctor && doctor < chat,
+    "keep the complete manual sequence in installation.md rather than duplicating it in README");
+  assert.ok(JSON.parse(read("package.json")).files.includes("installation.md"));
   for (const section of [
     "## 1. Prerequisites: install separately",
     "## 2. Install FixLab",
