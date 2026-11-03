@@ -1,14 +1,22 @@
 # Installation
 
-FixLab supports Agency Copilot and direct GitHub Copilot CLI execution. Install
-and authenticate the runtime selected for the local runner before installing
-FixLab.
+New users: start with [First installation](../installation.md) for prerequisites
+and an explanation of what is added to the machine. This guide covers detailed
+setup for Agency Copilot and direct GitHub Copilot CLI execution.
 
 For known CLI, package-manager, private-feed, Playwright, authentication, and
 runtime failures, see [Troubleshooting](troubleshooting.md).
 
+The [Word installation quickstart](FixLab-Installation-Guide-Quickstart.docx)
+is a downloadable convenience copy for fresh Windows setup and common
+installation problems. These Markdown instructions remain the maintained
+source of truth for updates.
+
 Choose the setup path you need:
 
+- [Fresh Windows dev box](#fresh-windows-dev-box)
+- [What installation changes](#what-installation-changes)
+- [Enterprise-managed GitHub accounts](#enterprise-managed-github-accounts)
 - [Guided CLI setup](#recommended-path-install-then-run)
 - [Copy-paste Copilot installation prompt](#copy-paste-installation-prompt)
 - [Visual Studio Code custom agent](#install-and-use-in-visual-studio-code)
@@ -20,10 +28,25 @@ After setup, use [Getting started](getting-started.md) for your first job.
 
 ## Recommended path: install, then run
 
-Once your supported runtime is installed and signed in, use just:
+Once your supported runtime is installed and signed in:
 
 ```powershell
 npm install --global github:MonaDevAI/FixLab
+fixlab onboard C:\source\application --runtime copilot
+```
+
+If a new example profile is created, configure the actual application paths and
+commands, then rerun `onboard` to inspect its setup plans. After reviewing and
+approving those plans:
+
+```powershell
+fixlab onboard C:\source\application --runtime copilot --yes
+fixlab doctor C:\source\application --runtime copilot
+```
+
+Resolve every Doctor blocker, then start chat:
+
+```powershell
 fixlab chat C:\source\application --runtime copilot
 ```
 
@@ -34,23 +57,8 @@ scoped restore/browser setup, and complete any required feed sign-in and
 application MFA yourself. FixLab checks readiness before starting the dashboard.
 If setup fails, it reports the prerequisite rather than starting a broken job.
 
-The commands below are manual setup and troubleshooting alternatives, not a
-checklist that every user must run. A PR-only feature needs its approved commit
-installed until the change reaches the default branch.
-
-## Use the dashboard
-
-Describe your request and select **Start job**. Attach images when useful;
-**Run options** holds mode, environment and evidence settings.
-
-The sidebar opens saved work, run details, connections and settings on demand.
-On a small screen, select **Menu** first. **Back to chat** hides those tools
-without clearing your draft or running a job. A repository that needs setup
-shows **Set up a repository**; Azure DevOps intake is optional and separate.
-
-Approval requests and errors remain inline. Review the actual command, path
-or diff before approving; enter sign-in details only in the normal browser.
-Required checks and managed approvals are unchanged.
+The remaining sections are alternatives, not a checklist. A PR-only feature
+needs its approved commit installed until it reaches the default branch.
 
 ## Prerequisites
 
@@ -82,11 +90,139 @@ For direct mode, install and authenticate GitHub Copilot CLI, then verify
 `copilot --help`. Select direct mode with `--runtime copilot` or
 `FIXLAB_RUNTIME=copilot`.
 
-FixLab does not install either runtime or manage its authentication.
-Installing FixLab does not start a server or background service. Run
-`fixlab chat` after installation; if no dashboard is running, chat asks for
-the repository path, opens interactive onboarding when needed, and starts the
-local dashboard in the background after the profile is ready.
+FixLab does not install Agency or the standalone Copilot CLI, or manage sign-in.
+Run `fixlab chat` after installation for guided onboarding and a dashboard
+connection once the profile is ready.
+
+### Fresh Windows dev box
+
+Install only missing tools using your organization's approved software source.
+First check any repository-pinned Node.js version; do not replace a working
+NVM-managed runtime with another installation. When WinGet is permitted, these
+commands install common prerequisites:
+
+```powershell
+winget install --id Git.Git --exact
+winget install --id OpenJS.NodeJS.LTS --exact
+winget install --id Microsoft.PowerShell --exact
+winget install --id GitHub.Copilot --exact
+```
+
+Node.js includes npm; a separate npm installation is not normally needed.
+Choose a Node release compatible with FixLab and the application rather than
+assuming that the newest LTS meets the application's version pin. Follow
+installer elevation prompts and organization policy; an Administrator terminal
+is not a universal prerequisite for these commands.
+
+Close and reopen the terminal after installation so it sees the updated `PATH`.
+Open PowerShell 7 (`pwsh`), then verify the tools in that same shell:
+
+```powershell
+git --version
+node --version
+npm --version
+pwsh --version
+copilot --version
+```
+
+For direct Copilot mode, run `copilot` and complete the normal login flow with
+the identity authorized by your organization. Copilot access and CLI enablement
+must already be permitted by your enterprise. Follow the
+[official Copilot CLI installation guide](https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/install-copilot-cli)
+for current supported installers and authentication steps. For Agency mode,
+use the organization's Agency setup instead of installing an unnecessary
+second runtime.
+
+Install the [.NET SDK](https://learn.microsoft.com/en-us/dotnet/core/install/windows)
+required by the application, not just the .NET runtime. Check `global.json`
+and the projects' `TargetFramework` or `TargetFrameworks`; .NET 9 is not a
+universal FixLab requirement. Verify SDK resolution from the application root:
+
+```powershell
+Set-Location C:\source\application
+dotnet --list-sdks
+dotnet --version
+```
+
+After installing FixLab, configure the real checkout layout before restoring
+dependencies or installing Playwright. `fixlab init` copies an example profile;
+it does not create an application, install its dependencies, or discover its
+actual frontend directory. Edit these fields in
+`.github\fixlab\repository-profile.json` as applicable:
+
+| Field | Set it to |
+| --- | --- |
+| `applications.frontend.workingDirectory` | The existing frontend package directory, relative to the repository root |
+| `applications.backend.workingDirectory` | The existing backend project directory |
+| `browserAutomation.workingDirectory` | The existing package/test directory that owns the Playwright setup |
+| `validation.commands` and `validation.gates[].workingDirectory` | The repository's actual commands and their working directories |
+| `browserAutomation.testCommand` | The repository-owned browser or API test command |
+
+Do not create an empty `frontend` folder or run a generic Playwright project
+generator to make an example path pass. If Playwright is missing after the
+paths are corrected, review `fixlab setup-playwright` before approving
+`fixlab setup-playwright --yes`. This installs into the configured checkout,
+not globally. Restore existing dependencies with the reviewed `fixlab prepare`
+plan and complete any required private-feed sign-in first.
+
+Browser-mode tests need the configured Playwright browser or approved channel
+(for example, Edge), not an arbitrary extra Chromium installation. API-only
+profiles use `browserAutomation.mode: "api"` and do not install or launch a
+browser. An explicit unit-test-only profile skips Playwright; do not disable
+required live coverage merely to get a green Doctor result.
+
+For an example-path error, see
+[Playwright working directory is missing](troubleshooting.md#playwright-working-directory-is-missing).
+
+### Enterprise-managed GitHub accounts
+
+Some enterprise-managed accounts cannot access or work with repositories
+outside their enterprise. A Copilot subscription does not override those
+source-access or installation policies. Do not switch to a personal account
+or bypass an organization restriction to install FixLab.
+
+Ask the enterprise administrator or an approved maintainer for an authorized
+internal mirror or a reviewed FixLab npm tarball produced with `npm pack`.
+After verifying its approved source, version and integrity, install the supplied
+artifact, for example:
+
+```powershell
+npm install --global "C:\approved-packages\fixlab-cli-<version>.tgz"
+fixlab --help
+```
+
+Use the actual supplied filename in place of the example. FixLab is not
+published to the public npm registry; `npm install --global @fixlab/cli` is
+not an available distribution path. An internal mirror or registry must be
+provisioned and approved by the organization, not assumed to exist.
+
+A tarball is not a fully offline installer: npm still resolves FixLab's
+dependencies unless an approved package source supplies them. Copilot
+installation/sign-in, plugin loading, application feeds and Playwright
+downloads have their own network and policy requirements. Use the approved
+sources and normal authentication for each; do not embed credentials in
+installation commands, profiles or redistributed packages.
+
+## What installation changes
+
+| Action | Machine or repository changes |
+| --- | --- |
+| `npm install --global github:MonaDevAI/FixLab` | Installs FixLab, its dashboard/plugin/templates/docs, npm dependencies, and `fixlab` / `fixlab-mcp` launchers in the global npm prefix |
+| SDK dependency | Includes the Copilot SDK's bundled dashboard runtime, not a standalone authenticated Copilot CLI or Agency installation |
+| `fixlab init` | Adds missing profile, prompts, and custom agent under the application's `.github`; preserves existing files |
+| `fixlab prepare --yes` | Executes configured restore commands; review the plan for their actual effects |
+| `fixlab setup-playwright --yes` | Adds a missing project-local test dependency and installs the configured browser/channel; API-only mode installs no browser |
+| `fixlab chat` / `fixlab dashboard` | Starts or connects to a local dashboard; jobs can create worktrees, evidence, and Git-private state |
+
+Use `npm prefix --global` and `npm root --global` to locate the installation.
+Installing FixLab alone does not install Git, Node.js, PowerShell, .NET, Agency,
+the standalone Copilot CLI, application dependencies, or Playwright browsers.
+It does not start an operating-system service or dashboard, register MCP, or
+change application files. Optional setup commands require their own review.
+
+Playwright browser binaries normally use a user cache; branded browser/channel
+installers can change the machine's browser installation. Installing tools does
+not grant authentication, write, deployment, or publication permission.
 
 ## Install directly from GitHub
 
@@ -549,106 +685,17 @@ Edit:
 .github\fixlab\repository-profile.json
 ```
 
-Open the file in the developer's normal editor. For example:
+Open the file in your editor:
 
 ```powershell
 code .github\fixlab\repository-profile.json
 ```
 
-If Visual Studio Code is unavailable:
-
-```powershell
-notepad .github\fixlab\repository-profile.json
-```
-
-Replace the template values with paths and commands owned by the application
-repository. A React and .NET profile normally defines:
-
-```json
-{
-  "version": 1,
-  "name": "Application React and .NET",
-  "architecture": "React frontend backed by an ASP.NET API.",
-  "components": [
-    {
-      "name": "React frontend",
-      "paths": ["frontend/src", "frontend/e2e"],
-      "testPatterns": [
-        "frontend/src/**/*.test.ts",
-        "frontend/src/**/*.test.tsx",
-        "frontend/e2e/**/*.spec.ts"
-      ]
-    },
-    {
-      "name": ".NET API",
-      "paths": ["backend/src"],
-      "testPatterns": ["backend/tests/**/*.cs"]
-    }
-  ],
-  "validation": {
-    "commands": {
-      "frontendRestore": "npm ci",
-      "frontendTest": "npm test -- --runInBand",
-      "frontendTypeCheck": "npm run type-check",
-      "frontendBuild": "npm run build",
-      "backendRestore": "dotnet restore Application.sln",
-      "backendTest": "dotnet test Application.sln",
-      "backendBuild": "dotnet build Application.sln"
-    },
-    "productionBuildTimeoutMinutes": 20,
-    "blockerPolicy": "continue-on-owned-process-timeout"
-  },
-  "applications": {
-    "frontend": {
-      "workingDirectory": "frontend",
-      "command": "npm start",
-      "port": 3000,
-      "healthUrl": "http://127.0.0.1:3000"
-    },
-    "backend": {
-      "workingDirectory": "backend",
-      "command": "",
-      "port": 0,
-      "healthUrl": "",
-      "requiredForLiveTest": false
-    }
-  },
-  "browserAutomation": {
-    "workingDirectory": "frontend",
-    "package": "@playwright/test",
-    "browser": "chromium",
-    "testCommand": "npm run test:e2e",
-    "testSynthesis": {
-      "enabled": true,
-      "defaultDataSource": "synthetic-intercepted",
-      "mutationMode": "intercepted",
-      "requireScenarioEvidence": true
-    },
-    "authentication": {
-      "required": false,
-      "command": "",
-      "statusPaths": []
-    },
-    "dataSafety": {
-      "policy": "Use local test data and intercept every mutating request.",
-      "productionAllowed": false
-    }
-  },
-  "environments": ["local", "dev", "sit"],
-  "pullRequests": {
-    "defaultTargetBranch": "main",
-    "requireConfirmation": true,
-    "branchNaming": {
-      "userId": "developer-alias",
-      "prefixTemplate": "users/{userId}"
-    }
-  }
-}
-```
-
-Use repository-relative paths and commands that run non-interactively. Replace
-the example solution, directories, startup command, test command, environments,
-target branch, and developer alias. If browser authentication is required, set
+Use the [current profile template](../templates/repository-profile.json), not a
+second copy of its JSON. Replace example component paths, restore/validation
+commands, startup commands, ports, environments, PR target, and developer alias.
+Paths are repository-relative; commands must run non-interactively.
+If browser authentication is required, set
 `authentication.required` to `true` and configure the repository-owned login
 command and status paths as described below.
 

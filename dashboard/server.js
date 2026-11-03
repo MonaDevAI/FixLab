@@ -41,9 +41,10 @@ import { canonicalExecutionRepository, createExecutorLease } from "./executor-le
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "./workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
+import { createPostWriteApproval } from "./dev-post.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "./repository-settings.js";
 import { configuredLinkedApplications, resolveLinkedApplications } from "./linked-applications.js";
@@ -580,6 +581,7 @@ function publicQueue(jobs) {
     prestartFrontend: job.prestartFrontend ?? false,
     inputTokenLimit: job.inputTokenLimit ?? 0,
     toolApprovalMode: job.toolApprovalMode ?? "ask",
+    postWriteApproved: Boolean(job.postWriteApproval?.revision),
     fileAccess: job.fileAccess ?? null,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
@@ -748,6 +750,7 @@ function restoreDashboardJob(snapshot, repository) {
       : {}),
     validationRecovered: true,
     toolApprovalMode: "ask",
+    postWriteApproval: null,
     permissionRequest: snapshot.permissionBlocked
       ? newPermissionRequest({ preflight: snapshot.permissionPreflightPending === true })
       : permissionRequest(snapshot.stages),
@@ -1153,7 +1156,7 @@ export function buildJobPrompt({
     testEvidence.source === "non-production-read-only"
       ? `- Use the selected ${targetEnvironment} backend and API as the primary business-data source. Keep all backend access read-only and intercept every mutating request.
 - Do not fulfill or intercept business-data reads while the selected backend is available and returns safe records that can prove the required assertions.
-- If the selected backend is unreachable, authentication or access prevents the read, or it returns no safe records capable of exercising the required behavior, preserve that exact backend limitation and then fall back to synthetic-intercepted data for the focused UI journey.
+- If the selected backend is unreachable, authentication or backend service access prevents the read, or it returns no safe records capable of exercising the required behavior, preserve that exact backend limitation and then fall back to synthetic-intercepted data for the focused UI journey. A query allowlist rejection is not a backend limitation and must not trigger this fallback.
 - Do not replace an expected empty-state assertion with synthetic data. Use fallback only when records are required to exercise the reported behavior and the selected backend cannot supply them.
 - When fallback occurs, emit a FIXLAB_ACTIVITY line explaining why, intercept all mutations, and emit FIXLAB_TEST with source synthetic-intercepted and mutation mode intercepted. A synthetic pass proves the UI behavior only; do not claim the selected backend or its data was validated.`
       : "- Use the configured test data source and mutation mode. For synthetic-intercepted tests, fulfill business-data reads locally, intercept every mutating request, and assert the intended request count and payload without changing an external record.";
@@ -1176,12 +1179,7 @@ ${process.platform === "win32" ? "- Windows executor children are job-contained 
   const branchNamingGuidance = branchNaming
     ? `- Repository branch naming is configured as ${branchNaming.prefix}. Create or reuse only branches beneath this prefix. Do not substitute a runtime, bot, or agent name for the configured user ID.`
     : "- Follow the repository's existing branch naming policy; do not invent a bot-specific prefix.";
-  const requestGuidance = playwrightOnly
-    ? `- Use the request only to select the relevant repository-defined Playwright journey and expected behavior.
-- Perform only the minimum setup required by the repository profile: verify browser authentication, start required applications, and run the focused Playwright journey.
-- Do not diagnose source code, reproduce through separate non-browser checks, review a diff, run unrelated tests, type-checks, or builds, or inspect implementation files unless the Playwright journey cannot be selected or started without that bounded information.
-- Preserve exact browser results, screenshots, traces, skipped gates, blockers, and remaining risks.`
-    : smallEnhancement
+  const requestGuidance = smallEnhancement
     ? `- Generate a concise acceptance contract before changing code.
 - Check the affected surface and bound the file scope before editing.
 - Do not manufacture a failing defect reproduction. Use the smallest existing focused test that proves the acceptance contract.
@@ -1193,11 +1191,11 @@ ${process.platform === "win32" ? "- Windows executor children are job-contained 
   if (playwrightOnly) {
     return `FixLab output protocol (follow before any tool call):
 - First emit FIXLAB_STAGE|intake|running|Accepted the request and starting intake.
-- Before each stage emit FIXLAB_STAGE|stage|running|next action; emit its terminal outcome before starting another stage. Never defer or batch stage markers until the end.
-- Write markers as literal assistant response lines, never through shell, files, tool results or code blocks.
-- Stages: ${FIXLAB_STAGES.join(", ")}. Terminal statuses: passed, skipped, blocked, failed. Emit every stage's terminal outcome before finishing; never report skipped checks as passed.
-- Emit FIXLAB_ACTIVITY|stage|summary only for meaningful evidence or blockers, at most twice per stage unless a new blocker changes the plan. Do not expose secrets or private data.
-- Emit FIXLAB_TEST|source|mutation-mode|scenario after selecting the scenario and whenever its data source or mutation behavior changes. Sources: ${[...testDataSources].join(", ")}. Mutation modes: ${[...mutationModes].join(", ")}.
+- Before each stage emit FIXLAB_STAGE|stage|running|next action and its terminal outcome before the next stage. Never defer or batch stage markers.
+- Markers are literal assistant response lines, never shell, files, tool results or code blocks.
+- Stages: ${FIXLAB_STAGES.join(", ")}. Terminal statuses: passed, skipped, blocked, failed. Finish every stage; never report skipped checks as passed.
+- FIXLAB_ACTIVITY|stage|summary: meaningful evidence/blockers only, at most twice per stage unless a new blocker changes the plan. No secrets or private data.
+- Emit FIXLAB_TEST|source|mutation-mode|scenario on scenario selection and data/mutation changes. Sources: ${[...testDataSources].join(", ")}. Mutation modes: ${[...mutationModes].join(", ")}.
 - Expected bug IDs: ${bugResults.map((bug) => bug.id).join(", ") || "none"}. For each, emit FIXLAB_BUG|id|outcome|owner|summary before finishing. Outcomes: ${[...bugOutcomeStatuses].join(", ")}. Attribute upstream limitations honestly.
 
 Run a FixLab playwright-only job.
@@ -1213,30 +1211,30 @@ Test synthesis: ${testEvidence.enabled ? "enabled" : "disabled"}
 Scenario evidence required: ${testEvidence.requireScenarioEvidence ? "yes" : "no"}
 ${intakeSummary.length ? `Loaded work items: ${JSON.stringify(intakeSummary)}\n` : ""}${screenshotPaths.length ? `User-provided screenshots: ${JSON.stringify(screenshotPaths)}. Inspect only these; do not download additional attachments.\n` : ""}${cacheSummary ? `Verified same-repository cache metadata: ${JSON.stringify(cacheSummary)}. Verify task-specific facts; this is not source evidence.\n` : ""}
 Repository requirements:
-- Read .github/fixlab/repository-profile.json and all applicable repository instructions; preserve their safety, authentication, environment and process-ownership requirements.
+- Read .github/fixlab/repository-profile.json and all applicable repository instructions; preserve safety, authentication, environment and process ownership.
 ${COPILOT_EXECUTION_GUIDANCE}
 ${RUNTIME_RECOVERY_GUIDANCE}
+${!apiOnly && !testEvidence.unitTestsOnly ? READ_ONLY_POST_GUIDANCE : ""}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : EXISTING_APPLICATION_GUIDANCE}
-${requestGuidance}
 - Skip source diagnosis, separate reproduction, implementation, diff review and unrelated non-browser gates. The diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped unless their own required prerequisite fails.
 - Do not edit files other than an authorized transient browser-validation artifact. Do not commit, push, create or update pull requests, or change repository configuration.
-- Read the profile, existing browser configuration, fixture and nearest matching test in one bounded batch. Prefer an existing journey or retained same-job script. Inspect implementation files only to resolve a concrete missing selector or prerequisite.
-- Generate one parameterized deterministic Playwright script for repeated rows and scenarios; execute it through the repository's runner, not one model/tool round-trip per row or field.
-- Keep the same-job script and its compact scenario/result summary through retries and human waits. Reuse unchanged selectors and helpers; modify only the failing step. Do not delete artifacts while a test is running. Remove transient source only when validation is finished and no continuation needs it; permanent product test coverage needs separate authorization.
-- Preserve forms and human-entered values. Never replay a stale snapshot or repeat successful mutations to recover context. Do not copy browser state or credentials; sign-in and MFA remain human-controlled.
-- Do not reinstall dependencies that are already available. Run only minimum setup required by the repository profile; verify browser authentication without treating existing state files as proof of sign-in.
+- Use the request to select expected behavior and the focused Playwright journey. Read the profile, browser configuration, fixture and nearest test in one bounded batch; prefer an existing journey or retained script. Inspect implementation only for a concrete missing selector or prerequisite.
+- Generate one parameterized deterministic Playwright script for repeated rows/scenarios; use the repository runner, not per-row/field model round-trips.
+- Keep the same-job script and compact results through retries/human waits; reuse unchanged selectors/helpers and change only failing steps. Never delete running artifacts. Remove transient source only after validation and continuations finish; permanent coverage needs separate authorization.
+- Preserve forms and human-entered values; never replay stale snapshots or successful mutations. Do not copy browser state or credentials; sign-in/MFA remain human-controlled.
+- Do not reinstall dependencies that are already available. Run only minimum setup required by the repository profile: verify browser authentication, required applications and the focused Playwright journey. State files alone do not prove sign-in.
 ${uiScenarioGuidance}
 ${environmentGuidance}
 ${testDataGuidance}
-- Profile safety rules remain authoritative. Read-only POST searches are not mutations merely because of their method. No Save, Submit, Approve, autosave or other external write is authorized by this validation request or its interception selector.
+- No Save, Submit, Approve, autosave or external write is authorized by this request or interception selector. Profile safety remains authoritative; writes require separate native approval.
 ${videoGuidance}
 ${manualLocalhostGuidance}
-- For browser journeys, save at least one non-sensitive screenshot under repository-owned test-results. API-only journeys preserve sanitized API assertion evidence instead. Preserve exact assertions, request counts, errors and evidence paths. Do not fabricate execution or claim intercepted payloads prove backend writes.
-- Run verbose commands through fixlab exec --stage live-test -- <command> [args...]; quote '--' in Windows PowerShell. Keep compact results in context, inspecting only a bounded diagnostic on failure. Never reuse cached live-browser, authentication or external-data results.
-- Continue independent safe browser steps when an unrelated check fails; do not bypass a failed prerequisite. Report required full regression as deferred, not passed.
-- Do not delegate one continuous browser journey or repeatedly enumerate the repository. Keep command output bounded and batch independent reads.
-- For genuine missing decisions, authentication or authorization, report the exact blocker. Native dashboard instructions below govern live questions; never infer approvals, waive policy or collect credentials. Otherwise block the affected stage and stop safely.
-- Before finishing emit all required terminal markers, exact passed/failed assertions, skipped gates, blockers and remaining risks. Do not call task_complete before the protocol is complete.
+- Browser journeys require a non-sensitive screenshot in repository-owned test-results; API-only runs retain sanitized assertions instead. Preserve exact assertions, counts, errors, traces and paths. Never fabricate results or claim intercepted payloads prove backend writes.
+- Run verbose commands through fixlab exec --stage live-test -- <command> [args...]; quote '--' in Windows PowerShell. Keep compact results and bounded failure diagnostics. Never reuse cached live-browser, authentication or external-data results.
+- Continue independent safe steps after unrelated failures, never across failed prerequisites. Mark required full regression deferred, not passed.
+- Do not delegate one continuous journey or repeatedly enumerate the repository; batch independent reads and bound output.
+- Missing decisions/authentication/authorization block only the affected stage. Use native live questions below; never infer approval, waive policy or collect credentials.
+- Finish with exact passed/failed assertions, skipped gates, blockers and risks before task_complete.
 
 Request:
 ${request}`;
@@ -1278,6 +1276,7 @@ Repository requirements:
 - Read .github/fixlab/repository-profile.json and all repository-owned instructions before acting.
 ${COPILOT_EXECUTION_GUIDANCE}
 ${RUNTIME_RECOVERY_GUIDANCE}
+${!apiOnly && !testEvidence.unitTestsOnly ? READ_ONLY_POST_GUIDANCE : ""}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : ""}
 - For a fix request, begin with the smallest known reproduction, using an approved existing application when appropriate; prepare the local stack only when needed to exercise changed code. Do not claim a deployed baseline proves an unpublished fix.
 - Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
@@ -1317,6 +1316,7 @@ ${efficient ? efficientWorkflowGuidance(workflow) : `- Once the scoped productio
 - ${readOnly ? "Do not publish a pull request or change its draft status in read-only mode." : workflow?.publication === "draft" ? "Keep the published PR draft and read back provider isDraft=true before reporting publication passed. Marking ready requires a separate reviewed decision. Strict required checks remain mandatory." : "After required local validation and approval gates pass or have an explicitly accepted outcome, publish the authorized PR by marking it ready for review. Do not wait for remote PR CI or build completion before publication; publication can trigger those checks. Verify the PR is no longer draft before reporting the PR stage passed. Report remote checks as pending, not passed, and leave merge policies intact. Use `gh pr ready <number>` for GitHub or `az repos pr update --id <id> --draft false` for Azure DevOps, then read back `isDraft` from the provider to confirm it is false. If publication or state verification fails, report the PR stage blocked or failed, not passed."}
 - Prefix FixLab-created pull-request titles with FLAB: followed by a concise description of the coding change. Format the body with the repository's PR template, clear Markdown sections for the problem, changes, validation and risks, and accurate validation checkboxes.
 ${readOnly ? "" : CONCISE_PR_GUIDANCE}
+${readOnly ? "" : PR_LEARNING_GUIDANCE}
 - Emit one browser evidence line after the scenario is selected and again if the actual source or mutation behavior changes:
   FIXLAB_TEST|source|mutation-mode|scenario
 - source must be one of: ${[...testDataSources].join(", ")}.
@@ -1399,7 +1399,8 @@ function runGit(repository, args) {
   const result = spawnSync("git", args, {
     cwd: repository,
     encoding: "utf8",
-    shell: false
+    shell: false,
+    windowsHide: true
   });
   return result.status === 0 ? result.stdout.trim() : null;
 }
@@ -2009,6 +2010,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
     testMutationMode,
     selectedTestMutationMode,
     allowPostRequests,
+    postWriteApproval,
     protectedPaths,
     onOutput,
     onUsage = () => {},
@@ -2045,7 +2047,7 @@ function createExecutor({ command, packageRoot, buildInvocation, defaultModel = 
       invocation = {
         args: [join(packageRoot, "dashboard", "copilot-session.js")],
         input: JSON.stringify({
-          type: "start", packageRoot, repository, prompt, sessionId, resume, usage, mode, inputTokenLimit, toolApprovalMode, protectedPaths, fileAccess, dashboardPort, targetEnvironment, testMutationMode, selectedTestMutationMode, allowPostRequests,
+          type: "start", packageRoot, repository, prompt, sessionId, resume, usage, mode, inputTokenLimit, toolApprovalMode, protectedPaths, fileAccess, dashboardPort, targetEnvironment, testMutationMode, selectedTestMutationMode, allowPostRequests, postWriteApproval,
           model: model ?? defaultModel,
           additionalDirs: [
             ...linkedDependencyDirectories(repository), ...artifactDirectories, ...runtimeDirectories
@@ -2335,6 +2337,7 @@ function publicJob(job) {
     fileAccess: job.fileAccess ?? null,
     inputTokenLimit: job.inputTokenLimit ?? 0,
     toolApprovalMode: job.toolApprovalMode ?? "ask",
+    postWriteApproved: Boolean(job.postWriteApproval?.revision),
     budgetExceeded: job.budgetExceeded === true,
     runtimeDirectoryGrants: (job.runtimeDirectoryGrants ?? []).map((scope) => scope.directory),
     canResume:
@@ -2757,6 +2760,7 @@ function pushActivity(job, entry) {
 
 function finishJob(job, result) {
   job.toolApprovalMode = "ask";
+  job.postWriteApproval = null;
   flushPartialOutput(job);
 
   if (result.error?.workspaceReview) {
@@ -2929,6 +2933,7 @@ function flushPartialOutput(job) {
 
 function holdJob(job) {
   job.toolApprovalMode = "ask";
+  job.postWriteApproval = null;
   flushPartialOutput(job);
   const activeStage =
     FIXLAB_STAGES.find((stage) => job.stages[stage].status === "running") ??
@@ -3429,6 +3434,7 @@ function listPlaywrightArtifacts(repository, { since = null } = {}) {
 
 function resetJobForResume(job) {
   job.toolApprovalMode = "ask";
+  job.postWriteApproval = null;
   const restartIndex =
     job.status === "passed"
       ? FIXLAB_STAGES.indexOf("diagnosis")
@@ -3948,7 +3954,7 @@ export function createDashboardServer({
     if (typeof job.testEvidence.allowPostRequests === "boolean") {
       configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "",
         job.testEvidence.allowPostRequests);
-      prompt += `\nThe job-start POST checkbox was ${job.testEvidence.allowPostRequests ? "selected" : "not selected"}. For DEV/SIT/UAT, ${job.testEvidence.allowPostRequests ? "POST request support is enabled" : "ask for an exact POST action when needed"} through fixlab_nonproduction_post only. Every data-changing action still requires separate exact destination/payload confirmation. No blanket write approval exists. Approved per-environment endpoint/test-record configuration and an existing authentication helper are required; if missing, name that prerequisite and block only the action. Explicit read-only/intercepted modes, API-only/unit-only contracts and production remain restricted. Keep ordinary validation read-only unless this separate per-action approval is actually granted; report approved-write evidence honestly after a real action.`;
+      prompt += `\n${job.postWriteApproval ? "The user explicitly authorized configured DEV/SIT/UAT POST writes for this job through the POST checkbox. Use fixlab_nonproduction_post without repeat confirmation; its approval is bound to this job, environment and reviewed profile/helper revision and expires when execution ends." : "No current job-scoped POST write approval exists. Every data-changing action still requires separate exact destination/payload confirmation through fixlab_nonproduction_post."} Verified read-only POST searches follow the repository query allowlist independently of this checkbox. Approved per-environment endpoint/test-record configuration and an existing authentication helper are required; if missing, name that prerequisite and block only the action. Explicit read-only/intercepted modes, API-only/unit-only contracts and production remain restricted. Never bypass browser guards or substitute a browser/shell write. Report approved-write evidence honestly after a real action; approval alone is not scenario success.`;
     }
     if (job.testEvidence.selectedMutationMode) {
       const effective = configuredTestSynthesis(
@@ -4200,6 +4206,7 @@ export function createDashboardServer({
         selectedTestMutationMode: job.testEvidence.selectedMutationMode ?? "",
         allowPostRequests: job.testEvidence.apiOnly || job.testEvidence.unitTestsOnly
           ? undefined : job.testEvidence.allowPostRequests,
+        postWriteApproval: job.postWriteApproval ?? undefined,
         protectedPaths,
         mode: job.mode,
         onUsage(usage) {
@@ -6377,6 +6384,23 @@ export function createDashboardServer({
           return;
         }
       }
+      if (body.postWriteApprovalConfirmed !== undefined &&
+          typeof body.postWriteApprovalConfirmed !== "boolean") {
+        sendJson(response, 400, { error: "postWriteApprovalConfirmed must be a boolean." });
+        return;
+      }
+      if (body.postWriteApprovalConfirmed === true) {
+        if (body.allowPostRequests !== true || runtime !== "copilot") {
+          sendJson(response, 400, { error: "Job-scoped POST approval requires the selected POST checkbox and native Copilot runtime." });
+          return;
+        }
+        const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+        if (request.headers.host !== new URL(expectedOrigin).host ||
+            request.headers.origin !== expectedOrigin) {
+          sendJson(response, 403, { error: "POST write approval requires the dashboard's exact loopback host and origin." });
+          return;
+        }
+      }
       const inputTokenLimit = body.inputTokenLimit ?? 0;
       if (!Number.isSafeInteger(inputTokenLimit) || inputTokenLimit < 0 ||
           (inputTokenLimit > 0 && runtime !== "copilot")) {
@@ -6591,6 +6615,16 @@ export function createDashboardServer({
         return;
       }
 
+      const jobId = randomUUID();
+      let postWriteApproval = null;
+      try {
+        if (body.postWriteApprovalConfirmed === true) {
+          postWriteApproval = createPostWriteApproval(resolvedRepository, targetEnvironment, jobId);
+        }
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+        return;
+      }
       shouldQueue =
         Boolean(activeHandle || currentJob?.postValidation) ||
         ["running", "blocked", "failed"].includes(currentJob?.status) ||
@@ -6608,7 +6642,6 @@ export function createDashboardServer({
       if (!shouldQueue) {
         archiveJob(currentJob);
       }
-      const jobId = randomUUID();
       if (body.routineFileAccess !== undefined && typeof body.routineFileAccess !== "boolean") {
         sendJson(response, 400, { error: "routineFileAccess must be an explicit boolean consent." });
         return;
@@ -6641,6 +6674,7 @@ export function createDashboardServer({
         workflow,
         permissionPreflight: body.permissionPreflight === true,
         toolApprovalMode,
+        postWriteApproval,
         fileAccess,
         inputTokenLimit,
         budgetExceeded: false,
@@ -6695,6 +6729,12 @@ export function createDashboardServer({
         partial: { stdout: "", stderr: "" }
       };
       job.holdRequested = false;
+      if (postWriteApproval) {
+        pushLog(job, {
+          index: job.nextLogIndex, timestamp: new Date().toISOString(), stream: "dashboard",
+          message: "The user explicitly authorized configured POST writes for this job and selected environment without repeat confirmation. Approval is revision-bound, memory-only and expires with this executor; production and read-only restrictions remain in effect."
+        });
+      }
       if (toolApprovalMode === "allow-all") {
         pushLog(job, {
           index: job.nextLogIndex, timestamp: new Date().toISOString(), stream: "dashboard",

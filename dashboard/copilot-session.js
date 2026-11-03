@@ -89,6 +89,8 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
     mutationMode: config.testMutationMode,
     selectedMutationMode: config.selectedTestMutationMode,
     allowPostRequests: config.allowPostRequests,
+    postWriteApproval: config.postWriteApproval,
+    jobId: config.sessionId,
     isReady: () => policyReady && !budgetReached
   });
   const options = {

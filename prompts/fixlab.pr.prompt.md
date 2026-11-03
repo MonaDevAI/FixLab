@@ -12,6 +12,23 @@ completed and running checks, browser evidence, skipped gates, and remaining
 risks. Never mark the PR ready or complete the PR stage until every required
 local gate passes or repository policy records an explicitly accepted outcome.
 
+Reusable PR learning: within the existing pr stage, only when source edits and
+PR publication are authorized, inspect task-relevant existing repository skills
+for verified, non-obvious, reusable knowledge from this change. Prefer to update
+a matching skill; otherwise create `.github/skills/<topic>/SKILL.md` with YAML name
+and description; the name must match the lowercase-hyphenated topic directory.
+Capture when to use it, the verified solution, repository file/test references,
+exact working directories and validation commands, and pitfalls. Skills are for
+future developers and relevant agent tasks, not a diary of the current run.
+Include the skill in the same reviewed PR before committing/pushing; self-review
+its instructions and run applicable documentation/skill checks. In the concise
+PR body, link the added/updated skill or state no new reusable learning when none
+qualifies; do not create empty, speculative or duplicate skills. Use no separate
+roadmap stage. Read-only jobs must not write skills, commit or publish. Respect
+repository instruction governance and existing approval boundaries. Do not add
+allowed-tools or broaden permissions. Never include credentials, personal/customer
+data, private endpoints or raw transcripts.
+
 Keep the description short, normally at most 120 words unless required template
 fields or material risks need more. Preserve required headings, a brief
 problem/change summary, compact actual validation outcomes and material

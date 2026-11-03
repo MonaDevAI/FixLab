@@ -26,6 +26,7 @@
     "dashboard",
     "docs",
     "examples",
+    "installation.md",
     "LICENSE",
     "mcp",
     "plugin.json",

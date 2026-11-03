@@ -50,7 +50,7 @@ import { runValidationGate } from "./validation-gate-client.js";
 import { installNotifications } from "./notifications.js";
 import { linkedApiProofPlan, runLinkedApiProof } from "../dashboard/linked-api-proof.js";
 import { runPortalApiProof } from "../dashboard/portal-api-proof.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE } from "../dashboard/workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "../dashboard/workflow-policy.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -311,6 +311,18 @@ function loadProfile(repository) {
   }
 }
 
+function playwrightWorkingDirectoryError(workingDirectory) {
+  const exists = existsSync(workingDirectory);
+  if (exists && statSync(workingDirectory).isDirectory()) {
+    return null;
+  }
+  return [
+    `working directory is ${exists ? "not a directory" : "missing"}: ${workingDirectory}.`,
+    `Update browserAutomation.workingDirectory (or its applications.frontend.workingDirectory fallback) in ${profileRelativePath} to the actual existing application or test directory, relative to the repository root.`,
+    "The template's frontend path is an example. Do not create an empty frontend folder to satisfy this check."
+  ].join(" ");
+}
+
 function checkPlaywright(repository, profile) {
   const configuration = profile?.browserAutomation ?? {};
   const apiOnly = configuration.mode === "api";
@@ -330,11 +342,11 @@ function checkPlaywright(repository, profile) {
   const browserName = configuration.browser ?? "chromium";
   const browserChannel = configuration.channel;
 
-  if (!existsSync(workingDirectory)) {
-    const detail = `working directory is missing: ${workingDirectory}`;
+  const directoryError = playwrightWorkingDirectoryError(workingDirectory);
+  if (directoryError) {
     return {
-      packageCheck: { name: "Playwright package", ok: false, detail },
-      browserCheck: { name: runtimeName, ok: false, detail }
+      packageCheck: { name: "Playwright package", ok: false, detail: directoryError },
+      browserCheck: { name: runtimeName, ok: false, detail: directoryError }
     };
   }
 
@@ -362,12 +374,13 @@ function checkPlaywright(repository, profile) {
     ok: packageResult.status === 0 && Boolean(resolvedPackage),
     detail:
       packageResult.error?.message ??
-      resolvedPackage ??
-      packageResult.stderr?.trim() ??
-      "package resolution failed"
+      (resolvedPackage ||
+        packageResult.stderr?.trim() ||
+        "package resolution failed")
   };
 
   if (!packageCheck.ok) {
+    packageCheck.detail += `; verify browserAutomation.workingDirectory in ${profileRelativePath} points to the real application or test directory before reviewing "fixlab setup-playwright". An empty frontend folder does not configure the application.`;
     return {
       packageCheck,
       browserCheck: {
@@ -516,6 +529,10 @@ function init(repository) {
       : "FixLab repository setup is already present."
   );
   console.log("Update its paths, commands, ports, and allowed environments.");
+  console.log(
+    "The frontend and backend directories are example paths, not folders to create. Configure the actual application and test paths in the repository profile."
+  );
+  console.log("Do not create empty application folders to satisfy Doctor.");
   return 0;
 }
 
@@ -626,7 +643,8 @@ function doctor(repository, runtime) {
   );
   const packageManager = checkPackageManager(
     profile?.validation?.commands?.frontendRestore,
-    existsSync(frontendWorkingDirectory) ? frontendWorkingDirectory : repository
+    existsSync(frontendWorkingDirectory) && statSync(frontendWorkingDirectory).isDirectory()
+      ? frontendWorkingDirectory : repository
   );
   if (packageManager) {
     checks.push(packageManager);
@@ -847,8 +865,10 @@ function setupPlaywright(repository, approved) {
       profile.applications?.frontend?.workingDirectory ??
       "."
   );
-  if (!existsSync(workingDirectory)) {
-    console.error(`Playwright working directory is missing: ${workingDirectory}`);
+  const directoryError = playwrightWorkingDirectoryError(workingDirectory);
+  if (directoryError) {
+    console.error(`Playwright ${directoryError}`);
+    printTroubleshooting();
     return 1;
   }
 
@@ -1050,10 +1070,13 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
   const guidance = [
     COPILOT_EXECUTION_GUIDANCE,
     ...(request ? [RUNTIME_RECOVERY_GUIDANCE] : []),
-    // Interactive sessions use the packaged agent guidance, keeping Windows argv bounded.
+    // Interactive sessions use packaged guidance; request prompts go through stdin.
+    ...(request && profile.validation?.liveTestsRequired !== false &&
+      profile.browserAutomation?.mode !== "api" ? [READ_ONLY_POST_GUIDANCE] : []),
     ...(request ? [componentRetrievalGuidance(profile, request)] : []),
     ...(profile.validation?.liveTestsRequired === false ? [UNIT_TEST_ONLY_GUIDANCE] : []),
     ...(!readOnly ? [CONCISE_PR_GUIDANCE] : []),
+    ...(!readOnly && request ? [PR_LEARNING_GUIDANCE] : []),
     ...(profile.browserAutomation?.mode === "api" ? [API_ONLY_PLAYWRIGHT_GUIDANCE] : []),
     "For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.",
     "Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For 'test this PR', verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.",

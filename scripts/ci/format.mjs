@@ -31,6 +31,7 @@ const rootFiles = [
   "AGENTS.md",
   "CHANGELOG.md",
   "CONTRIBUTING.md",
+  "installation.md",
   "README.md",
   "SECURITY.md",
   "agency.json",

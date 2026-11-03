@@ -246,7 +246,7 @@ test("dashboard submits per-run interception without optional folder preflight",
   await expect(page.locator("#job-test-mutation-mode")).toHaveValue("none");
 });
 
-test("POST checkbox supports DEV/SIT/UAT and keeps unchecked requests on confirmation", async ({ page }) => {
+test("POST checkbox explicitly approves this job only and keeps unchecked writes on confirmation", async ({ page }) => {
   const posts = [];
   await mockChatWorkspace(page, { environments: ["dev", "sit", "uat"] });
   await page.route("**/api/jobs", async (route) => {
@@ -262,7 +262,8 @@ test("POST checkbox supports DEV/SIT/UAT and keeps unchecked requests on confirm
   for (const environment of ["dev", "sit", "uat"]) {
     await page.locator("#target-environment").selectOption(environment);
     await expect(checkbox).toBeEnabled();
-    await expect(checkbox).toBeChecked();
+    await expect(checkbox).not.toBeChecked();
+    await checkbox.check();
   }
   await checkbox.uncheck();
   await page.waitForResponse("**/api/status");
@@ -274,6 +275,16 @@ test("POST checkbox supports DEV/SIT/UAT and keeps unchecked requests on confirm
   await expect.poll(() => posts.length).toBe(1);
   expect(posts[0].targetEnvironment).toBe("uat");
   expect(posts[0].allowPostRequests).toBe(false);
+  expect(posts[0].postWriteApprovalConfirmed).toBe(false);
+  await expect(checkbox).not.toBeChecked();
+  await page.waitForResponse("**/api/status");
+  await page.locator("#request").fill("Synthetic explicitly approved POST writes.");
+  await checkbox.check();
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts[1].allowPostRequests).toBe(true);
+  expect(posts[1].postWriteApprovalConfirmed).toBe(true);
+  await expect(checkbox).not.toBeChecked();
   await page.locator("#job-test-mutation-mode").selectOption("none");
   await expect(checkbox).toBeDisabled();
   await expect(checkbox).not.toBeChecked();
