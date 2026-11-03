@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createDevPostTool, createPostWriteApproval } from "../dashboard/dev-post.js";
+import { createDevPostTool } from "../dashboard/dev-post.js";
 import { runCopilotSession } from "../dashboard/copilot-session.js";
 import { createRuntimeRequestBridge, runtimeRequestId } from "../dashboard/runtime-requests.js";
 
@@ -38,7 +38,7 @@ function fixture(t, overrides = {}) {
     tool: () => createDevPostTool(settings) };
 }
 
-test("legacy DEV/SIT/UAT POST preferences still require individual confirmation", async (t) => {
+test("DEV/SIT/UAT POST checkboxes enable requests or defer confirmation without approving writes", async (t) => {
   for (const environment of ["DEV", "SIT", "UAT"]) {
     for (const enabled of [true, false]) {
       const state = fixture(t);
@@ -79,127 +79,6 @@ test("legacy DEV/SIT/UAT POST preferences still require individual confirmation"
       }
     }
   }
-});
-
-test("explicit job-scoped POST approval authorizes configured DEV/SIT/UAT writes without repeat prompts", async (t) => {
-  for (const environment of ["DEV", "SIT", "UAT"]) {
-    const state = fixture(t);
-    const key = environment.toLowerCase();
-    const configuration = structuredClone(state.profile.browserAutomation.dataSafety.devPost);
-    configuration.actions[0].url = `https://api.${key}.example.test/items`;
-    delete state.profile.browserAutomation.dataSafety.devPost;
-    state.profile.browserAutomation.dataSafety.post = { [key]: configuration };
-    state.profile.environments = ["DEV", "SIT", "UAT"];
-    state.save();
-    const jobId = "11111111-1111-4111-8111-111111111111";
-    Object.assign(state.settings, {
-      jobId, targetEnvironment: environment, allowPostRequests: true,
-      postWriteApproval: createPostWriteApproval(state.repository, environment, jobId)
-    });
-    state.args.url = configuration.actions[0].url;
-    const tool = state.tool();
-    for (let action = 0; action < 2; action++) {
-      const result = await tool.handler(state.args);
-      assert.equal(result.environment, environment);
-      assert.equal(result.mutationMode, "approved-write");
-      assert.equal(result.validationPassed, false);
-    }
-    assert.equal(state.prompts.length, 0);
-    assert.equal(state.requests.length, 2);
-    await assert.rejects(tool.handler({ ...state.args, payload: { name: "OTHER_RECORD" } }), /allowlisted/u);
-    await assert.rejects(tool.handler({ ...state.args, url: "https://api.other.example.test/items" }), /allowlisted/u);
-    assert.equal(state.requests.length, 2);
-  }
-});
-
-test("job-scoped POST approval is bound to the job, environment and reviewed profile/helper", async (t) => {
-  for (const change of ["job", "environment", "profile", "helper", "unchecked"]) {
-    const state = fixture(t, { jobId: "11111111-1111-4111-8111-111111111111", allowPostRequests: true });
-    state.settings.postWriteApproval = createPostWriteApproval(state.repository, "DEV", state.settings.jobId);
-    if (change === "job") { state.settings.jobId = "22222222-2222-4222-8222-222222222222"; }
-    if (change === "environment") { state.settings.targetEnvironment = "SIT"; }
-    if (change === "unchecked") { state.settings.allowPostRequests = false; }
-    if (["job", "environment", "unchecked"].includes(change)) {
-      assert.throws(state.tool, /job-scoped POST approval/u);
-    } else {
-      const tool = state.tool();
-      if (change === "profile") { state.profile.name = "Changed"; state.save(); }
-      if (change === "helper") { writeFileSync(state.helper, `${readFileSync(state.helper, "utf8")}\n`); }
-      await assert.rejects(tool.handler(state.args), /changed.*newly reviewed job/u);
-    }
-    assert.equal(state.prompts.length, 0);
-    assert.equal(state.requests.length, 0);
-  }
-});
-
-test("job-scoped POST approval stops further writes after failed or ambiguous attempts", async (t) => {
-  for (const status of [302, 401, 500, "network", "auth", "empty-auth"]) {
-    const state = fixture(t, { jobId: "11111111-1111-4111-8111-111111111111", allowPostRequests: true });
-    if (status === "auth") {
-      writeFileSync(state.helper, 'export async function withApiToken() { throw new Error("synthetic-private-value"); }\n');
-    }
-    if (status === "empty-auth") {
-      writeFileSync(state.helper, 'export async function withApiToken() {}\n');
-    }
-    state.settings.postWriteApproval = createPostWriteApproval(state.repository, "DEV", state.settings.jobId);
-    state.settings.request = async (url, options) => {
-      state.requests.push({ url, options });
-      if (status === "network") { throw new Error("synthetic-private-value"); }
-      return new Response(null, { status: typeof status === "number" ? status : 201 });
-    };
-    const tool = state.tool();
-    await assert.rejects(tool.handler(state.args), /Approval is spent|no request was sent|did not complete one request/u);
-    await assert.rejects(tool.handler(state.args), /job-scoped POST approval.*stopped/u);
-    assert.equal(state.prompts.length, 0);
-    assert.equal(state.requests.length, ["auth", "empty-auth"].includes(status) ? 0 : 1);
-  }
-});
-
-test("checkbox approval cannot gain endpoint scope added after job creation", async (t) => {
-  const state = fixture(t, { jobId: "11111111-1111-4111-8111-111111111111", allowPostRequests: true });
-  const configuration = state.profile.browserAutomation.dataSafety.devPost;
-  delete state.profile.browserAutomation.dataSafety.devPost;
-  state.save();
-  state.settings.postWriteApproval = createPostWriteApproval(state.repository, "DEV", state.settings.jobId);
-  const tool = state.tool();
-  await assert.rejects(tool.handler(state.args), /not configured/u);
-  state.profile.browserAutomation.dataSafety.devPost = configuration;
-  state.save();
-  await assert.rejects(tool.handler(state.args), /changed.*newly reviewed job/u);
-  assert.equal(state.prompts.length, 0);
-  assert.equal(state.requests.length, 0);
-});
-
-test("native SDK consumes job-scoped POST approval without prompting and revokes it on shutdown", async (t) => {
-  const state = fixture(t);
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = state.settings.request;
-  t.after(() => { globalThis.fetch = originalFetch; });
-  const sessionId = "11111111-1111-4111-8111-111111111111";
-  let exposedTool;
-  await runCopilotSession({
-    repository: state.repository, sessionId, targetEnvironment: "DEV", allowPostRequests: true,
-    postWriteApproval: createPostWriteApproval(state.repository, "DEV", sessionId),
-    testMutationMode: "approved-write", prompt: "Synthetic approved test-record write."
-  }, {
-    output() {},
-    async ask() { assert.fail("checked POST must not ask for a second approval"); },
-    client: {
-      async start() {},
-      async createSession(options) {
-        exposedTool = options.tools[0];
-        return {
-          rpc: { managedSettings: { async get() { return { failClosed: false }; } } }, on() {},
-          async sendAndWait() {
-            assert.equal((await exposedTool.handler(state.args)).status, 201);
-          }
-        };
-      },
-      async stop() { return []; }
-    }
-  });
-  await assert.rejects(exposedTool.handler(state.args), /policy.*shutdown/u);
-  assert.equal(state.requests.length, 1);
 });
 
 test("deferred POST reports missing setup without asking for unsafe approval", async (t) => {

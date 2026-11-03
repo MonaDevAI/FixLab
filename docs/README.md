@@ -1,16 +1,14 @@
 # FixLab documentation
 
 Use this index instead of treating every guide as an installation checklist.
-The Markdown guides are the maintained source of truth. The downloadable Word
-installation quickstart is a convenience copy; use the online guides for updates.
+The Markdown guides are the maintained source of truth; the superseded
+installation/smoke-test Word guide has been consolidated into them.
 
 ## Install and run your first job
 
 | Guide | What it covers |
 | --- | --- |
-| [First installation](../installation.md) | Prerequisites, machine changes, and reviewed setup |
-| [Detailed installation](installation.md) | Guided/manual setup, updates, and uninstall |
-| [Word installation quickstart](FixLab-Installation-Guide-Quickstart.docx) | Downloadable fresh Windows setup and installation troubleshooting |
+| [Installation](installation.md) | Prerequisites, guided/manual setup, updates, and uninstall |
 | [Copilot installation prompt](installation.md#copy-paste-installation-prompt) | One reviewed setup request to paste into Copilot |
 | [Visual Studio Code](installation.md#install-and-use-in-visual-studio-code) | CLI setup and discovery of the repository custom agent |
 | [Getting started](getting-started.md) | First validation request, dashboard controls, evidence, and recovery |

@@ -26,41 +26,21 @@ repackage the rejected operation to evade review. **Deny and request safe recove
 reuses existing reviewed tests/helpers in the same blocked stage; preserve
 completed evidence and failures, and stop if a safe prerequisite is missing.
 
-For authorized DEV/SIT/UAT data-changing POST actions, discover
+For individually authorized DEV/SIT/UAT POST actions, discover
 `fixlab_nonproduction_post` in a native Copilot dashboard job. The **Allow POST
-writes** checkbox is off by default. Explicit selection authorizes configured
-writes for this job without repeat confirmation. Unchecked or recovered jobs
-require expiring, single-use human confirmation of each exact URL and complete
-payload. Allow all and batch approval never apply. Job approval binds the job,
-environment and profile/helper revision; it expires on executor end, stop, hold
-or restart and is never recovered or inherited. Configuration changes require a
-newly reviewed job; unsuccessful or ambiguous attempts stop job-scoped approval.
-`dataSafety.post.dev`, `.sit` and `.uat` hold separate
+requests** start checkbox enables requests; unchecked, ask when an action is needed.
+It never approves writes. `dataSafety.post.dev`, `.sit` and `.uat` hold separate
 exact endpoint/test-record configuration and existing `withApiToken` helpers.
 Legacy DEV `fixlab_dev_post` and `dataSafety.devPost` remain supported.
-No credentials or response body enter
+Each exact URL and complete
+synthetic/approved test payload requires expiring, single-use human confirmation;
+Allow all and batch approval never apply. No credentials or response body enter
 the result. Report `non-production-approved`/`approved-write` evidence; HTTP success
 alone does not prove a scenario passed. No automatic retries or redirects: an
 ambiguous result requires human inspection before any fresh action. Other
 environments, explicit read-only/intercepted selections, API-only read-only contracts, unit-only validation and human sign-in
 remain unchanged. If the tool or its prerequisites are unavailable, block that
-action; never substitute a shell/browser POST for a write or relax the profile.
-
-Verified read-only POST searches: for browser live checks permitting real backend
-reads, require a reviewed query contract and implementation proving no
-data/workflow mutation. Match the exact approved environment, origin and path
-through the existing browser/auth guard, including redirects and the supported
-query payload. Route names and the job POST checkbox are not approval. Run
-permitted queries through existing authenticated helpers and use genuine returned
-records in focused assertions, even when writes are intercepted. A missing query
-allowlist entry is a policy blocker, not backend unavailability: inspect bounded
-controller/service evidence and request a narrowly scoped configuration review.
-Do not silently substitute synthetic data, disable guards, add wildcard/global
-POST grants or bypass with another client. Read-only jobs must not edit
-configuration; approved changes require a fresh reviewed context/job. Keep Save,
-Submit, Approve and autosave behind existing write controls. Do not override
-synthetic-only, API-only, unit-only or production policy. Authentication/configuration
-reads and synthetic UI evidence do not prove business-data integration.
+action; never substitute a shell/browser POST or relax the profile.
 
 When `validation.liveTestsRequired` is `false`, follow unit-test-only validation:
 run configured local unit tests and required offline checks, without application
@@ -209,23 +189,6 @@ keep validation status and risks current in the PR, and never mark it ready for
 review until every required local gate passes or repository policy records an
 explicitly accepted outcome.
 
-Reusable PR learning: within the existing pr stage, only when source edits and
-PR publication are authorized, inspect task-relevant existing repository skills
-for verified, non-obvious, reusable knowledge from this change. Prefer to update
-a matching skill; otherwise create `.github/skills/<topic>/SKILL.md` with YAML name
-and description; the name must match the lowercase-hyphenated topic directory.
-Capture when to use it, the verified solution, repository file/test references,
-exact working directories and validation commands, and pitfalls. Skills are for
-future developers and relevant agent tasks, not a diary of the current run.
-Include the skill in the same reviewed PR before committing/pushing; self-review
-its instructions and run applicable documentation/skill checks. In the concise
-PR body, link the added/updated skill or state no new reusable learning when none
-qualifies; do not create empty, speculative or duplicate skills. Use no separate
-roadmap stage. Read-only jobs must not write skills, commit or publish. Respect
-repository instruction governance and existing approval boundaries. Do not add
-allowed-tools or broaden permissions. Never include credentials, personal/customer
-data, private endpoints or raw transcripts.
-
 Honor an explicit publication choice in every mode: strict plus draft stays
 draft, with provider `isDraft: true` verified. Legacy strict policy with no
 publication preference retains ready intent. Strict required checks never change.
@@ -267,8 +230,7 @@ the user selects any profile-approved non-production environment, use that
 backend and API as the primary business-data source. Keep access read-only and
 intercept mutations. Fall back to `synthetic-intercepted` only when the backend
 is unreachable, access prevents the read, or no safe records can exercise the
-required behavior. Guard/query-allowlist rejections require configuration review,
-not fallback. Preserve the exact limitation, do not replace an expected
+required behavior. Preserve the exact limitation, do not replace an expected
 empty state with synthetic data, and state that a synthetic pass proves UI
 behavior only rather than validation of the selected backend or its data.
 

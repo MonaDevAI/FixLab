@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter, once } from "node:events";
-import childProcess, { spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import {
   existsSync,
@@ -14,7 +14,6 @@ import {
 } from "node:fs";
 import { createServer as createHttpServer, request as createHttpRequest } from "node:http";
 import { createServer } from "node:net";
-import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, parse } from "node:path";
 import { PassThrough, Readable, Writable } from "node:stream";
@@ -1288,27 +1287,9 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
     return { completion, terminate() { finish({ code: null, signal: "SIGTERM" }); } };
   };
   let current = await startDashboard(repository, executor);
-  // Keep fixture connections separate from the dashboard's internal fetch pool.
-  const requestJson = (path, body) => new Promise((resolve, reject) => {
-    const payload = body === undefined ? undefined : JSON.stringify(body);
-    const request = createHttpRequest(`${current.url}${path}`, {
-      method: payload === undefined ? "GET" : "POST",
-      agent: false,
-      headers: payload === undefined ? {} : {
-        "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload)
-      }
-    }, (response) => {
-      let content = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => { content += chunk; });
-      response.once("error", reject);
-      response.once("end", () => resolve({
-        response: { status: response.statusCode }, body: content
-      }));
-    });
-    request.once("error", reject);
-    request.end(payload);
-  }).then(({ response, body }) => ({ response, body: JSON.parse(body) }));
+  const post = (path, body) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
   const waitUntil = async (condition) => {
     for (let attempt = 0; attempt < 100 && !condition(); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1320,7 +1301,7 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
     execution.finish({ code: 0 });
   };
   try {
-    const first = await requestJson("/api/jobs", { request: "First shared fix.", mode: "fix-and-validate" });
+    const first = await post("/api/jobs", { request: "First shared fix.", mode: "fix-and-validate" });
     assert.equal(first.response.status, 202);
     const firstId = first.body.job.id;
     const firstBranch = first.body.job.sharedWorkspace.branch;
@@ -1332,11 +1313,11 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
     const firstCommit = git(repository, ["rev-parse", "HEAD"]);
     block(executions[0]);
     await waitUntil(() => !existsSync(join(repository, ".git", "fixlab", "executor-lease")));
-    await requestJson("/api/jobs/hold", { jobId: firstId });
+    await post("/api/jobs/hold", { jobId: firstId });
     writeFileSync(join(source, "upstream.txt"), "fresh develop");
     git(source, ["add", "upstream.txt"]);
     git(source, ["commit", "--quiet", "-m", "advance develop"]);
-    const second = await requestJson("/api/jobs", { request: "Second independent fix.", mode: "fix-and-validate" });
+    const second = await post("/api/jobs", { request: "Second independent fix.", mode: "fix-and-validate" });
     assert.equal(second.response.status, 202);
     assert.notEqual(second.body.job.sharedWorkspace.branch, firstBranch);
     assert.equal(second.body.job.sharedWorkspace.baseCommit, git(source, ["rev-parse", "HEAD"]));
@@ -1345,12 +1326,12 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
     assert.equal(readFileSync(join(repository, "upstream.txt"), "utf8"), "fresh develop");
     block(executions[1]);
     await waitUntil(() => !existsSync(join(repository, ".git", "fixlab", "executor-lease")));
-    await requestJson("/api/jobs/hold", { jobId: second.body.job.id });
+    await post("/api/jobs/hold", { jobId: second.body.job.id });
     await current.dashboard.close();
     current = await startDashboard(repository, executor);
-    const restored = await requestJson("/api/status");
+    const restored = await jsonRequest(current.url, "/api/status");
     assert.equal(restored.body.held.find((job) => job.id === firstId).sharedWorkspace.branch, firstBranch);
-    const resumed = await requestJson("/api/jobs/resume", { jobId: firstId });
+    const resumed = await post("/api/jobs/resume", { jobId: firstId });
     assert.equal(resumed.response.status, 202);
     assert.equal(executions[2].input.sessionId, firstId);
     assert.equal(executions[2].input.resume, true);
@@ -1359,7 +1340,7 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
     assert.equal(readFileSync(join(repository, "first-fix.txt"), "utf8"), "first fix");
     block(executions[2]);
     await waitUntil(() => !existsSync(join(repository, ".git", "fixlab", "executor-lease")));
-    const restarted = await requestJson("/api/jobs/restart", { jobId: firstId });
+    const restarted = await post("/api/jobs/restart", { jobId: firstId });
     assert.equal(restarted.response.status, 202);
     assert.notEqual(restarted.body.job.id, firstId);
     assert.notEqual(restarted.body.job.sharedWorkspace.branch, firstBranch);
@@ -1565,38 +1546,6 @@ async function approvePreflightDirectory(url, job, directory) {
   });
 }
 
-test("idle status polling and cache inspection hide their Git windows", async (context) => {
-  const repository = createGitRepository();
-  const { dashboard, url } = await startDashboard(repository, () => {
-    throw new Error("Idle status polling must not start an executor");
-  });
-  const invocation = context.mock.method(childProcess, "spawnSync");
-  syncBuiltinESMExports();
-  try {
-    for (let index = 0; index < 2; index += 1) {
-      const status = await jsonRequest(url, "/api/status");
-      assert.equal(status.response.status, 200);
-      assert.equal(status.body.readiness.profileReady, true);
-      assert.equal(status.body.job, null);
-    }
-    assert.ok(createCacheContext(repository)?.key);
-    const probes = invocation.mock.calls
-      .map((call) => call.arguments)
-      .filter(([command]) => command === "git");
-    assert.ok(probes.filter(([, args]) => args.includes("--git-common-dir")).length >= 3);
-    assert.ok(probes.some(([, args]) => args.includes("HEAD")));
-    for (const [, args, options] of probes) {
-      assert.equal(options.windowsHide, true, `Git probe must not open a window: ${args.join(" ")}`);
-      assert.equal(options.shell, false);
-    }
-  } finally {
-    invocation.mock.restore();
-    syncBuiltinESMExports();
-    await dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
 test("job admission rejects invalid default validation profiles without stopping the dashboard", async () => {
   const repository = createGitRepository();
   let executions = 0;
@@ -1725,103 +1674,12 @@ test("DEV/SIT/UAT POST preferences reach the executor, queue and recovered job w
     }
     assert.equal(launches.length, 1);
     assert.equal(launches[0].allowPostRequests, true);
-    assert.equal(launches[0].postWriteApproval, undefined);
-    assert.match(launches[0].prompt, /Verified read-only POST searches:/u);
-    assert.match(launches[0].prompt, /query allowlist independently of this checkbox/u);
     assert.match(launches[0].prompt, /Every data-changing action still requires separate exact destination\/payload confirmation/u);
     await running.dashboard.close();
     running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
     const restored = await jsonRequest(running.url, "/api/job");
     assert.equal(restored.body.job.testEvidence.allowPostRequests, true);
     assert.equal(restored.body.job.toolApprovalMode, "ask");
-  } finally {
-    await running.dashboard.close();
-    rmSync(repository, { recursive: true, force: true });
-  }
-});
-
-test("POST checkbox write consent is origin-bound, job-scoped and never recovered or inherited", async () => {
-  const repository = createGitRepository();
-  const profile = validProfile();
-  profile.environments = ["dev", "sit", "uat"];
-  profile.browserAutomation.dataSafety.post = Object.fromEntries(profile.environments.map((environment) => [
-    environment, { scope: "api://example-service/access", sessionHelper: "post-session.mjs",
-      actions: [{ url: `https://api.${environment}.example.test/items`,
-        testRecord: { field: "name", value: "FIXLAB_TEST_001" } }] }
-  ]));
-  writeFileSync(join(repository, "post-session.mjs"),
-    'export async function withApiToken(options, run) { await run("synthetic-value"); }\n');
-  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
-  const launches = [];
-  const executor = (input) => {
-    launches.push(input);
-    return { completion: new Promise(() => {}) };
-  };
-  let running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
-  try {
-    const post = (changes = {}, origin = running.url) => jsonRequest(running.url, "/api/jobs", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) },
-      body: JSON.stringify({ request: "Synthetic approved test-record writes.", mode: "validate-only",
-        targetEnvironment: "dev", allowPostRequests: true, postWriteApprovalConfirmed: true, ...changes })
-    });
-    for (const changes of [
-      { postWriteApprovalConfirmed: "yes" }, { postWriteApprovalConfirmed: null },
-      { allowPostRequests: false },
-      { testMutationMode: "none" }, { testMutationMode: "intercepted" }
-    ]) {
-      assert.equal((await post(changes)).response.status, 400);
-    }
-    for (const toolApprovalMode of [undefined, "ask", "allow-all"]) {
-      for (const origin of ["", "https://example.invalid"]) {
-        assert.equal((await post({ toolApprovalMode, allowAllConfirmed: true }, origin)).response.status, 403);
-      }
-    }
-    const wrongHost = await new Promise((resolveResponse, reject) => {
-      const request = createHttpRequest(`${running.url}/api/jobs`, {
-        method: "POST",
-        headers: { Host: "example.invalid", Origin: running.url, "Content-Type": "application/json" }
-      }, (response) => {
-        response.resume();
-        response.once("end", () => resolveResponse(response.statusCode));
-      });
-      request.once("error", reject);
-      request.end(JSON.stringify({ request: "Synthetic rejected origin.", mode: "validate-only",
-        targetEnvironment: "dev", allowPostRequests: true, postWriteApprovalConfirmed: true }));
-    });
-    assert.equal(wrongHost, 403);
-    assert.equal(launches.length, 0);
-    const created = await post();
-    assert.equal(created.response.status, 202, created.body.error);
-    assert.equal(created.body.job.postWriteApproved, true);
-    assert.equal(launches[0].postWriteApproval.jobId, created.body.job.id);
-    assert.equal(launches[0].postWriteApproval.environment, "dev");
-    assert.match(launches[0].postWriteApproval.revision, /^[a-f0-9]{64}$/u);
-    assert.match(launches[0].prompt, /without repeat confirmation/u);
-    assert.match(launches[0].prompt, /query allowlist independently of this checkbox/u);
-    assert.equal((await post({ postWriteApprovalConfirmed: false })).body.queue[0].postWriteApproved, false);
-    const queued = await post({ targetEnvironment: "sit" });
-    assert.equal(queued.body.queue[1].postWriteApproved, true);
-    assert.notEqual(queued.body.queue[1].id, created.body.job.id);
-    const held = await jsonRequest(running.url, "/api/jobs/hold", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId: queued.body.queue[1].id })
-    });
-    assert.equal(held.response.status, 202, held.body.error);
-    assert.equal(held.body.held[0].postWriteApproved, false);
-    const snapshot = readFileSync(join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json"), "utf8");
-    assert.doesNotMatch(snapshot, /"postWriteApproval":/u);
-    await running.dashboard.close();
-    running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
-    const recovered = (await jsonRequest(running.url, "/api/status")).body;
-    assert.equal(recovered.job.postWriteApproved, false);
-    assert.ok([...recovered.queue, ...recovered.held].every((job) => job.postWriteApproved === false));
-    const resumed = await jsonRequest(running.url, "/api/job/input", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "retry", details: "Continue with individual write review." })
-    });
-    assert.equal(resumed.response.status, 202, resumed.body.error);
-    assert.equal(launches.at(-1).postWriteApproval, undefined);
   } finally {
     await running.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -2087,9 +1945,6 @@ process.stdin.once("data", (chunk) => {
   const valid = config.inputTokenLimit === 100 &&
     config.fileAccess.mode === "source-read-write" &&
     config.fileAccess.jobId === config.sessionId &&
-    config.postWriteApproval.jobId === config.sessionId &&
-    config.postWriteApproval.environment === "dev" &&
-    config.postWriteApproval.revision === "a".repeat(64) &&
     config.protectedPaths.length === 1 && config.protectedPaths[0].endsWith("session.js");
   process.stdout.write(JSON.stringify({
     type: "usage", usage: { inputTokens: 110, cachedInputTokens: 90, cacheWriteTokens: 20, outputTokens: 5 }
@@ -2107,7 +1962,6 @@ setInterval(() => {}, 1000);
   try {
     handle = createCopilotExecutor({ packageRoot: runtime })({
       repository, sessionId, prompt: "Synthetic owned budget protocol.",
-      postWriteApproval: { jobId: sessionId, environment: "dev", revision: "a".repeat(64) },
       fileAccess: { mode: "source-read-write", repository: realpathSync.native(repository), jobId: sessionId },
       inputTokenLimit: 100, protectedPaths: [join(repository, "session.js")],
       onUsage(value) { usage.push(value); },

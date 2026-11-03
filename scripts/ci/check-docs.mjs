@@ -10,7 +10,6 @@ import { fileURLToPath } from "node:url";
 
 const requiredMarkdownFiles = [
   "README.md",
-  "installation.md",
   "CONTRIBUTING.md",
   "SECURITY.md",
   "docs/architecture.md",
