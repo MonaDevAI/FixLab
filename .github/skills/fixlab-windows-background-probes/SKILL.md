@@ -8,7 +8,8 @@ description: Diagnose brief Git windows during idle FixLab polling and keep back
 ## When to use
 
 Use when Git console windows flash during idle dashboard/chat polling, or when
-adding background repository probes to those paths.
+adding background repository probes to those paths. Also use for loopback
+connection resets in same-process tests around Git work or dashboard restarts.
 
 ## Verified solution
 
@@ -28,6 +29,24 @@ Keep `windowsHide: true` and `shell: false` on both background `spawnSync` helpe
 Preserve command arguments, output handling and existing ownership checks.
 Do not disable polling or change the owned executor's containment behavior to
 hide windows created by a different background helper.
+
+## Same-process HTTP fixtures
+
+Keep fixture requests separate from the runtime's global fetch pool and its
+`/api/session` self-probes. Blocking Git work or restarting a server can expose
+stale pooled sockets. The dashboard server suite's `jsonRequest` uses
+`node:http` with `agent: false`, preserving real HTTP without retries. A
+`Connection: close` header alone can still select an already pooled socket.
+
+The socket-isolation regression verifies distinct fixture/probe connections,
+GET/POST methods, JSON payloads, headers and status codes:
+
+```powershell
+node --test --test-name-pattern="dashboard JSON fixtures isolate|connected Copilot recovery reuses|shared dashboard jobs refresh develop|idle finalization retains" test\dashboard-server.test.js
+```
+
+Do not treat a separately passing rerun as proof that the full suite passed,
+or increase retries, deadlines or concurrency to conceal a failure.
 
 ## Validation
 

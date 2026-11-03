@@ -1288,27 +1288,9 @@ test("shared dashboard jobs refresh develop, reuse one checkout and reacquire he
     return { completion, terminate() { finish({ code: null, signal: "SIGTERM" }); } };
   };
   let current = await startDashboard(repository, executor);
-  // Keep fixture connections separate from the dashboard's internal fetch pool.
-  const requestJson = (path, body) => new Promise((resolve, reject) => {
-    const payload = body === undefined ? undefined : JSON.stringify(body);
-    const request = createHttpRequest(`${current.url}${path}`, {
-      method: payload === undefined ? "GET" : "POST",
-      agent: false,
-      headers: payload === undefined ? {} : {
-        "Content-Type": "application/json", "Content-Length": Buffer.byteLength(payload)
-      }
-    }, (response) => {
-      let content = "";
-      response.setEncoding("utf8");
-      response.on("data", (chunk) => { content += chunk; });
-      response.once("error", reject);
-      response.once("end", () => resolve({
-        response: { status: response.statusCode }, body: content
-      }));
-    });
-    request.once("error", reject);
-    request.end(payload);
-  }).then(({ response, body }) => ({ response, body: JSON.parse(body) }));
+  const requestJson = (path, body) => jsonRequest(current.url, path, body === undefined ? undefined : {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
   const waitUntil = async (condition) => {
     for (let attempt = 0; attempt < 100 && !condition(); attempt += 1) {
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -1547,9 +1529,69 @@ async function startDashboard(
 }
 
 async function jsonRequest(url, path, options) {
-  const response = await fetch(`${url}${path}`, options);
-  return { response, body: await response.json() };
+  const { body, ...requestOptions } = options ?? {};
+  // Blocking Git work and restarts must not reuse the runtime's self-probe sockets.
+  const result = await new Promise((resolve, reject) => {
+    const request = createHttpRequest(`${url}${path}`, {
+      ...requestOptions,
+      agent: false,
+      signal: requestOptions.signal ?? AbortSignal.timeout(300000)
+    }, (response) => {
+      let content = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { content += chunk; });
+      response.once("error", reject);
+      response.once("end", () => resolve({
+        response: { status: response.statusCode }, body: content
+      }));
+    });
+    request.once("error", reject);
+    request.end(body);
+  });
+  return { response: result.response, body: JSON.parse(result.body) };
 }
+
+test("dashboard JSON fixtures isolate their sockets from runtime self-probes", async () => {
+  const sockets = new Set();
+  const server = createHttpServer((request, response) => {
+    sockets.add(request.socket);
+    let body = "";
+    request.setEncoding("utf8");
+    request.on("data", (chunk) => { body += chunk; });
+    request.on("end", () => {
+      response.writeHead(request.method === "POST" ? 201 : 200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({
+        method: request.method,
+        marker: request.headers["x-fixture"] ?? null,
+        payload: body ? JSON.parse(body) : null
+      }));
+    });
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  try {
+    await (await fetch(`${url}/api/session`)).json();
+    await new Promise((resolve) => setImmediate(resolve));
+    const created = await jsonRequest(url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-fixture": "isolated" },
+      body: JSON.stringify({ request: "Synthetic fixture." })
+    });
+    assert.equal(created.response.status, 201);
+    assert.deepEqual(created.body, {
+      method: "POST", marker: "isolated", payload: { request: "Synthetic fixture." }
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    const status = await jsonRequest(url, "/api/status");
+    assert.equal(status.response.status, 200);
+    assert.deepEqual(status.body, { method: "GET", marker: null, payload: null });
+    assert.equal(sockets.size, 3, "Fixture requests must not reuse self-probe or earlier fixture sockets.");
+  } finally {
+    const closed = new Promise((resolve) => server.close(resolve));
+    server.closeAllConnections();
+    await closed;
+  }
+});
 
 async function approvePreflightDirectory(url, job, directory) {
   const post = (body) => jsonRequest(url, "/api/job/permissions", {
