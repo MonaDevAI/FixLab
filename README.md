@@ -16,54 +16,27 @@ the application's repository-owned profile.
 
 ## Get started
 
-**First installation:** read [installation.md](installation.md) for prerequisites,
-what FixLab adds to your machine, and reviewed repository setup.
-Use the [detailed installation guide](docs/installation.md) for other setup paths
-or download the [Word quickstart](docs/FixLab-Installation-Guide-Quickstart.docx).
+Install and sign in to a supported Copilot runtime, open the application
+checkout, and paste:
 
-Install and authenticate a supported Copilot runtime, then run:
-
-```powershell
-npm install --global github:MonaDevAI/FixLab
+```text
+Install or reuse FixLab, register its MCP server, and onboard this repository
+with --runtime copilot. Follow FIXLAB-SETUP.md if supplied; otherwise use:
+https://github.com/MonaDevAI/FixLab/blob/main/docs/installation.md
+Review the real profile and setup plan with me before each change.
+Prepare only required Playwright/live authentication, run Doctor, and start
+or reuse the matching dashboard. I will complete sign-in/MFA myself.
+Preserve my code and running services. Do not start a job or publish changes.
 ```
 
-### Onboard and check the application before chat
-
-```powershell
-fixlab onboard C:\source\application --runtime copilot
-```
-
-If onboarding creates an example profile, replace its paths and commands with
-the real application layout, then rerun `onboard` to review the restore and
-Playwright setup plans. Do not create empty folders to satisfy example paths.
-After reviewing and approving that setup:
-
-```powershell
-fixlab onboard C:\source\application --runtime copilot --yes
-fixlab doctor C:\source\application --runtime copilot
-```
-
-Resolve every Doctor blocker before continuing. Add `--authenticate` to the
-approved onboarding command only if the profile requires browser sign-in;
-complete sign-in and MFA yourself.
-
-### Start chat
-
-```powershell
-fixlab chat C:\source\application --runtime copilot
-```
-
-Replace the path with your checkout; use `--runtime agency` for Agency.
-Guided setup checks readiness before starting the local dashboard. Review the
-profile and approve only the required setup, sign-in, and tool operations.
-Installing the CLI alone does not start a service or make an application ready.
-The profile's `frontend` and `backend` paths are examples: point them to your
-real checkout layout rather than creating empty folders to satisfy checks.
-
-Prefer Copilot to perform setup? Use the
-[copy-paste installation prompt](docs/installation.md#copy-paste-installation-prompt).
-For VS Code, follow the
-[custom-agent setup](docs/installation.md#install-and-use-in-visual-studio-code).
+For reusable instructions, copy or attach [FIXLAB-SETUP.md](docs/FIXLAB-SETUP.md)
+without overwriting an existing guide. If Copilot or the file is unavailable,
+use [installation.md](installation.md) and the
+[detailed manual steps](docs/installation.md). Download the
+[Word quickstart](docs/FixLab-Installation-Guide-Quickstart.docx) or follow the
+[VS Code guide](docs/installation.md#install-and-use-in-visual-studio-code).
+Setup still requires reviewed approvals; installing FixLab alone does not
+establish application readiness or grant permissions.
 
 ### Stop or replace an unused dashboard
 

@@ -1,8 +1,9 @@
 # Installation
 
-New users: start with [First installation](../installation.md) for prerequisites
-and an explanation of what is added to the machine. This guide covers detailed
-setup for Agency Copilot and direct GitHub Copilot CLI execution.
+New users: start with [Copilot-first setup](FIXLAB-SETUP.md), or
+[First installation](../installation.md) for prerequisites and machine changes.
+This guide provides the detailed fallback when Copilot or the setup file is
+unavailable, plus setup for Agency Copilot and direct GitHub Copilot CLI execution.
 
 For known CLI, package-manager, private-feed, Playwright, authentication, and
 runtime failures, see [Troubleshooting](troubleshooting.md).
@@ -14,6 +15,7 @@ source of truth for updates.
 
 Choose the setup path you need:
 
+- [First installation with Copilot](#first-installation-with-copilot)
 - [Fresh Windows dev box](#fresh-windows-dev-box)
 - [What installation changes](#what-installation-changes)
 - [Enterprise-managed GitHub accounts](#enterprise-managed-github-accounts)
@@ -26,8 +28,39 @@ Choose the setup path you need:
 
 After setup, use [Getting started](getting-started.md) for your first job.
 
+## First installation with Copilot
+
+**Option 1: paste one prompt (fastest).** Open Copilot in the application
+checkout, then paste:
+
+```text
+Install or reuse FixLab, register its MCP server, and onboard this repository
+with --runtime copilot. Review the real repository profile and setup plan
+with me before applying changes. Prepare Playwright and genuine live
+authentication when required by the profile, run Doctor, and start or reuse
+the matching dashboard. Ask before changes, preserve my application code,
+and do not start a job.
+```
+
+**Option 2: give Copilot a Markdown file.** For reusable, reviewable instructions,
+copy [FIXLAB-SETUP.md](FIXLAB-SETUP.md) into the checkout root without
+overwriting an existing guide, then paste:
+
+```text
+Read @FIXLAB-SETUP.md and set up FixLab for this repository.
+Show the plan and ask before applying changes.
+```
+
+If it is elsewhere, attach it or provide its actual path. In both paths,
+approve reviewed operations and complete application sign-in/MFA yourself.
+Copilot reports remaining requirements; the guide is not an automatic installer
+or a permission grant. The [Word quickstart](FixLab-Installation-Guide-Quickstart.docx)
+is also available. If Copilot or the file is unavailable, use the detailed
+installation steps and command reference below.
+
 ## Recommended path: install, then run
 
+This is the manual fallback when Copilot or the setup guide is unavailable.
 Once your supported runtime is installed and signed in:
 
 ```powershell
@@ -249,6 +282,8 @@ command or blanket permission grant.
 
 ```text
 Set up FixLab for this checkout using --runtime copilot.
+Use FIXLAB-SETUP.md if I supplied it. If unavailable, follow the complete
+fallback steps below without requesting the file again.
 
 1. Read repository instructions and git status. Preserve my branch, edits,
    running applications, and existing dashboards.
