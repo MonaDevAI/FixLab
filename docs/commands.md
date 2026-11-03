@@ -26,11 +26,8 @@ Local-fix and PR claims still require the matching checkout and application.
 fixlab <repository> [--runtime <agency|copilot>]
 ```
 
-This is the shortest Agency-like entry point. FixLab opens its interactive
-agent in the selected repository and retains conversational context while it
-inspects or helps onboard the repository, accepts a bug or enhancement,
-diagnoses the affected behavior, implements the smallest fix, validates it,
-and prepares the evidence-backed pull-request outcome.
+Opens an interactive FixLab agent in the selected repository, retaining context
+for onboarding, diagnosis, scoped changes, validation, and authorized PR work.
 
 Use `fixlab run <repository> -- <request>` when the complete request is already
 known and should execute without first entering the interactive conversation.
@@ -378,6 +375,33 @@ separate reviewed repository workflow and explicit authorization. Conflicting
 reported browser evidence fails validation; it cannot silently broaden the
 selected mode. Interception is implemented by repository-owned browser automation,
 not a blanket network proxy installed by the dashboard.
+
+### Verified read-only POST searches
+
+The default browser workflow treats a verified, approved POST query as a read,
+independently of **Allow POST requests**. Use genuine returned records when the
+profile permits backend reads, including when actual writes are intercepted.
+Verification must cover the query implementation, request shape, exact
+environment/origin/path, redirects, and the repository guard's existing allowlist.
+A name such as "search" is not sufficient.
+
+For writes, the separate **Allow POST writes for this job** checkbox is off by
+default. Selecting it authorizes configured DEV/SIT/UAT endpoint/test-record
+writes without repeat confirmation in a native Copilot dashboard job. Unchecked
+or recovered jobs still confirm each action. Approval is job-, environment- and
+revision-bound; it expires on stop, hold, completion or restart. No browser guard
+is disabled and no production, API-only or explicit read-only restriction is
+waived. See [POST configuration and approval](security.md#individually-confirmed-non-production-post).
+
+A missing allowlist entry is a policy blocker, not an unavailable backend.
+Request a narrow configuration review; do not disable the guard, allow all POSTs,
+use another client to bypass it, or silently substitute synthetic records.
+Read-only jobs cannot edit configuration; approved changes need a fresh reviewed
+context/job. Save, Submit, Approve and autosave retain their write controls.
+Synthetic-only, API-only, unit-only and production restrictions are unchanged.
+
+This is workflow guidance, not a global network permission: the repository-owned
+guard still enforces the approved scope.
 
 ### Background runtime permissions
 

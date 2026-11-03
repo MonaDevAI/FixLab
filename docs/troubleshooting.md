@@ -69,6 +69,74 @@ After changing `PATH` or npm's prefix, open a new PowerShell window and run:
 fixlab --help
 ```
 
+## Playwright working directory is missing
+
+If Doctor reports both `Playwright package` and `Playwright browser` with
+`working directory is missing: ...\frontend`, the profile points to a directory
+that does not exist. Installing Playwright elsewhere does not repair that path.
+`frontend` and `backend` in the generated profile are examples, not required
+folder names.
+
+Open `.github\fixlab\repository-profile.json` in the application checkout.
+Set `browserAutomation.workingDirectory` to the actual existing application or
+test package directory, relative to the repository root. Also correct
+`applications.frontend.workingDirectory`, used as its fallback, and any restore
+or gate working directories that still use the example layout. For a frontend
+at the repository root, the working directory is `"."`; for a nested app, use
+its real relative path.
+
+Do not create an empty `frontend` folder or generate an unrelated Playwright
+project to satisfy the check. If you already created one, do not install into
+it just because the original missing-folder error disappeared. Fix the profile,
+check for any files or work before deciding what to keep, and use the real test
+package. FixLab does not delete the folder for you.
+
+Then review setup from the application repository root:
+
+```powershell
+fixlab prepare
+fixlab setup-playwright
+```
+
+Approve only the necessary reviewed commands with `--yes`, then rerun
+`fixlab doctor --runtime copilot` (or `agency` for that runtime).
+If Doctor now reports a missing package, install into the corrected configured
+directory, not globally. A browser launch failure is a separate issue: install
+the configured browser/channel. API-only profiles need the Playwright package
+and request context, but no browser.
+
+## Repeated command windows flash after launching
+
+Repeated console windows are not expected. A visible browser for interactive
+sign-in or MFA is different and must not be hidden or bypassed.
+
+If the flashing window is `git.exe` and appears about once a second while
+`fixlab chat` is idle, check that the installed build includes the hidden Git
+probe fix. Chat polls dashboard status every second; artifact-root and cache
+inspection use background Git queries. Older builds did not hide those two
+helpers, allowing short-lived Git terminals to steal focus on Windows.
+The fix sets `windowsHide: true` for both helpers without disabling polling,
+Git checks, or approvals. Reinstalling Node, .NET or Playwright does not fix
+this window-creation bug.
+
+Hold any active job before changing the setup. In the shell used to start
+FixLab, collect `where.exe fixlab`, `npm list --global @fixlab/cli --depth=0`,
+`node --version`, `npm --version`, `pwsh --version`, and the selected runtime's
+version. Check whether an older global installation or another dashboard is
+being launched. Do not kill all Node.js, PowerShell, or browser processes.
+
+When no existing dashboard/job is using the intended port, start one foreground
+instance with `fixlab dashboard C:\source\application --no-open` and preserve
+the first terminal error. Note whether flashing starts while idle, only when
+starting a job, or during authentication. Include the Windows version, terminal
+host, FixLab/runtime versions, and a short recording when reporting the issue;
+redact tokens, browser state and private application data.
+
+FixLab's owned Windows executor uses a hidden inherited console. That is not
+proof that every tool, terminal host or older installation behaves identically.
+Do not repeatedly reinstall prerequisites or disable permission controls as a
+workaround for an undiagnosed flashing loop.
+
 ## npm fails with an internal JavaScript error
 
 An error such as:

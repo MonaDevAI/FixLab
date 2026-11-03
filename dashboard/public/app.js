@@ -98,17 +98,18 @@ const targetEnvironmentSelect = document.querySelector(
 );
 const allowPostRequestsInput = document.querySelector("#allow-post-requests");
 let postUiBlocked = true;
+let postRuntimeAvailable = false;
 let postCheckboxEnvironment = null;
 
 function updatePostRequestsOption() {
   const configured = [...targetEnvironmentSelect.options].map((option) => option.value).filter(Boolean);
   const environment = (targetEnvironmentSelect.value ||
     (configured.length === 1 ? configured[0] : "")).toLowerCase();
-  const available = !postUiBlocked && ["dev", "sit", "uat"].includes(environment) &&
+  const available = postRuntimeAvailable && !postUiBlocked && ["dev", "sit", "uat"].includes(environment) &&
     !document.querySelector('[name="testMutationMode"]').value;
   const key = available ? environment : "";
   if (postCheckboxEnvironment !== key) {
-    allowPostRequestsInput.checked = available;
+    allowPostRequestsInput.checked = false;
     postCheckboxEnvironment = key;
   }
   allowPostRequestsInput.disabled = !available;
@@ -610,7 +611,7 @@ function renderRuntimeRequest(job, isActive) {
     return;
   }
   runtimeGuidance.textContent = pending.perAction === true
-    ? "This is a real non-production POST action. Review its environment, exact destination and complete payload. It requires its own single-use confirmation, even when the job-start checkbox or Allow all is active."
+    ? "This is a real non-production POST action without current job-scoped write approval. Review its environment, exact destination and complete payload. It requires single-use confirmation; Allow all does not approve it."
     : pending.kind === "permission" && !pending.canApprove
       ? "This operation cannot be approved here. Read the specific reasons below. Safe recovery denies the operation; it never overrides a restriction or replays hidden details."
     : pending.kind === "question"
@@ -1254,6 +1255,7 @@ function renderReadiness(readiness) {
 }
 
 function renderRuntime(runtime) {
+  postRuntimeAvailable = runtime?.name === "copilot";
   runtimeHelperDirectory = runtime?.helperDirectory ?? "";
   const supported = runtime?.supportsModelSelection === true;
   document.querySelector("#input-budget-visibility").hidden = !supported;
@@ -2469,6 +2471,7 @@ form.addEventListener("submit", async (event) => {
         targetEnvironment: data.get("targetEnvironment"),
         testMutationMode: data.get("testMutationMode") ?? "",
         allowPostRequests: !allowPostRequestsInput.disabled && data.get("allowPostRequests") === "on",
+        postWriteApprovalConfirmed: !allowPostRequestsInput.disabled && data.get("allowPostRequests") === "on",
         prestartFrontend: data.get("prestartFrontend") === "on",
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",
@@ -2481,6 +2484,7 @@ form.addEventListener("submit", async (event) => {
     });
     requestInput.value = "";
     form.querySelector('[name="allowAllTools"]').checked = false;
+    allowPostRequestsInput.checked = false;
     requestInput.focus();
     selectedScreenshots = [];
     renderScreenshots();

@@ -57,14 +57,35 @@ function configurationAt(repository, environment = "dev", jobConsent = false) {
     revision: createHash("sha256").update(raw).update(readFileSync(helper)).digest("hex") };
 }
 
+export function createPostWriteApproval(repository, targetEnvironment, jobId) {
+  const environment = typeof targetEnvironment === "string" ? targetEnvironment.toLowerCase() : "";
+  if (!["dev", "sit", "uat"].includes(environment) ||
+      typeof jobId !== "string" || !/^[a-f0-9-]{36}$/u.test(jobId)) {
+    throw new Error("Job-scoped POST approval requires an exact job and DEV/SIT/UAT environment.");
+  }
+  return { jobId, environment, revision: configurationAt(repository, environment, true)?.revision ?? null };
+}
+
 export function createNonProductionPostTool({ repository, targetEnvironment, mutationMode,
-  selectedMutationMode = "", allowPostRequests, isReady, ask,
+  selectedMutationMode = "", allowPostRequests, postWriteApproval, jobId, isReady, ask,
   request = fetch, now = Date.now }) {
   if (allowPostRequests !== undefined && typeof allowPostRequests !== "boolean") {
     throw new Error("allowPostRequests must be a boolean.");
   }
   const environment = typeof targetEnvironment === "string" ? targetEnvironment.toLowerCase() : "";
   const jobConsent = typeof allowPostRequests === "boolean";
+  const jobScoped = postWriteApproval !== undefined && postWriteApproval !== null;
+  if (jobScoped &&
+      (typeof postWriteApproval !== "object" || Array.isArray(postWriteApproval) ||
+        allowPostRequests !== true || postWriteApproval.jobId !== jobId ||
+        postWriteApproval.environment !== environment ||
+        typeof jobId !== "string" || !/^[a-f0-9-]{36}$/u.test(jobId) ||
+        (postWriteApproval.revision !== null &&
+          !/^[a-f0-9]{64}$/u.test(postWriteApproval.revision)))) {
+    throw new Error("Invalid job-scoped POST approval; start a newly reviewed job.");
+  }
+  const approvedRevision = postWriteApproval?.revision;
+  let approvalStopped = false;
   if (!["dev", "sit", "uat"].includes(environment) || selectedMutationMode ||
       (!jobConsent && (environment !== "dev" || mutationMode !== "approved-write"))) {
     return null;
@@ -74,7 +95,7 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
   const label = environment.toUpperCase();
   return {
     name: !jobConsent && environment === "dev" ? "fixlab_dev_post" : "fixlab_nonproduction_post",
-    description: `Request one ${label} POST using its configured endpoint/test-record allowlist and existing authentication helper. The complete URL and JSON payload always require individual human confirmation, even with the job-start checkbox or Allow all. If unchecked at job start, ask for this action when needed. Missing setup blocks the action, not unrelated work. No credentials or response body are returned. This is a real write, not intercepted evidence.`,
+    description: `Send one ${label} POST using its configured endpoint/test-record allowlist and existing authentication helper. ${jobScoped ? "The user approved this job's configured writes through the POST checkbox; no repeat confirmation is needed. Approval is bound to this job and the reviewed profile/helper revision." : "The complete URL and JSON payload require individual human confirmation, even with Allow all."} Missing setup blocks the action, not unrelated work. No redirects, retries, credentials or response bodies. This is a real write, not intercepted evidence.`,
     skipPermission: true,
     parameters: {
       type: "object",
@@ -91,9 +112,16 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
         throw new Error("POST requires credential-sensitive debug logging to be disabled.");
       }
       if (!isReady()) { throw new Error("POST is blocked by policy, the execution budget or executor shutdown."); }
+      if (approvalStopped) {
+        throw new Error("The job-scoped POST approval has stopped after an unsuccessful attempt or changed configuration. Inspect the selected environment and start a newly reviewed job; no request was sent.");
+      }
       const plan = planAt();
       if (!plan) {
         throw new Error(`${label} POST is not configured. Configure dataSafety.post.${environment} with approved endpoints, test records and an existing API session helper. No request was sent.`);
+      }
+      if (jobScoped && approvedRevision !== plan.revision) {
+        approvalStopped = true;
+        throw new Error("POST policy/helper changed or was not configured at approval; start a newly reviewed job. No request was sent.");
       }
       if (!args || Object.keys(args).some((key) => !["url", "payload", "purpose"].includes(key)) ||
           !args.payload || typeof args.payload !== "object" || Array.isArray(args.payload) ||
@@ -111,17 +139,19 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
       if (!action) { throw new Error("POST endpoint or test record is not explicitly allowlisted."); }
       const url = action.url;
       const expiresAt = now() + 300000;
-      const details = JSON.stringify({ environment: label, method: "POST", url,
-        purpose: args.purpose, payload: body, expiresAt: new Date(expiresAt).toISOString(),
-        ...(jobConsent ? { enabledAtJobStart: allowPostRequests } : {}),
-        notice: "Real data-changing action. Review every field. One attempt only; no redirects, retries or blanket approval." }, null, 2);
-      if (!safeRuntimeText(details)) { throw new Error("POST review is sensitive or oversized."); }
-      const decision = await ask({
-        kind: "permission", title: `${allowPostRequests === false ? "Allow" : "Confirm"} one ${label} POST action`, details,
-        canApprove: true, perAction: true, choices: [], allowFreeform: false
-      });
-      if (decision.action !== "allow" || decision.scope !== undefined || decision.recover !== undefined) {
-        throw new Error("POST was not individually approved; no request was sent.");
+      if (!jobScoped) {
+        const details = JSON.stringify({ environment: label, method: "POST", url,
+          purpose: args.purpose, payload: body, expiresAt: new Date(expiresAt).toISOString(),
+          ...(jobConsent ? { enabledAtJobStart: allowPostRequests } : {}),
+          notice: "Real data-changing action. Review every field. One attempt only; no redirects, retries or blanket approval." }, null, 2);
+        if (!safeRuntimeText(details)) { throw new Error("POST review is sensitive or oversized."); }
+        const decision = await ask({
+          kind: "permission", title: `${allowPostRequests === false ? "Allow" : "Confirm"} one ${label} POST action`, details,
+          canApprove: true, perAction: true, choices: [], allowFreeform: false
+        });
+        if (decision.action !== "allow" || decision.scope !== undefined || decision.recover !== undefined) {
+          throw new Error("POST was not individually approved; no request was sent.");
+        }
       }
       if (!isReady() || now() >= expiresAt || planAt()?.revision !== plan.revision) {
         throw new Error("POST approval expired or its policy/helper changed; no request was sent.");
@@ -160,6 +190,7 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
           }
         });
       } catch {
+        approvalStopped = jobScoped;
         if (attempts) {
           throw new Error("POST may have been attempted. Approval is spent. Inspect the selected environment before any new action; no automatic retry was made.");
         }
@@ -167,8 +198,12 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
       } finally {
         accepting = false;
       }
-      if (attempts !== 1 || !result) { throw new Error("POST authentication helper did not complete one request."); }
+      if (attempts !== 1 || !result) {
+        approvalStopped = jobScoped;
+        throw new Error("POST authentication helper did not complete one request. Inspect the selected environment; no automatic retry was made.");
+      }
       if (result.status < 200 || result.status >= 300) {
+        approvalStopped = jobScoped;
         throw new Error(`POST returned HTTP ${result.status}. Approval is spent; no redirect or automatic retry was made.`);
       }
       return result;

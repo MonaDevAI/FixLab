@@ -501,12 +501,93 @@ test("doctor blocks when Playwright is unavailable", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
 
   try {
-    assert.equal(run(["init", repository], repository).status, 0);
+    const initialized = run(["init", repository], repository);
+    assert.equal(initialized.status, 0);
+    assert.match(initialized.stdout, /frontend.*backend.*example paths/i);
+    assert.match(initialized.stdout, /Do not create empty application folders/);
     const result = run(["doctor", repository], repository);
 
     assert.equal(result.status, 1);
     assert.match(result.stdout, /FAIL  Playwright package/);
     assert.match(result.stdout, /FAIL  Playwright browser/);
+    assert.match(result.stdout, /browserAutomation\.workingDirectory/);
+    assert.match(result.stdout, /applications\.frontend\.workingDirectory/);
+    assert.ok(result.stdout.includes(join(".github", "fixlab", "repository-profile.json")));
+    assert.match(result.stdout, /Do not create an empty frontend folder/);
+    const setup = run(["setup-playwright", repository, "--yes"], repository);
+    assert.equal(setup.status, 1);
+    assert.match(setup.stderr, /browserAutomation\.workingDirectory/);
+    assert.match(setup.stderr, /Do not create an empty frontend folder/);
+    assert.doesNotMatch(setup.stdout, /Planned commands:/);
+    assert.equal(existsSync(join(repository, "frontend")), false);
+    assert.equal(existsSync(join(repository, "backend")), false);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("doctor and Playwright setup reject a file used as the working directory", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const frontend = join(repository, "frontend");
+    writeFileSync(frontend, "preserve this file");
+    const result = run(["doctor", repository], repository, createPackageManagerShims(repository));
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /FAIL  Playwright package \(working directory is not a directory:/);
+    assert.match(result.stdout, /browserAutomation\.workingDirectory/);
+    assert.doesNotMatch(result.stdout, /FAIL  Frontend package manager/);
+    const setup = run(["setup-playwright", repository, "--yes"], repository);
+    assert.equal(setup.status, 1);
+    assert.match(setup.stderr, /working directory is not a directory:/);
+    assert.doesNotMatch(setup.stdout, /Planned commands:/);
+    assert.equal(readFileSync(frontend, "utf8"), "preserve this file");
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("doctor explains a missing Playwright package in an existing empty directory", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    mkdirSync(join(repository, "frontend"));
+    const result = run(["doctor", repository], repository, createPackageManagerShims(repository));
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /FAIL  Playwright package \(install @playwright\/test/);
+    assert.match(result.stdout, /browserAutomation\.workingDirectory/);
+    assert.match(result.stdout, /An empty frontend folder does not configure the application/);
+    assert.match(result.stdout, /fixlab setup-playwright/);
+    assert.equal(existsSync(join(repository, "frontend", "node_modules")), false);
+  } finally {
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("Playwright directory guidance preserves API-only checks and frontend fallback", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
+  try {
+    assert.equal(run(["init", repository], repository).status, 0);
+    const path = join(repository, ".github", "fixlab", "repository-profile.json");
+    const profile = JSON.parse(readFileSync(path, "utf8"));
+    profile.browserAutomation.mode = "api";
+    profile.browserAutomation.workingDirectory = "api-tests";
+    writeFileSync(path, JSON.stringify(profile));
+    const result = run(["doctor", repository], repository);
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /FAIL  Playwright API \(working directory is missing:/);
+    assert.ok(result.stdout.includes(join(repository, "api-tests")));
+    assert.doesNotMatch(result.stdout, /Playwright browser/);
+    delete profile.browserAutomation.workingDirectory;
+    profile.applications.frontend.workingDirectory = "ui-app";
+    writeFileSync(path, JSON.stringify(profile));
+    const setup = run(["setup-playwright", repository, "--yes"], repository);
+    assert.equal(setup.status, 1);
+    assert.ok(setup.stderr.includes(join(repository, "ui-app")));
+    assert.match(setup.stderr, /applications\.frontend\.workingDirectory/);
+    assert.doesNotMatch(setup.stdout, /Planned commands:/);
+    assert.equal(existsSync(join(repository, "api-tests")), false);
+    assert.equal(existsSync(join(repository, "ui-app")), false);
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -1186,6 +1267,8 @@ test("run launches the Agency-resolved FixLab agent", () => {
     assert.match(result.stdout, /Use development as the user-selected validation environment/);
     assert.match(result.stdout, /Do not silently fall back/);
     assert.match(result.stdout, /primary business-data source/);
+    assert.match(result.stdout, /Verified read-only POST searches:/u);
+    assert.match(result.stdout, /policy blocker, not backend unavailability/u);
     assert.match(result.stdout, /synthetic pass proves the UI behavior only/);
     assert.match(result.stdout, /FIXLAB_ACTIVITY/);
     assert.match(result.stdout, /FIXLAB_TEST/);
@@ -1504,8 +1587,9 @@ test("run without a request keeps Agency guidance interactive", () => {
       }
     );
 
-    assert.equal(result.status, 0);
+    assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /--interactive/);
+    assert.doesNotMatch(result.stdout, /Reusable PR learning:/);
     assert.doesNotMatch(result.stdout, /--session-id/);
     assert.doesNotMatch(result.stdout, /--no-ask-user/);
   } finally {
@@ -1550,8 +1634,9 @@ test("run without a request keeps Copilot environment guidance interactive", () 
       "inherited-standard-input\n"
     );
 
-    assert.equal(result.status, 0);
+    assert.equal(result.status, 0, result.stderr);
     assert.match(result.stdout, /--interactive/);
+    assert.doesNotMatch(result.stdout, /Reusable PR learning:/);
     assert.match(
       result.stdout,
       /Use development as the user-selected validation environment/

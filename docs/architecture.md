@@ -13,10 +13,11 @@ the runtime receives a rejection with fixed recovery feedback, not a permission
 grant or automatic replay. Existing stage evidence remains authoritative.
 Separately, `fixlab_nonproduction_post` mediates DEV/SIT/UAT writes through each
 environment's existing authentication helper and exact endpoint/test-record
-allowlist. The job-start checkbox enables requests; unchecked requests can ask
-for one action later. The checkbox never grants business-write permission. Its
-complete payload review is individually confirmed, single-use and expiring;
-Allow all and batch approval do not apply. This native dashboard capability
+allowlist. The off-by-default job-start checkbox authorizes configured writes
+for this job without repeat confirmation. Approval binds the job, environment
+and profile/helper revision and expires with execution; it is never recovered.
+Unchecked jobs still require exact, expiring, single-use action confirmation.
+Allow all and batch approval do not grant writes. This native dashboard capability
 does not expand API-only/read-only or other-environment contracts. See the
 [security model](security.md#individually-confirmed-non-production-post) for configuration
 and the privileged-execution boundary.
@@ -95,6 +96,22 @@ Required templates and material risks can justify additional detail.
 PR descriptions exclude token/cache counts, AI-credit totals and model-cost
 summaries. Repeated runtime token meters are omitted from activity logs;
 structured usage metrics, persistence and input-token limits remain active.
+
+Reusable learning is part of the existing **PR** stage, not a separate roadmap
+stage. Before committing an authorized change, the runner reviews task-relevant
+repository skills and updates a matching skill or creates
+`.github/skills/<topic>/SKILL.md` only for verified, non-obvious, reusable
+knowledge. The skill includes YAML name/description, when to use it, the
+verified solution, file/test references, working directories, validation
+commands and pitfalls. It is reviewed in the same PR, with applicable
+documentation/skill checks; the concise PR body links it or records that no
+new reusable learning was identified. Empty, speculative and duplicate skills
+are not created. Read-only jobs cannot write skills; existing instruction
+governance, approvals and permissions remain authoritative. Generated skills
+must not add tool grants or contain credentials, personal/customer data,
+private endpoints or raw transcripts. This versioned repository knowledge is
+distinct from the local advisory metadata cache and does not automatically
+promote learned rules or share consumer knowledge with other repositories.
 
 `dashboard/workflow-policy.js` supplies product-wide defaults for new jobs:
 `workflow: { mode: "efficient", publication: "draft", unitTestsAfterPr: false, optionalBuilds: false }`.
@@ -179,6 +196,11 @@ scope, safety, evidence and continuity guidance, not a separate cut-down coding
 model. The selected model and environment still affect speed and results.
 
 ### Dashboard or CLI
+
+Browser jobs apply the verified read-only POST query policy by default,
+independently of the write-request checkbox. Repository guards remain
+authoritative; a missing query allowlist entry blocks the live read rather than
+triggering synthetic fallback. See [verified query handling](commands.md#verified-read-only-post-searches).
 
 `browserAutomation.mode` defaults to `browser` for existing profiles. Explicit
 `api` mode requires backend startup/loopback health, a Playwright package and

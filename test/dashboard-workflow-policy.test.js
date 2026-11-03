@@ -3,9 +3,94 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
+import { API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, PR_LEARNING_GUIDANCE, READ_ONLY_POST_GUIDANCE, configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
 import { ValidationSession, selectedValidationGates, validationGates } from "../dashboard/validation-gates.js";
-import { buildJobPrompt } from "../dashboard/server.js";
+import { buildJobPrompt, FIXLAB_STAGES } from "../dashboard/server.js";
+
+test("verified read-only POST searches use the default browser policy independently of write consent", () => {
+  for (const mode of ["fix-and-validate", "validate-only", "playwright-only"]) {
+    for (const allowPostRequests of [undefined, false, true]) {
+      const testEvidence = {
+        enabled: true, source: "non-production-read-only", mutationMode: "intercepted",
+        requireScenarioEvidence: true, allowPostRequests
+      };
+      const prompt = buildJobPrompt({
+        request: "Validate a permitted search using genuine returned records.",
+        mode, targetEnvironment: "dev", testEvidence
+      });
+      assert.ok(prompt.includes(READ_ONLY_POST_GUIDANCE));
+      for (const phrase of [
+        "Verified read-only POST searches:", "exact approved environment, origin and path",
+        "genuine returned records", "policy blocker, not backend unavailability",
+        "Do not silently substitute synthetic data", "Read-only jobs must not edit configuration",
+        "synthetic-only, API-only, unit-only or production policy"
+      ]) {
+        assert.ok(prompt.includes(phrase), `${mode}/${allowPostRequests}: ${phrase}`);
+      }
+      assert.equal(testEvidence.mutationMode, "intercepted");
+    }
+  }
+  for (const testEvidence of [{ apiOnly: true }, { unitTestsOnly: true }]) {
+    assert.ok(!buildJobPrompt({ request: "Keep stricter validation.", mode: "validate-only",
+      testEvidence }).includes(READ_ONLY_POST_GUIDANCE));
+  }
+});
+
+test("verified query guidance stays aligned without expanding interactive CLI arguments", () => {
+  for (const path of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md", "prompts/fixlab.live-test.prompt.md"
+  ]) {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
+      .replace(/`/gu, "").replace(/\s+/gu, " ");
+    assert.ok(source.includes(READ_ONLY_POST_GUIDANCE), path);
+  }
+  const cli = readFileSync(new URL("../bin/fixlab.js", import.meta.url), "utf8");
+  assert.match(cli, /request && profile\.validation\?\.liveTestsRequired !== false &&\s+profile\.browserAutomation\?\.mode !== "api" \? \[READ_ONLY_POST_GUIDANCE\]/u);
+});
+
+test("reusable learning is captured within the authorized PR stage without a new roadmap stage", () => {
+  for (const mode of ["efficient", "strict"]) {
+    const prompt = buildJobPrompt({
+      request: "Fix a repeatable defect.",
+      mode: "fix-and-validate",
+      workflow: configuredWorkflow({ workflow: { mode } })
+    });
+    for (const phrase of [
+      "Reusable PR learning:", "existing pr stage", ".github/skills/<topic>/SKILL.md",
+      "verified, non-obvious, reusable", "update a matching skill",
+      "YAML name and description", "when to use", "verified solution",
+      "working directories", "validation commands", "pitfalls",
+      "same reviewed PR", "no new reusable learning", "no separate roadmap stage",
+      "Do not add allowed-tools or broaden permissions",
+      "Read-only jobs must not write skills"
+    ]) {
+      assert.ok(prompt.includes(phrase), `${mode}: ${phrase}`);
+    }
+  }
+  assert.deepEqual(FIXLAB_STAGES, [
+    "intake", "diagnosis", "reproduce", "fix", "review", "local-stack", "live-test", "pr"
+  ]);
+  for (const mode of ["validate-only", "playwright-only"]) {
+    const prompt = buildJobPrompt({ request: "Inspect without edits.", mode });
+    assert.doesNotMatch(prompt, /Reusable PR learning:|\.github\/skills\/<topic>\/SKILL\.md/);
+  }
+});
+
+test("PR learning stays aligned across CLI, packaged agents, initialized agents and PR prompts", () => {
+  for (const path of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md", "prompts/fixlab.pr.prompt.md"
+  ]) {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
+      .replace(/`/gu, "").replace(/\s+/gu, " ");
+    assert.ok(source.includes(PR_LEARNING_GUIDANCE), `${path} must preserve the complete PR learning contract`);
+  }
+  const cli = readFileSync(new URL("../bin/fixlab.js", import.meta.url), "utf8");
+  assert.match(cli, /!readOnly && request \? \[PR_LEARNING_GUIDANCE\]/);
+});
 
 test("production-backed API safety guidance reaches CLI, dashboard and every packaged agent", () => {
   for (const path of [
