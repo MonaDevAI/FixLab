@@ -24,8 +24,9 @@ Install or reuse FixLab, register its MCP server, and onboard this repository
 with --runtime copilot. Follow FIXLAB-SETUP.md if supplied; otherwise use:
 https://github.com/MonaDevAI/FixLab/blob/main/docs/installation.md
 Review the real profile and setup plan with me before each change.
-Prepare only required Playwright/live authentication, run Doctor, and start
-or reuse the matching dashboard. I will complete sign-in/MFA myself.
+Use Microsoft Edge by default for required browser validation. Review feed
+access, dedicated browser SSO and private-state protection; run Doctor.
+Ask before starting or reusing the matching dashboard. I will complete MFA.
 Preserve my code and running services. Do not start a job or publish changes.
 ```
 

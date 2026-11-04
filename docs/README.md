@@ -8,10 +8,10 @@ installation quickstart is a convenience copy; use the online guides for updates
 
 | Guide | What it covers |
 | --- | --- |
-| [Copilot-first setup](FIXLAB-SETUP.md) | First installation with a reviewed Copilot request; manual fallback if the guide is unavailable |
+| [Copilot-first setup](FIXLAB-SETUP.md) | Reviewed setup, feed access, Edge by default, protected SSO state, and manual fallback |
 | [First installation](../installation.md) | Prerequisites, machine changes, and reviewed setup |
 | [Detailed installation](installation.md) | Guided/manual setup, updates, and uninstall |
-| [Word installation quickstart](FixLab-Installation-Guide-Quickstart.docx) | Downloadable fresh Windows setup and installation troubleshooting |
+| [Word installation quickstart](FixLab-Installation-Guide-Quickstart.docx) | Downloadable reviewed setup, Edge SSO, feed access, and installation troubleshooting |
 | [Copilot installation prompt](installation.md#copy-paste-installation-prompt) | One reviewed setup request to paste into Copilot |
 | [Visual Studio Code](installation.md#install-and-use-in-visual-studio-code) | CLI setup and discovery of the repository custom agent |
 | [Getting started](getting-started.md) | First validation request, dashboard controls, evidence, and recovery |

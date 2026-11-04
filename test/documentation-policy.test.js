@@ -63,6 +63,30 @@ test("first installation is linked, packaged and separates prerequisites from se
   }
 });
 
+test("reviewed setup defaults to Edge and protects private authentication state", () => {
+  const read = (file) => readFileSync(new URL(`../${file}`, import.meta.url), "utf8");
+  for (const file of ["README.md", "installation.md", "docs/installation.md", "docs/FIXLAB-SETUP.md"]) {
+    assert.ok(read(file).includes("Microsoft Edge"), file);
+  }
+  const guide = read("docs/FIXLAB-SETUP.md");
+  for (const instruction of [
+    "Default to Microsoft Edge",
+    '"browser": "chromium"',
+    '"channel": "msedge"',
+    "dotnet restore $BackendProject --interactive",
+    "yarn install --frozen-lockfile",
+    "launchPersistentContext",
+    "public directory",
+    "authentication-status",
+    "confirm no job was started"
+  ]) {
+    assert.ok(guide.includes(instruction), instruction);
+  }
+  const approval = guide.indexOf("Approve scaffolding before first-run onboarding");
+  const onboard = guide.indexOf("fixlab onboard $Repo --runtime copilot");
+  assert.ok(approval >= 0 && approval < onboard);
+});
+
 test("documentation policy accepts complete internal links", () => {
   const root = createDocumentationTree();
   try {

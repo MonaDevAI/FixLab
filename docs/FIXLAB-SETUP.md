@@ -1,39 +1,40 @@
-# Easy FixLab setup with Copilot
+# FixLab setup with Copilot: feeds, Microsoft Edge, and corporate SSO
 
-Choose the one-prompt path for the fastest guided setup. Use this Markdown guide
-for reusable, reviewable repository instructions. In either path, review the
-proposed plan and approve each setup change before it is applied.
+Use this guide to set up a React and .NET repository with FixLab and the
+Copilot runtime. Inspect the actual checkout, show the plan, and ask before
+applying setup changes. Complete genuine sign-in/MFA yourself.
+
+This guide is not an installer or blanket permission grant. Do not start a
+bug-fixing job, commit, push, publish packages, or create a pull request.
 
 ## Option 1: paste one prompt
 
-Open Copilot in the repository you want to onboard and paste:
+Open Copilot in the target checkout and paste:
 
 ```text
-Install or reuse FixLab, register its MCP server, and onboard this repository
-with --runtime copilot. Review the real repository profile and setup plan
-with me before applying changes. Prepare Playwright and genuine live
-authentication when required by the profile, run Doctor, and start or reuse
-the matching dashboard. Ask before changes, preserve my application code,
-and do not start a job.
+Read this FixLab setup guide and onboard the actual repository with
+--runtime copilot. Inspect first, show the plan, and ask before changes.
+Reuse compatible installed tools and preserve application code and edits.
+Resolve npm/Yarn and NuGet feed authentication separately using approved
+repository helpers and genuine human sign-in. Use Microsoft Edge by default
+for required browser validation, not bundled Chromium. For corporate SSO,
+use a dedicated persistent Edge profile, not a private context or my normal
+browser profile. Keep authentication state ignored, inside the browser
+working directory, excluded from development-server watching, and denied
+by its file server. Verify genuine authentication proof, Doctor, and the
+dashboard authentication-status endpoint. Ask before starting or reusing
+the matching idle dashboard and do not start a job.
 ```
-
-You still approve reviewed setup actions and complete sign-in/MFA yourself.
 
 ## Option 2: give Copilot this Markdown file
 
-1. Copy this file into the target repository's root. Do not overwrite an existing
-   setup guide without reviewing it.
-2. Open Copilot in that checkout.
-3. Enter:
+Copy this file into the target checkout root without overwriting an existing
+guide. Alternatively, attach it or provide its actual path, then say:
 
 ```text
 Read @FIXLAB-SETUP.md and set up FixLab for this repository.
 Show the plan and ask before applying changes.
 ```
-
-If the file is elsewhere, attach it or give Copilot its actual path instead.
-This document is an instruction guide, not an automatic installer or permission
-grant. The steps below are for Copilot to follow after the user's setup request.
 
 ## If the guide is unavailable
 
@@ -45,34 +46,49 @@ request a missing attachment. Keep the same review and authentication safeguards
 
 ## Instructions for Copilot
 
-### 1. Inspect before changing anything
+### 1. Inspect and agree on the plan
 
-- Read the checkout's contributor instructions and inspect `git status --short`.
-- Confirm the repository path, runtime, application ports, and dashboard port.
-- Preserve existing edits, branches, dependency junctions, and running services.
-- Check Git, supported Node.js/npm, PowerShell on Windows, and the authenticated
-  Copilot runtime. Explain missing prerequisites before installing anything.
-- Reuse a compatible Node installation and respect the application's version
-  pin; do not replace a working global runtime merely to match FixLab's test pin.
+- Read contributor instructions and inspect `git status --short`.
+- Confirm the repository root, actual frontend/backend/test directories,
+  application commands, environment, health URLs, and ports.
+- Agree on a free dashboard port. Reuse a verified matching instance when
+  appropriate; do not stop unrelated services.
+- Inspect version pins, package manifests, lockfiles, dependency junctions,
+  existing FixLab files, and installed tools.
+- Check Git, supported Node/npm, PowerShell on Windows, the authenticated
+  Copilot runtime, and the SDK selected by `global.json` when applicable.
+- Run `dotnet --version` from the checkout when .NET is required; listing
+  installed SDKs alone does not prove that the repository's SDK can resolve.
+- Install a missing compatible SDK alongside existing SDKs after approval.
+  Do not rewrite `global.json` or replace a working Node installation merely
+  to match a tool's test environment.
+- Match the repository's package manager. A Yarn Classic lockfile is not
+  permission to switch to npm, drop resolutions, or generate another lockfile.
 
-### 2. Install or reuse FixLab
+Use confirmed values for `$Repo`, `$Frontend`, `$BackendProject`, and
+`$DashboardPort`. They are not example directories to create.
 
-Check `Get-Command fixlab` and `fixlab --help`. Reuse an approved installed version.
-If installation is needed, show and request approval for:
+Review separate scopes before applying them: machine tools/MCP, repository
+scaffolding/profile, dependency restores, feed credential refresh, Playwright,
+authentication helpers/private state, development-server exclusions, and
+dashboard startup.
+
+### 2. Install or reuse FixLab and connect MCP
+
+Inspect `Get-Command fixlab` and `fixlab --help`. Reuse a compatible approved
+installation. If absent, request approval before:
 
 ```powershell
 npm install --global github:MonaDevAI/FixLab
 fixlab --help
 ```
 
-Do not disable TLS verification or change private-feed credentials. If enterprise
-policy restricts public GitHub access, use only an organization-approved source
-as described in the detailed installation guide.
+Use an organization-approved distribution when public GitHub access is
+restricted. Never disable TLS verification or change feed endpoints to get
+around an installation failure.
 
-### 3. Connect Copilot through MCP
-
-Inspect an existing registration with `copilot mcp get fixlab`; reuse it if it
-points to the correct installation. Otherwise show and review:
+Inspect `copilot mcp get fixlab`. Reuse a correct registration; otherwise,
+review and approve:
 
 ```powershell
 $FixLabMcp = Join-Path (npm root --global) '@fixlab\cli\mcp\server.js'
@@ -83,79 +99,427 @@ copilot mcp add fixlab -- node $FixLabMcp
 copilot mcp get fixlab
 ```
 
-Check the connection through `/mcp` in Copilot; reopen the session if necessary.
-Registration does not start a dashboard, grant tool permissions, or establish
-application authentication.
+Check `/mcp`; reopen the Copilot session if needed. Registration does not
+grant tool permissions, start the dashboard, or authenticate the application.
+If npm reports a blocked package install script, verify the affected feature.
+Do not globally enable all scripts; review a narrowly scoped remedy only if
+a required operation actually fails.
 
-### 4. Onboard the actual checkout
+### 3. Approve scaffolding before first-run onboarding
 
-Set `$Repo` to the confirmed repository path, then run:
+**Important:** first-run `onboard` can create the profile, agent, and prompts
+even without `--yes`. Do not describe that first run as read-only.
+
+Before running it, inspect existing files and show the proposed scaffolding
+under `.github\fixlab`, `.github\agents`, and `.github\prompts`. Get approval
+for creating missing files, then run:
 
 ```powershell
 fixlab onboard $Repo --runtime copilot
 ```
 
-Review `.github\fixlab\repository-profile.json` using the real component paths,
-startup commands, health URLs, tests, validation gates, browser tooling, and
-authentication helpers. Show proposed changes and the onboarding plan.
+Inspect the generated profile before proceeding. Replace example paths,
+commands, branch names, ports, and authentication defaults with verified
+repository values. Do not create empty `frontend` or `backend` directories.
 
-After review and explicit approval, apply only that plan:
+Default to Microsoft Edge for a new browser UI setup. Before approving a
+restore/browser-install plan, merge `"browser": "chromium"` and
+`"channel": "msedge"` into `browserAutomation`. The first value selects the
+Playwright engine; the channel launches installed Edge, not bundled Chromium.
+Do not overwrite a repository's explicitly approved alternative without review.
+API-only and explicitly unit-only profiles do not need a browser.
+
+Preserve required tests and validation gates. Check the actual test script
+before adding arguments: do not combine Jest's `--runInBand` with an existing
+`--maxWorkers` option. Do not invent a `type-check` or `test:e2e` script.
+
+Review restore commands and their working directories. After approving the
+actual restore and browser-install plan:
 
 ```powershell
 fixlab onboard $Repo --yes --runtime copilot
 ```
 
-Do not treat example profile paths as real or remove required validation gates.
+`--yes` can execute setup commands; it is not just approval to save a profile.
+If the plan includes an unapproved action, do not run it.
 
-### 5. Prepare required Playwright and live authentication
+### 4. Restore dependencies and handle feed authentication
 
-Follow the profile's actual browser/API/unit-only requirements. Do not add a
-browser to an API-only job or disable required live coverage to pass readiness.
+Treat these as three independent authentication surfaces:
 
-Review the browser-tool installation plan when applicable:
+| Surface | What successful authentication proves |
+| --- | --- |
+| npm/Yarn private feed | Access to frontend packages |
+| NuGet private feed | Access to .NET packages |
+| Application/browser SSO | Access to the signed-in application |
+
+Neither feed authentication nor `az login` proves browser sign-in.
+
+#### npm or Yarn: 401 Unauthorized
+
+Identify the failing feed from the package-manager error, `.npmrc` source
+settings, and lockfile URLs. Report only a sanitized feed description; redact
+private organization, project, feed identifiers, credentials, and URL parameters.
+Do not print `.npmrc` credentials or tokens.
+
+Search package scripts and repository instructions for an existing approved
+authentication helper. If it uses `vsts-npm-auth` and that command is missing,
+review and request approval before:
+
+```powershell
+npm install --global vsts-npm-auth
+```
+
+For a repository that actually defines `refresh:pat`, run its reviewed helper
+from the frontend directory after approving credential refresh:
+
+```powershell
+Set-Location -LiteralPath $Frontend
+npm run refresh:pat
+```
+
+The user completes any required sign-in. Do not invent that script for other
+repositories or replace their approved authentication mechanism.
+
+Verify access by retrying the original lockfile-respecting restore, for example
+`yarn install --frozen-lockfile` for an applicable Yarn Classic repository.
+A helper exit code alone is not proof of package access.
+
+Do not change private URLs to public npm, delete lockfiles, use
+`--ignore-engines` to hide incompatibility, or run destructive clean/refresh
+scripts as an authentication workaround.
+
+#### NuGet: 401, NU1301, or interactive authentication required
+
+`NU1301` can also mean connectivity or TLS failure. Check the underlying
+response before treating it as a credential problem.
+
+Inspect the actual NuGet source configuration without displaying credentials.
+Reuse the existing approved Azure Artifacts Credential Provider when present.
+After approving interactive feed authentication:
+
+```powershell
+dotnet restore $BackendProject --interactive
+```
+
+The user completes the provider's normal sign-in. Retry the ordinary approved
+restore afterward to verify access.
+
+If the credential provider is missing, review its
+[official installation instructions](https://github.com/microsoft/artifacts-credprovider)
+and ask before installing:
+
+- The documented `dotnet tool` installation method requires SDK 9.0.200 or later.
+- For a .NET 8 setup, use the documented compatible NuGet plugin installation
+  path instead of upgrading the application's SDK just to install the tool.
+- Review downloaded installation scripts before execution; do not blindly pipe
+  internet content into a shell.
+
+Keep tokens in the approved user credential store/cache, not committed
+`NuGet.Config`, scripts, profiles, or logs. Never turn off TLS checks, remove
+private sources, clear all caches, or repeatedly retry unchanged credentials.
+If access is denied after valid sign-in, report the permission requirement.
+
+### 5. Prepare Playwright with Microsoft Edge by default
+
+Follow the profile: browser UI, API-only, and explicitly unit-only validation
+have different requirements. Do not disable required live coverage to pass
+Doctor, or add a browser to an API-only setup.
+
+For browser UI validation, confirm the reviewed profile selects Edge:
+
+```json
+{
+  "browser": "chromium",
+  "channel": "msedge"
+}
+```
+
+These are fields inside `browserAutomation`, not a complete profile.
+Prefer a compatible installed Edge channel. If Edge is unavailable, report the
+missing prerequisite and ask before installing it or choosing an approved
+alternative. Do not silently fall back to bundled Chromium.
+
+Review:
 
 ```powershell
 fixlab setup-playwright $Repo
 ```
 
-If tools are missing, apply with `--yes` only after approval. Reuse compatible
-installed tools and do not install through unreviewed shared dependency junctions.
+For a browser profile, this may propose adding `@playwright/test` to the actual
+project and installing the configured channel. Explain manifest/lockfile and
+machine changes. After approval:
 
-Review `browserAutomation.workingDirectory` and
-`browserAutomation.authentication`, including its authentication command, proof
-command, and tracked status paths. Use repository-owned helpers.
+```powershell
+fixlab setup-playwright $Repo --yes
+```
+
+Verify an actual Edge launch, not merely the package version or executable
+path. Do not install through an unreviewed shared `node_modules` junction.
+
+### 6. Put private browser state in a valid, protected location
+
+FixLab dashboard authentication `statusPaths` must resolve **inside**
+`browserAutomation.workingDirectory`. A path that escapes that directory with
+`..` can pass CLI checks yet fail the dashboard's authentication-status check.
+Do not bypass containment with symlinks.
+
+For a browser working directory equal to the frontend directory, a suitable
+layout is:
+
+```text
+ACTUAL_FRONTEND_DIRECTORY\
+  .fixlab-local\
+    auth-local.json
+    edge-profile\
+```
+
+`ACTUAL_FRONTEND_DIRECTORY` means the existing application directory.
+Keep repository-owned helper code under `.github\fixlab` if desired; the
+helper's code location does not determine where credentials belong.
+
+Before writing or moving any state:
+
+- Add a repository ignore rule for the actual frontend's `.fixlab-local`
+  directory and verify both file and profile paths with `git check-ignore`.
+- Exclude this directory from development-server watching. Edge databases are
+  locked while the browser is running; watching them can crash Vite with
+  `EBUSY`.
+- Explicitly deny serving the directory over HTTP. Git ignore alone is not a
+  web-server access control.
+- Keep state outside the public directory and every other static-asset or
+  build-output directory. Vite's `server.fs.deny` does not protect `publicDir`.
+- Preserve existing development-server settings and default deny patterns.
+
+For Vite, review and approve merging this into the existing `server` options:
+
+```typescript
+watch: {
+  ignored: ['**/.fixlab-local/**']
+},
+fs: {
+  deny: [
+    '.env', '.env.*', '*.{crt,pem,key,p12,pfx,cer,der}',
+    '.npmrc', '.yarnrc.yml', '**/.git/**', '**/.fixlab-local/**'
+  ]
+}
+```
+
+These are example patterns, not a replacement for the installed version's
+defaults or additional custom rules. Preserve all required defaults and review
+equivalent exclusions for a different development server. Check alternate
+asset/plugin paths too; a deny rule for one URL is not proof that another route
+cannot expose the same file.
+
+Verify that requests for the auth state and profile files return HTTP 403
+without printing their contents, and that Vite remains responsive while the
+browser profile is in use.
+
+Merge real authentication commands and these relative paths into the profile:
+
+```json
+{
+  "required": true,
+  "statusPaths": [
+    ".fixlab-local\\auth-local.json",
+    ".fixlab-local\\edge-profile"
+  ]
+}
+```
+
+This is the `browserAutomation.authentication` fragment, not a complete
+configuration. Real repository-owned `command` and `proofCommand` are also
+required, along with a real `browserAutomation.testCommand`.
+
+If relocating state within the same checkout, get approval, close its owned
+browser, verify source and destination ignore rules before moving, update
+helper paths, and rerun fresh proof. Do not read or print state contents.
+Never copy another checkout's state or a user's normal browser profile.
+
+### 7. Use genuine corporate Edge SSO, not a private context
+
+A normal signed-in Edge window loading the application does not establish
+authentication in a separate automation context.
+
+For organization-managed Edge SSO, a fresh `browser.newContext()` is private
+and may not carry the browser/device identity needed by the organization.
+Use an approved, dedicated persistent profile for this checkout instead.
+Let the user sign into that browser profile and application normally.
+
+Repository-owned helper code can use this launch pattern:
+
+```javascript
+const context = await chromium.launchPersistentContext(profileDirectory, {
+  channel: 'msedge',
+  headless: false,
+  args: ['--enable-automation'],
+  ignoreDefaultArgs: [
+    '--disable-extensions',
+    '--disable-component-extensions-with-background-pages'
+  ],
+  viewport: { width: 1440, height: 900 },
+  serviceWorkers: 'block'
+});
+```
+
+`profileDirectory` must be the approved dedicated path described above.
+Resolve Playwright from the configured browser project's dependencies, not
+from an unrelated global installation. Integrate this into a real helper;
+the snippet is not a complete authentication implementation.
+
+Keep the automation indicator visible. Explicit `--enable-automation` also
+allows a launch-settings check through CDP `Browser.getBrowserCommandLine`;
+do not assume every Playwright version adds the flag automatically.
+Removing the two extension-disabling flags makes normal managed authentication
+components available; it does not guarantee tenant-policy compatibility.
+Do not weaken security policy, hide automation, or disable tenant controls.
+
+Keep proof headed too when required by the organization's browser SSO flow.
+Only one process may own the dedicated profile at a time. Close it in `finally`
+and track its directory in `statusPaths` for ownership checks.
+
+#### ERR_BLOCKED_BY_CLIENT on Microsoft certificate authentication
+
+If the helper has a request guard, check whether it blocked a legitimate
+Microsoft identity endpoint before blaming browser installation.
+
+Certificate authentication can use `certauth.login.microsoftonline.com` and
+tenant subdomains beneath it. After reviewing the required authentication
+flow, permit those endpoints over HTTPS narrowly. Match the exact hostname or
+a hostname ending in `.certauth.login.microsoftonline.com`, not any string
+containing that text. Do not allow arbitrary Microsoft domains or business
+POST requests.
+
+Retain request guards, mutation controls, and production restrictions. Test
+both the required identity endpoint and lookalike domains that must remain
+blocked.
+
+#### "No certificate detected"
+
+After the identity endpoint is reachable, this is a genuine sign-in requirement,
+not proof that Playwright is missing. A dedicated persistent, normally signed-in
+Edge profile may satisfy the required browser/device identity.
+
+If Microsoft offers another organization-permitted sign-in method, the user
+may choose it. If a certificate is mandatory and unavailable, stop and report
+the requirement. Do not export certificates/private keys, copy a personal
+profile, change Conditional Access, or manufacture a successful result.
+
+Microsoft documents Edge browser sign-in and private-mode limitations in its
+[Conditional Access browser guidance](https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-conditions#supported-browsers).
+
+### 8. Prove real authentication and distinguish its coverage
+
+Review the actual helper, selected environment, state paths, sign-in command,
+and proof command before:
 
 ```powershell
 fixlab authenticate $Repo
-# Only after reviewing and approving the authentication plan:
+# Only after approval of the real authentication plan:
 fixlab authenticate $Repo --yes
 ```
 
-The user completes genuine application sign-in/MFA themselves. Keep tokens and
-browser state local and ignored by Git. Never fabricate a readiness marker,
-copy another checkout's authentication state, or treat `az login` as frontend
-sign-in. Report readiness only when the required genuine live proof succeeds.
+The helper must:
 
-### 6. Check readiness and open the dashboard
+- Use the exact approved origin and environment; reject an unconfigured SIT
+  target instead of silently falling back to local.
+- Let the user complete genuine browser sign-in/MFA. Identify and foreground
+  only the helper-owned window when needed, never another Edge window.
+- Capture genuine state locally without logging credentials.
+- Handle the application's real cache. Playwright `storageState` alone does
+  not preserve MSAL `sessionStorage`; save and restore that state locally for
+  the exact approved origin when needed.
+- Reopen the dedicated browser and assert an actual signed-in condition plus
+  fresh legitimate identity proof using the application's existing scopes.
+- Fail for missing/invalid state or an unsuccessful live identity check.
+- Close owned browser resources and remove temporary diagnostics.
+
+Run the reviewed `proofCommand` and focused browser test from the configured
+working directory with the selected environment.
+
+A helper exit, state-file existence, Doctor PASS, or normal Edge SSO is not a
+substitute for fresh proof. A signed-in app-shell check with business APIs
+blocked proves identity/shell behavior only, not backend integration or a
+business scenario. Keep any required integration gates unresolved until
+actually validated.
+
+Do not retain generated validation-only authenticated spec files in product
+changes unless permanent coverage was explicitly requested.
+
+### 9. Verify Doctor and a stable, matching dashboard
 
 ```powershell
 fixlab doctor $Repo --runtime copilot
 ```
 
-Explain remaining requirements. When readiness and approvals permit, start or
-reuse the exact checkout's dashboard with the agreed `$DashboardPort`:
+Inspect real startup commands and health URLs independently. Doctor does not
+prove that a blank/unverified backend startup, missing health endpoint, or
+unconfigured SIT target is ready.
+
+Request approval before starting the idle dashboard. Stop temporary
+setup-owned servers if the dashboard should manage their lifecycle; leave
+unrelated services alone.
 
 ```powershell
 fixlab dashboard $Repo --port $DashboardPort --no-open --runtime copilot
-# Alternatively:
-fixlab chat $Repo --port $DashboardPort --runtime copilot
 ```
 
-Verify repository, port, instance, and current job through
-`fixlab_dashboard_status` when the MCP bridge is connected. Ask the user for
-missing decisions or required approvals instead of guessing.
+Reuse a verified matching dashboard instead of starting a duplicate. If a
+job already exists, preserve it and do not assume the dashboard is idle.
 
-Do not start a bug-fixing job, change application UI, commit, push, create a pull
-request, approve unsafe data access, or stop unrelated resources as part of setup.
-Finish with actual installation, profile, browser-tool, authentication, and
-dashboard status, including unresolved requirements.
+If the dashboard must remain available after the Copilot turn, start it using
+the host's supported persistent/background mechanism. A launcher printing a URL
+is not proof that the server remained running.
+
+Verify all of these:
+
+- Dashboard UI returns HTTP 200.
+- `fixlab_dashboard_status` reports the exact repository and expected port.
+- Record its actual instance ID and confirm no job was started by setup.
+- Read `fixlab_dashboard_control` operation `authentication-status`, bound to
+  that instance ID and current job ID (`null` when idle).
+- Check status again after that request to catch a crash. A basic status
+  endpoint alone does not exercise authentication-path containment.
+
+An idle dashboard can report authentication `configured: true` and
+`ready: false` despite successful external CLI proof. Dashboard proof is
+memory-only and tied to the owning job, environment, configuration, and state
+identities. Obtain its own fresh proof when that operation/job is authorized.
+Do not start a job just to make the status green.
+
+### 10. Finish with actual status
+
+Report installation/MCP, profile, dependency restores, npm/NuGet feed access,
+Playwright/Edge launch, genuine authentication proof and its scope,
+Doctor, dashboard repository/port/instance, and unresolved prerequisites.
+
+Do not call the whole setup complete if backend startup/health, selected
+environment configuration, required live coverage, or job-bound proof remains
+unverified. Do not commit credentials, start jobs, change application UI,
+publish, or stop unrelated resources as part of setup.
+
+## Troubleshooting summary
+
+| Symptom | Focused recovery |
+| --- | --- |
+| First onboarding run created files without `--yes` | Approve scaffolding before running; preserve existing files |
+| npm/Yarn 401 | Refresh the actual feed through its approved helper, then retry the original restore |
+| NuGet 401 / NU1301 | Distinguish auth from network/TLS; use the compatible credential provider and approved interactive restore |
+| Playwright package absent | Review the actual project's setup plan; install only after approval |
+| Edge unavailable | Report the prerequisite; ask before installation or choosing another browser |
+| Normal Edge works but automation does not | Use a dedicated persistent, managed-sign-in-capable Edge profile |
+| Certificate-auth endpoint blocked by client | Correct the identity-only request guard narrowly |
+| No certificate detected | Complete permitted browser/device sign-in or report the certificate requirement |
+| Dashboard authentication path-containment error | Keep ignored state inside the browser working directory |
+| Vite EBUSY on Edge Cookies | Exclude private state from watching and deny serving it |
+| Dashboard printed a URL then exited | Inspect its error; verify UI and authentication-status, then recheck the same instance |
+| Doctor passes but dashboard auth is not ready | Distinguish configuration, external proof, and fresh dashboard/job-bound proof |
+
+## References
+
+- [FixLab installation](https://github.com/MonaDevAI/FixLab/blob/main/installation.md)
+- [FixLab detailed setup](https://github.com/MonaDevAI/FixLab/blob/main/docs/installation.md)
+- [Azure Artifacts Credential Provider](https://github.com/microsoft/artifacts-credprovider)
+- [Playwright persistent contexts](https://playwright.dev/docs/api/class-browsertype#browser-type-launch-persistent-context)
+- [Microsoft Entra supported browsers](https://learn.microsoft.com/en-us/entra/identity/conditional-access/concept-conditional-access-conditions#supported-browsers)
+- [Vite filesystem deny rules](https://vite.dev/config/server-options#server-fs-deny)
