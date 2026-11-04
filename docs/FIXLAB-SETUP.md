@@ -12,8 +12,11 @@ bug-fixing job, commit, push, publish packages, or create a pull request.
 Open Copilot in the target checkout and paste:
 
 ```text
-Read this FixLab setup guide and onboard the actual repository with
---runtime copilot. Inspect first, show the plan, and ask before changes.
+Onboard the actual repository with --runtime copilot. Follow:
+https://github.com/MonaDevAI/FixLab/blob/main/docs/FIXLAB-SETUP.md
+If unavailable, use the manual installation guide:
+https://github.com/MonaDevAI/FixLab/blob/main/docs/installation.md
+Inspect first, show the plan, and ask before changes or when details are missing.
 Reuse compatible installed tools and preserve application code and edits.
 Resolve npm/Yarn and NuGet feed authentication separately using approved
 repository helpers and genuine human sign-in. Use Microsoft Edge by default
