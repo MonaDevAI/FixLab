@@ -188,6 +188,10 @@ Verify access by retrying the original lockfile-respecting restore, for example
 `yarn install --frozen-lockfile` for an applicable Yarn Classic repository.
 A helper exit code alone is not proof of package access.
 
+For repositories using `jsonpath@1.3.0`, preserve its exact
+`static-eval@2.1.1` dependency. Review conflicting resolutions or overrides
+before restoring; do not silently substitute another version.
+
 Do not change private URLs to public npm, delete lockfiles, use
 `--ignore-engines` to hide incompatibility, or run destructive clean/refresh
 scripts as an authentication workaround.
