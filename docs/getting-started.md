@@ -1,187 +1,102 @@
-# Getting started
+# Dashboard user guide
 
-This guide covers the first job and day-to-day operation. Use
-[Installation](installation.md) for tool setup and
-[Repository onboarding](repository-onboarding.md) for profile configuration.
+## 1. Ask Copilot to set up FixLab
 
-## Prerequisites
+Open your application checkout in a signed-in Copilot session and paste:
 
-Complete the [installation prerequisites](installation.md#prerequisites),
-configure the application's `.github/fixlab/repository-profile.json`, and
-resolve the required readiness checks. Install only what that profile needs.
-The CLI, optional plugin/MCP connection, browser setup, and application
-authentication are separate.
+```text
+Install or reuse FixLab and onboard this repository with --runtime copilot.
+Follow https://github.com/MonaDevAI/FixLab/blob/main/docs/FIXLAB-SETUP.md
+Ask me for missing setup details; do not guess paths, commands or environments.
+Review the profile and changes with me, then run Doctor.
+Ask before starting or reusing the matching dashboard and show its local URL.
+I will complete sign-in/MFA. Do not start a job or publish changes.
+```
 
-## Simplified chat-first workflow
+Open the dashboard URL Copilot provides. Resolve required readiness failures
+before submitting work. Already set up? Ask Copilot to start or reuse the
+matching dashboard instead of reinstalling.
 
-With FixLab and the selected runtime installed:
+## 2. Submit a request
+
+Check the repository shown in the header. Open **Run options** and choose:
+
+| Mode | Purpose |
+| --- | --- |
+| Validate only | Check an existing change or PR without edits or publication |
+| Fix and validate | Fix a bug or make a small enhancement |
+| Playwright validation only | Check a browser/API result without implementation or PR work |
+
+Select a profile-approved environment. For a first run, try **Validate only**:
+
+```text
+Validate PR 123 against its actual source commit. Do not edit source or update
+the PR. Report evidence and any failed, blocked, skipped or pending checks.
+```
+
+Replace `123` with your PR number. For a bug, describe what happens, what
+should happen, and how to reproduce it. Enter it manually or load an authorized
+Azure DevOps work item, then select **Start job**.
+
+## 3. Respond when needed
+
+Follow the conversation and **Run details**. When **Action needed** appears,
+read the blocker, supply the missing information, and use **Resume FixLab**
+when offered. Review runtime permission requests separately.
+
+For browser sign-in, open **Connections**, use **Check status** or
+**Connect Playwright**, and complete sign-in/MFA in the browser. Never paste
+credentials into chat. Backend-only jobs use their configured authentication.
+
+## 4. Review the result
+
+In **Run details**, check the changed source/branch, tests, browser/API evidence,
+and any PR link. Failed, blocked, skipped, or pending checks are not passes.
+Synthetic checks do not prove the real backend works.
+
+Fix-and-validate may produce an authorized draft PR while validation continues.
+Validate-only produces findings and evidence, not a new PR.
+
+## 5. Continue or start separate work
+
+Select the saved conversation to continue the same job and existing PR.
+Use **Hold selected job** / **Resume held job** to pause or continue work.
+**Restart selected job** creates a fresh job and keeps the original result.
+
+Use **New conversation** for a separate request. **Queue** shows waiting jobs;
+a blocked or failed job needs resolution or explicit dismissal before the queue
+advances. On small screens, use **Menu** to reach these controls.
+
+## 6. Stop or replace the dashboard
+
+Closing the browser tab does not stop the dashboard. Press **Ctrl+C in the
+dashboard terminal** to stop its server and release the port.
+If Copilot started it in the background, ask:
+
+> Shut down FixLab on port 4317 and only its owned processes. Leave other
+> applications running.
+
+Ask Copilot to start it again when needed. No reinstall or file deletion is
+required; saved jobs remain available.
+
+## Manual fallback and optional terminal chat
+
+If Copilot setup is unavailable, follow [installation](installation.md).
+Once ready, start the dashboard and open its printed local URL:
 
 ```powershell
-fixlab chat C:\source\application --runtime copilot
+fixlab dashboard C:\source\application --port 4317 --runtime copilot
 ```
 
-Use `--runtime agency` for Agency. Omitting the path lets chat use the current
-ready repository or ask for one. An incomplete repository opens guided
-onboarding before the dashboard starts.
+Replace the example path with your checkout. Keep that terminal open.
+If the port is occupied by another application, choose a free port.
 
-Review the connected repository before submitting a request. Terminal chat
-and the browser dashboard share the job, runtime session, branch, evidence,
-and pull-request state. Closing terminal chat does not stop the job.
-Open the printed loopback dashboard URL, request `open dashboard`, or opt in
-with `fixlab dashboard --open`; onboarding does not automatically open a tab.
-
-On the dashboard, enter the request and select **Start job**. **Run options**
-contains mode, environment, and evidence settings. The sidebar exposes saved
-work, connections, settings, and run details. On small screens, select **Menu**;
-**Back to chat** restores the unsent draft without starting work.
-
-Keep the request about behavior and expected results, not profile-owned paths
-and commands. For example:
-
-```text
-The search results contain duplicate rows after filtering.
-Reproduce the issue, make the smallest fix, run the configured affected tests
-and browser journey, capture non-sensitive evidence, and create a draft PR.
-```
-
-For an API-only repository:
-
-```text
-The create-request API returns the wrong status for invalid input.
-Reproduce it with a focused API test, make the smallest fix, and verify the
-HTTP behavior using this repository's configured validation policy.
-```
-
-## Onboard a repository
-
-Use the [guided installation](installation.md#recommended-path-install-then-run)
-or request an explicit setup plan:
+The browser is enough. Optionally connect terminal chat from another terminal,
+using the same repository, runtime, and port:
 
 ```powershell
-fixlab onboard C:\source\application --runtime copilot
+fixlab chat C:\source\application --port 4317 --runtime copilot
 ```
 
-Review the profile, real component directories, test/startup commands, allowed
-environments, authentication, and pull-request settings before approving setup.
-`fixlab init` preserves existing files; it does not make example paths correct
-for an application. Run `fixlab doctor --runtime copilot` after configuration.
-
-See the [onboarding reference](repository-onboarding.md) for new worktrees,
-shared-checkout policy, API-only validation, and linked repositories. Linked
-applications keep their own profiles, ownership, changes, and pull requests;
-opening a linked workspace is not end-to-end integration evidence.
-
-## Choose an intake path
-
-**Enter manually** is the default. Describe a bug or choose **Small enhancement**
-for bounded new behavior. Add screenshots only when they help explain it.
-Up to five PNG, JPEG, or WebP images are allowed: 2 MiB each and 8 MiB total.
-File selection, pasted images, and Azure DevOps images share these limits.
-
-For Azure DevOps intake, enter up to 20 unique work-item IDs or URLs:
-
-```text
-https://dev.azure.com/your-organization/your-project/_workitems/edit/123
-456
-```
-
-ID-only intake requires the profile's `azureDevOps.organization` and
-`azureDevOps.project`. Sign in with `az login` using an authorized identity.
-FixLab loads supported fields, recent comments, and bounded images; loading
-items does not update their status or expand a Feature into its children.
-See [intake contracts](architecture.md#intake-sources) for limits and retention.
-
-## Recommended first workflow
-
-Start with an existing change or PR in **Validate only** mode:
-
-```text
-Validate pull request 123 against its actual source commit using this
-repository's required checks. Do not edit source, commit, push, or update the PR.
-Report the evidence and every failed, blocked, skipped, or pending check.
-```
-
-Verify the checkout and required authentication, run the relevant configured
-checks, and inspect the resulting evidence before enabling fix-and-validate.
-
-| Mode | Use it for |
-| --- | --- |
-| Fix and validate | A scoped bug fix or small enhancement, with publication only when authorized |
-| Validate only | Existing changes or PRs, without edits or publication |
-| Playwright validation only | A focused browser/API result check without implementation or PR work |
-
-Efficient delivery defaults to an authorized draft PR after focused regression
-checks, diff review, and required pre-publication gates. Optional broad
-tests/builds follow saved preferences. Strict delivery and explicitly required
-checks retain their requirements. A draft PR, successful startup, or HTTP 200
-is not proof that all validation passed.
-
-### Review evidence and approvals
-
-Inspect stages, configured gate results, scenario assertions, screenshots or
-API proof, and any PR link. Synthetic/intercepted browser checks must be labeled;
-they do not prove the real backend works. Temporary generated browser tests
-are removed before publication unless permanent coverage is explicitly required.
-
-Keep credentials and MFA in the normal authentication flow, not chat.
-**Connect Playwright** runs the configured sign-in command; **Check status**
-does not expose browser-state contents. If the persistent test browser is busy,
-preserve unsaved work and close it yourself before retrying. Do not kill another
-browser or copy its authentication state.
-
-Runtime permissions and workflow approvals are distinct. Review the actual
-command, path, or diff. An **Action needed** response is not a blanket grant,
-and a workflow reply cannot approve an unrelated native permission request.
-See [runtime permissions](commands.md#background-runtime-permissions).
-
-Local jobs can warm the configured React frontend alongside diagnosis. Reuse
-it only when it is healthy and serves the checkout being validated; a warm
-baseline server does not validate an isolated fix. Startup is not a passed
-live-test gate.
-
-### Queue and recover work
-
-| Action | Behavior |
-| --- | --- |
-| `new bug <details>` | Create a separate job; queue it when another job is active |
-| Add comment to current job | Retain guidance for the same session and existing PR |
-| Remove from queue | Cancel a waiting job without interrupting the executor |
-| Hold / resume | Retain job context and release/resume execution through owned lifecycle controls |
-| Restart | Create a new job/session while retaining the original result |
-| `show status`, `show logs`, `show evidence`, `show pull request` | Inspect the connected job from terminal chat |
-| `switch repository` | Select another repository without silently reassigning the current job |
-
-There is one active executor and at most 20 pending jobs. Blocked or failed
-jobs pause queue advancement; resolve the blocker, resume the same job, or
-explicitly dismiss the failed job. History cleanup excludes active, waiting,
-and held jobs.
-
-For an interrupted task, ask:
-
-```text
-Continue the same job. Preserve the branch, changes, existing PR, and completed
-evidence. Explain the current blocker and finish only the remaining required work.
-```
-
-Use session controls to reconnect to a verified owner. Stop/shutdown affects
-only that owner's tracked processes. An unreachable dashboard or stale-looking
-PID is not permission to clear an executor lease or take over another session.
-
-For multiple bugs, the default is one combined PR; select separate PRs when
-isolation is required. Optional manual localhost validation keeps the owned
-frontend available until you record Passed or Failed. It remains separate from
-Playwright evidence.
-
-## Environment policy
-
-Prefer local validation and select only profile-approved environments. Never
-silently fall back to another environment or select production automatically.
-Keep environment addresses, credentials, and sensitive test data out of public
-documentation.
-
-Use approved test data and intercept mutations where required. A synthetic
-fallback must state what it could not verify. Missing authentication, unsafe
-data access, or unavailable required validation remains a blocker.
-
-For operational details, use the [command reference](commands.md),
-[architecture reference](architecture.md), and [troubleshooting guide](troubleshooting.md).
+At `fixlab>`, `/stop` stops the job and leaves it resumable; `/exit` disconnects
+chat without stopping the dashboard.

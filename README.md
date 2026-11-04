@@ -24,6 +24,7 @@ Install or reuse FixLab, register its MCP server, and onboard this repository
 with --runtime copilot. Follow FIXLAB-SETUP.md if supplied; otherwise use:
 https://github.com/MonaDevAI/FixLab/blob/main/docs/installation.md
 Review the real profile and setup plan with me before each change.
+Ask me for missing setup details; do not guess paths or settings.
 Use Microsoft Edge by default for required browser validation. Review feed
 access, dedicated browser SSO and private-state protection; run Doctor.
 Ask before starting or reusing the matching dashboard. I will complete MFA.
@@ -38,33 +39,6 @@ use [installation.md](installation.md) and the
 [VS Code guide](docs/installation.md#install-and-use-in-visual-studio-code).
 Setup still requires reviewed approvals; installing FixLab alone does not
 establish application readiness or grant permissions.
-
-### Stop or replace an unused dashboard
-
-At `fixlab>`, `/stop` stops the job and leaves it resumable; `/exit` disconnects
-chat without stopping the dashboard. Press **Ctrl+C in the dashboard's
-terminal** to stop the server and release its port.
-
-If Copilot started it in the background, ask:
-
-> Shut down FixLab on port 4317 and only its owned processes. Leave other
-> applications running.
-
-Start a replacement using the available port:
-
-```powershell
-fixlab dashboard C:\source\application --port 4317 --runtime copilot
-```
-
-In another terminal, connect chat to that same port:
-
-```powershell
-fixlab chat C:\source\application --port 4317 --runtime copilot
-```
-
-Closing a browser tab or exiting Copilot does not stop a detached dashboard.
-No reinstall or file deletion is needed. Restarting preserves saved jobs;
-submit a new request for a fresh job.
 
 ## What you can do
 
@@ -105,13 +79,57 @@ See [architecture and benefits](docs/architecture-overview.md) for components,
 benefits, deployment, recovery, and trust boundaries, or the
 [architecture reference](docs/architecture.md) for runtime and MCP contracts.
 
+## Work in the dashboard
+
+After setup, ask Copilot:
+
+> Start or reuse this repository's FixLab dashboard with `--runtime copilot`
+> and show me its local URL. Ask me if any setup details are missing.
+> Do not start a job.
+
+Or start it manually and open the printed local URL:
+
+```powershell
+fixlab dashboard C:\source\application --port 4317 --runtime copilot
+```
+
+Follow the [dashboard user guide](docs/getting-started.md) to submit a request,
+choose run options, handle approvals, review evidence, and resume saved work.
+
+### Stop or replace an unused dashboard
+
+At `fixlab>`, `/stop` stops the job and leaves it resumable; `/exit` disconnects
+chat without stopping the dashboard. Press **Ctrl+C in the dashboard's
+terminal** to stop the server and release its port.
+
+If Copilot started it in the background, ask:
+
+> Shut down FixLab on port 4317 and only its owned processes. Leave other
+> applications running.
+
+Start a replacement using the available port:
+
+```powershell
+fixlab dashboard C:\source\application --port 4317 --runtime copilot
+```
+
+Optionally, in another terminal, connect chat to that same port:
+
+```powershell
+fixlab chat C:\source\application --port 4317 --runtime copilot
+```
+
+Closing a browser tab or exiting Copilot does not stop a detached dashboard.
+No reinstall or file deletion is needed. Restarting preserves saved jobs;
+submit a new request for a fresh job.
+
 ## Documentation
 
 | Start here | Read next |
 | --- | --- |
 | [First installation](installation.md) | Prerequisites, machine changes, and reviewed setup |
 | [Detailed installation](docs/installation.md) | Copilot prompt, VS Code, updates, and optional integrations |
-| [Getting started](docs/getting-started.md) | First job, dashboard use, approvals, and recovery |
+| [Dashboard user guide](docs/getting-started.md) | Startup, requests, approvals, evidence, recovery, and shutdown |
 | [Architecture and benefits](docs/architecture-overview.md) | Component diagrams, job flow, deployment, and trust boundaries |
 | [Repository onboarding](docs/repository-onboarding.md) | Profiles, worktrees, API-only validation, and linked applications |
 | [Troubleshooting](docs/troubleshooting.md) | Installation, authentication, runtime, and validation blockers |

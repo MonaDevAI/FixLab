@@ -14,7 +14,7 @@ installation quickstart is a convenience copy; use the online guides for updates
 | [Word installation quickstart](FixLab-Installation-Guide-Quickstart.docx) | Downloadable reviewed setup, Edge SSO, feed access, and installation troubleshooting |
 | [Copilot installation prompt](installation.md#copy-paste-installation-prompt) | One reviewed setup request to paste into Copilot |
 | [Visual Studio Code](installation.md#install-and-use-in-visual-studio-code) | CLI setup and discovery of the repository custom agent |
-| [Getting started](getting-started.md) | First validation request, dashboard controls, evidence, and recovery |
+| [Dashboard user guide](getting-started.md) | Startup, requests, run options, approvals, evidence, recovery, and shutdown |
 | [Repository onboarding](repository-onboarding.md) | Application profiles, worktrees, API-only validation, and linked applications |
 | [Troubleshooting](troubleshooting.md) | Known installation, feed, browser, runtime, and readiness failures |
 
