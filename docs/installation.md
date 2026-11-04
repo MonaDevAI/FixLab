@@ -36,10 +36,10 @@ checkout, then paste:
 ```text
 Install or reuse FixLab, register its MCP server, and onboard this repository
 with --runtime copilot. Review the real repository profile and setup plan
-with me before applying changes. Prepare Playwright and genuine live
-authentication when required by the profile, run Doctor, and start or reuse
-the matching dashboard. Ask before changes, preserve my application code,
-and do not start a job.
+with me before applying changes. Use Microsoft Edge by default for required
+browser validation. Review package-feed authentication separately from
+browser SSO and protect private state. Run Doctor, then ask before starting
+or reusing the matching dashboard. Preserve my code and do not start a job.
 ```
 
 **Option 2: give Copilot a Markdown file.** For reusable, reviewable instructions,
@@ -58,10 +58,17 @@ or a permission grant. The [Word quickstart](FixLab-Installation-Guide-Quickstar
 is also available. If Copilot or the file is unavailable, use the detailed
 installation steps and command reference below.
 
+For approved scaffolding, separate npm/Yarn and NuGet feed authentication,
+dedicated Edge SSO, protected private state, and dashboard proof checks, follow
+the [reviewed setup instructions](FIXLAB-SETUP.md#instructions-for-copilot).
+The setup guide defaults browser UI profiles to Microsoft Edge, not bundled
+Chromium; this does not change standalone CLI or existing profile defaults.
+
 ## Recommended path: install, then run
 
 This is the manual fallback when Copilot or the setup guide is unavailable.
-Once your supported runtime is installed and signed in:
+First-run onboarding may create scaffolding without `--yes`; review and approve
+those files first. Once your supported runtime is installed and signed in:
 
 ```powershell
 npm install --global github:MonaDevAI/FixLab
@@ -69,8 +76,10 @@ fixlab onboard C:\source\application --runtime copilot
 ```
 
 If a new example profile is created, configure the actual application paths and
-commands, then rerun `onboard` to inspect its setup plans. After reviewing and
-approving those plans:
+commands, then rerun `onboard` to inspect its setup plans. For browser UI setup,
+select `"browser": "chromium"` with `"channel": "msedge"` before approving the
+browser plan; this launches Microsoft Edge. Preserve an explicitly reviewed
+repository alternative. After reviewing and approving the actual plans:
 
 ```powershell
 fixlab onboard C:\source\application --runtime copilot --yes
@@ -198,8 +207,10 @@ paths are corrected, review `fixlab setup-playwright` before approving
 not globally. Restore existing dependencies with the reviewed `fixlab prepare`
 plan and complete any required private-feed sign-in first.
 
-Browser-mode tests need the configured Playwright browser or approved channel
-(for example, Edge), not an arbitrary extra Chromium installation. API-only
+Default this guided browser-mode setup to Microsoft Edge with
+`browserAutomation.browser: "chromium"` and `browserAutomation.channel: "msedge"`;
+do not silently install or fall back to bundled Chromium. Review an alternative
+only when required by the repository. API-only
 profiles use `browserAutomation.mode: "api"` and do not install or launch a
 browser. An explicit unit-test-only profile skips Playwright; do not disable
 required live coverage merely to get a green Doctor result.
@@ -300,16 +311,21 @@ fallback steps below without requesting the file again.
 5. After approval, create missing workspace files with fixlab init.
    Verify .github\agents\fixlab-autofix.agent.md exists. Configure actual
    paths, commands, ports, safe environments, and authentication intent.
+   For required browser UI coverage, default to Microsoft Edge using
+   browser: chromium and channel: msedge before approving browser setup.
 6. Ask before restoring dependencies, installing Playwright, accessing
    private feeds, authenticating, or starting services. I will complete
-   genuine sign-in and MFA myself.
+   genuine sign-in and MFA myself. Keep npm/Yarn and NuGet feed access
+   separate from application authentication. Review a dedicated persistent
+   Edge profile, contained ignored state, and development-server exclusions.
 7. Run fixlab doctor --runtime copilot. Report every remaining blocker.
    Register MCP only when dashboard coordination is requested and its
    configuration has been reviewed.
 8. Start or reuse the matching dashboard only after readiness and my
-   approval. Verify the exact repository and dashboard identity.
+   approval. Verify the exact repository, dashboard identity and
+   authentication-status; do not start a job to make readiness green.
 
-Do not modify application code, start a bug job, copy browser state,
+Do not modify application UI or business logic, start a bug job, copy browser state,
 disable TLS, publish a PR, or grant blanket permissions.
 ```
 
@@ -867,9 +883,10 @@ The repository profile controls the Playwright check:
 }
 ```
 
-`browser` selects the Playwright browser API. The optional `channel` selects an
-installed branded browser such as Microsoft Edge. Omit `channel` when the
-repository uses Playwright's bundled Chromium.
+`browser` selects the Playwright browser API; `"chromium"` does not by itself
+mean Microsoft Edge. Set `"channel": "msedge"` to launch Edge, the default for
+this reviewed setup guide. Omit the channel only for an explicitly reviewed
+repository requirement to use bundled Chromium, not as a silent fallback.
 
 The optional `authentication` block enables the dashboard's **Check status**
 and **Connect Playwright** controls. `statusPaths` are checked for existence

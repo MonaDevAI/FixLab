@@ -8,10 +8,10 @@ checkout, then paste:
 ```text
 Install or reuse FixLab, register its MCP server, and onboard this repository
 with --runtime copilot. Review the real repository profile and setup plan
-with me before applying changes. Prepare Playwright and genuine live
-authentication when required by the profile, run Doctor, and start or reuse
-the matching dashboard. Ask before changes, preserve my application code,
-and do not start a job.
+with me before applying changes. Use Microsoft Edge by default for required
+browser validation. Review package-feed authentication separately from
+browser SSO and protect private state. Run Doctor, then ask before starting
+or reusing the matching dashboard. Preserve my code and do not start a job.
 ```
 
 **Option 2: use a Markdown file.** Copy
@@ -32,6 +32,9 @@ available as a download.
 If Copilot or the file is unavailable, continue with the complete manual steps
 below. Use the [detailed installation guide](docs/installation.md) for enterprise
 distribution, additional setup paths, updates, and troubleshooting.
+The [reviewed setup guide](docs/FIXLAB-SETUP.md#instructions-for-copilot)
+includes separate npm/Yarn and NuGet authentication, dedicated Edge SSO,
+private-state protection, and dashboard authentication-status checks.
 
 ## 1. Prerequisites: install separately
 
@@ -75,13 +78,21 @@ Agency, start a service/dashboard, register MCP, or change application files.
 
 ## 3. Set up an application
 
+The first onboarding run can create scaffolding even without `--yes`.
+Review and approve missing profile, agent, and prompt files before running:
+
 ```powershell
 fixlab onboard C:\source\application --runtime copilot
 ```
 
 Replace the path with the actual checkout; use `--runtime agency` for Agency.
 Set any new example profile to the real application paths and commands, then
-rerun `onboard` to review the setup plans. After approving those plans:
+rerun `onboard` to review the setup plans. For browser UI setup, default to
+Microsoft Edge by setting `browserAutomation.browser` to `"chromium"` and
+`browserAutomation.channel` to `"msedge"` before approving browser installation.
+The browser field selects Playwright's engine; the channel launches Edge,
+not bundled Chromium. Preserve an explicitly approved repository alternative.
+After approving the actual restore and browser plans:
 
 ```powershell
 fixlab onboard C:\source\application --runtime copilot --yes
