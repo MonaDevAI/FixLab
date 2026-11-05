@@ -38,6 +38,7 @@
         </div>
         <div id="readiness" class="readiness">Checking repository…</div>
         <button id="current-job-fullscreen" type="button" disabled>Current job full screen</button>
+        <button id="job-summary-open" type="button" disabled>View summary</button>
       </header>
 
       <div class="conversation-column" id="chat-view" tabindex="-1">
@@ -541,6 +542,14 @@
       </section>
     </main>
     </div>
+    <dialog id="job-summary-dialog" aria-labelledby="job-summary-title">
+      <div class="section-heading">
+        <h2 id="job-summary-title">Job summary</h2>
+        <button id="job-summary-close" type="button">Close summary</button>
+      </div>
+      <p class="guidance">Recorded evidence for the selected job, refreshed while open. No AI call, test execution, file creation or job changes. Missing findings remain unverified.</p>
+      <article id="job-summary-content"></article>
+    </dialog>
     <dialog id="current-job-dialog" aria-labelledby="current-job-dialog-title">
       <div class="section-heading">
         <h2 id="current-job-dialog-title">Current job details and evidence</h2>

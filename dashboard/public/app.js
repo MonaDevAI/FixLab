@@ -11,6 +11,63 @@ const stageNames = [
   "pr"
 ];
 
+function summaryText(value) {
+  const result = String(value ?? "").replace(/\s+/gu, " ").trim().slice(0, 1000);
+  if (/(?:password|passwd|secret|token|authorization|bearer|cookie|connection.?string|private.?key)/iu.test(result)) {
+    return "[Sensitive detail omitted]";
+  }
+  return result.replace(/https?:\/\/\S+/giu, "[Link omitted]") || "Not verified";
+}
+
+function jobSummarySections(job) {
+  const gates = job.validation?.gates ?? [];
+  const unresolved = stageNames.filter((name) => job.stages?.[name]?.status !== "passed");
+  const evidence = job.testEvidence;
+  const interim = ["running", "queued", "holding"].includes(job.status);
+  const stage = (name) => {
+    const recorded = job.stages?.[name];
+    return `${name}: ${summaryText(recorded?.status)} - ${summaryText(recorded?.message)}`;
+  };
+  return [
+    { heading: interim ? "Interim outcome" : "Recorded outcome", lines: [
+      `Job: ${summaryText(job.id)} | Status: ${summaryText(job.status)}`,
+      `Request: ${summaryText(job.request)}`,
+      `Environment: ${summaryText(job.targetEnvironment)} | Mode: ${summaryText(job.mode)}`,
+      "Job completion is not a claim of complete regression coverage."
+    ] },
+    { heading: "Investigation and changes (agent-reported)", lines: [
+      stage("intake"), stage("diagnosis"), stage("reproduce"), stage("fix"), stage("review"),
+      "Exact changed-file and commit inventory: Not verified by this summary."
+    ] },
+    { heading: "Tests and regression", lines: [
+      ...gates.map((gate) => `${summaryText(gate.id)}: ${summaryText(gate.status)}${gate.required ? " (required)" : " (optional or not applicable)"}${Number.isFinite(gate.durationMs) ? ` | ${gate.durationMs} ms` : ""}${gate.summary ? ` | ${summaryText(gate.summary)}` : ""}`),
+      ...(gates.length ? [] : ["No executor-backed gate results recorded."]),
+      `Gate scope: ${summaryText(job.validation?.scope)}. Only the listed configured gates are accounted for.`,
+      `Agent-reported scenario: ${evidence?.reported ? summaryText(evidence.scenario) : "Not verified"}`,
+      `Data source: ${summaryText(evidence?.source)} | Mutation mode: ${summaryText(evidence?.mutationMode)}`,
+      stage("local-stack"), stage("live-test"),
+      "Agent stage/scenario messages are not independent runner proof. Synthetic or intercepted tests do not prove real backend writes."
+    ] },
+    { heading: "Findings and must-know", lines: [
+      ...(job.bugs ?? []).map((bug) => `${summaryText(bug.id)}: ${summaryText(bug.outcome)} | Owner: ${summaryText(bug.owner)} | ${summaryText(bug.summary)}`),
+      ...((job.bugs ?? []).length ? [] : ["Per-bug findings: Not verified."]),
+      `Publication: ${stage("pr")}`,
+      `PR readiness: ${summaryText(job.pullRequestReadiness?.message)}`,
+      "Deployed-system checks do not verify unpublished local code. Publication does not establish merge or deployment."
+    ] },
+    { heading: "Workarounds and maintenance traps", lines: [
+      "Validated workaround, tradeoffs and fix-induced side effects: Not verified unless explicitly recorded in the findings above.",
+      "Do not infer that no risks exist merely because no finding was recorded."
+    ] },
+    { heading: "Remaining gaps and next actions", lines: [
+      ...unresolved.map(stage),
+      ...gates.filter((gate) => gate.status !== "passed").map((gate) => `Check ${summaryText(gate.id)}: ${summaryText(gate.status)}${gate.reason ? ` | ${summaryText(gate.reason)}` : ""}`),
+      ...(job.error ? [`Recorded error: ${summaryText(job.error)}`] : []),
+      "Review unverified scenarios, missing evidence and recorded blockers before claiming full coverage. No checks were run by opening this summary."
+    ] }
+  ];
+}
+
 const form = document.querySelector("#job-form");
 const startButton = document.querySelector("#start-button");
 const formError = document.querySelector("#form-error");
@@ -930,6 +987,44 @@ let selectedJobId = null;
 let pendingRetryAfterConnectJobId = null;
 let playwrightAuthenticationRunning = false;
 const observedJobs = new Map();
+const summaryButton = document.querySelector("#job-summary-open");
+const summaryDialog = document.querySelector("#job-summary-dialog");
+const summaryContent = document.querySelector("#job-summary-content");
+let summarySelection = null;
+
+function renderSummary() {
+  summaryContent.replaceChildren();
+  const job = summarySelection?.instanceId === dashboardInstanceId
+    ? observedJobs.get(summarySelection.jobId) : null;
+  if (!job) {
+    summaryContent.textContent = "This job's evidence is unavailable or the dashboard changed. Close and reopen the summary for the selected job.";
+    return;
+  }
+  for (const section of jobSummarySections(job)) {
+    const heading = document.createElement("h3");
+    heading.textContent = section.heading;
+    const list = document.createElement("ul");
+    for (const line of section.lines) {
+      const item = document.createElement("li");
+      item.textContent = line;
+      list.append(item);
+    }
+    summaryContent.append(heading, list);
+  }
+}
+
+summaryButton.addEventListener("click", () => {
+  if (draftingConversation || !observedJobs.has(selectedJobId)) {return;}
+  summarySelection = { instanceId: dashboardInstanceId, jobId: selectedJobId };
+  renderSummary();
+  summaryDialog.showModal();
+});
+document.querySelector("#job-summary-close").addEventListener("click", () => summaryDialog.close());
+summaryDialog.addEventListener("close", () => {
+  summarySelection = null;
+  summaryContent.replaceChildren();
+  summaryButton.focus();
+});
 const expandedJobIds = new Set();
 let renderedEvidenceJobId = null;
 let playwrightEvidenceRequestId = 0;
@@ -1364,6 +1459,8 @@ function inferActiveStageFromLogs(logs = []) {
 }
 
 function renderJob(job, currentActiveJob = job) {
+  summaryButton.disabled = !job;
+  if (summaryDialog.open) {renderSummary();}
   currentJobFullscreen.disabled = !currentActiveJob;
   currentJobFullscreen.hidden = !currentActiveJob;
   const currentJobTitle = document.querySelector("#current-job-dialog-title");
