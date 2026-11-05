@@ -36,16 +36,22 @@ function leadingTool(command) {
 }
 
 // Offline checks only: nothing here contacts the application, DEV, or the network.
-export function runJobPreflight({ profile, mode, resolve = resolveOnPath } = {}) {
+export function runJobPreflight({
+  profile, mode, deferValidation = false, skipLiveTests = false,
+  useDeployedBackend = false, resolve = resolveOnPath
+} = {}) {
+  if (mode === "fix-and-validate" && deferValidation) {
+    return [];
+  }
   const commands = mode === "playwright-only" ? [
     profile?.browserAutomation?.testCommand,
     ...(profile?.browserAutomation?.authentication?.required
       ? [profile.browserAutomation.authentication.command] : [])
   ] : [
     profile?.validation?.commands?.frontendRestore,
-    profile?.validation?.commands?.backendRestore,
-    profile?.applications?.frontend?.command,
-    profile?.applications?.backend?.command
+    ...(!useDeployedBackend ? [profile?.validation?.commands?.backendRestore] : []),
+    ...(!skipLiveTests ? [profile?.applications?.frontend?.command] : []),
+    ...(!skipLiveTests && !useDeployedBackend ? [profile?.applications?.backend?.command] : [])
   ];
   const tools = [...new Set(commands.map(leadingTool).filter(Boolean))];
   return tools

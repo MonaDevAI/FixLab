@@ -290,9 +290,10 @@ test("POST checkbox explicitly approves this job only and keeps unchecked writes
   await expect(checkbox).not.toBeChecked();
 });
 
-test("DEV write checkbox is DEV-only, excludes scoped POST and resets consent for every job", async ({ page }) => {
+for (const environment of ["dev", "ppe"]) {
+test(`${environment.toUpperCase()} write checkbox is environment-specific, excludes scoped POST and resets consent for every job`, async ({ page }) => {
   const posts = [];
-  await mockChatWorkspace(page, { environments: ["dev", "sit", "uat"] });
+  await mockChatWorkspace(page, { environments: ["dev", "sit", "uat", "ppe"] });
   await page.route("**/api/jobs", async (route) => {
     posts.push(route.request().postDataJSON());
     await route.fulfill({ contentType: "application/json", status: 202,
@@ -304,8 +305,9 @@ test("DEV write checkbox is DEV-only, excludes scoped POST and resets consent fo
   const checkbox = page.locator("#allow-dev-writes");
   const scoped = page.locator("#allow-post-requests");
   await expect(checkbox).toBeDisabled();
-  await page.locator("#target-environment").selectOption("dev");
+  await page.locator("#target-environment").selectOption(environment);
   await expect(checkbox).toBeEnabled();
+  await expect(page.locator("#origin-writes-label")).toContainText(environment.toUpperCase());
   await expect(checkbox).not.toBeChecked();
   await expect(page.locator("#dev-writes-guidance")).toContainText("any record your account can access");
   await scoped.check();
@@ -317,7 +319,10 @@ test("DEV write checkbox is DEV-only, excludes scoped POST and resets consent fo
   await expect(checkbox).not.toBeChecked();
   await page.locator("#target-environment").selectOption("uat");
   await expect(checkbox).toBeDisabled();
-  await page.locator("#target-environment").selectOption("dev");
+  await page.locator("#target-environment").selectOption(environment === "dev" ? "ppe" : "dev");
+  await expect(checkbox).toBeEnabled();
+  await expect(checkbox).not.toBeChecked();
+  await page.locator("#target-environment").selectOption(environment);
   await checkbox.check();
   await page.waitForResponse("**/api/status");
   await expect(checkbox).toBeChecked();
@@ -325,8 +330,10 @@ test("DEV write checkbox is DEV-only, excludes scoped POST and resets consent fo
   await page.locator('input[name="mode"][value="validate-only"]').check();
   await page.locator("#start-button").click();
   await expect.poll(() => posts.length).toBe(1);
-  expect(posts[0].allowDevWrites).toBe(true);
-  expect(posts[0].devWriteApprovalConfirmed).toBe(true);
+  expect(posts[0].allowDevWrites).toBe(environment === "dev");
+  expect(posts[0].devWriteApprovalConfirmed).toBe(environment === "dev");
+  expect(posts[0].allowPpeWrites).toBe(environment === "ppe");
+  expect(posts[0].ppeWriteApprovalConfirmed).toBe(environment === "ppe");
   expect(posts[0].allowPostRequests).toBe(false);
   await expect(checkbox).not.toBeChecked();
   await expect(scoped).toBeEnabled();
@@ -335,11 +342,53 @@ test("DEV write checkbox is DEV-only, excludes scoped POST and resets consent fo
   await expect.poll(() => posts.length).toBe(2);
   expect(posts[1].allowDevWrites).toBe(false);
   expect(posts[1].devWriteApprovalConfirmed).toBe(false);
+  expect(posts[1].allowPpeWrites).toBe(false);
+  expect(posts[1].ppeWriteApprovalConfirmed).toBe(false);
   await checkbox.check();
   await page.locator("#job-test-mutation-mode").selectOption("intercepted");
   await expect(checkbox).toBeDisabled();
   await expect(checkbox).not.toBeChecked();
 });
+}
+
+for (const profileReady of [true, false]) {
+test(`unverified drafts with live readiness ${profileReady} submit deployed-backend choices and reset without fabricating checks`, async ({ page }) => {
+  const posts = [];
+  await mockChatWorkspace(page, { environments: ["dev", "ppe"], profileReady,
+    draftOnlyReady: !profileReady });
+  await page.route("**/api/jobs", async (route) => {
+    posts.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", status: 202,
+      body: JSON.stringify({ job: { id: "unverified-draft", request: "Reviewed code work.",
+        mode: "fix-and-validate", status: "running", stages: {}, bugs: [], logs: [], activity: [] },
+      queue: [], history: [] }) });
+  });
+  await openWorkflowControls(page, baseUrl);
+  const defer = page.locator('[name="deferValidation"]');
+  const live = page.locator('[name="skipLiveTests"]');
+  const deployed = page.locator('[name="useDeployedBackend"]');
+  if (!profileReady) { await expect(page.locator("#start-button")).toBeDisabled(); }
+  await expect(defer).not.toBeChecked();
+  await defer.check();
+  await expect(page.locator('[name="prestartFrontend"]')).not.toBeChecked();
+  await live.check();
+  await deployed.check();
+  await page.locator("#target-environment").selectOption("dev");
+  await page.locator("#request").fill("Create an unverified draft against the reviewed DEV backend.");
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0].deferValidation).toBe(true);
+  expect(posts[0].skipLiveTests).toBe(true);
+  expect(posts[0].useDeployedBackend).toBe(true);
+  expect(posts[0].prestartFrontend).toBe(false);
+  for (const input of [defer, live, deployed]) { await expect(input).not.toBeChecked(); }
+  await defer.check();
+  await page.locator('[name="mode"][value="playwright-only"]').check();
+  await expect(defer).toBeDisabled();
+  await expect(defer).not.toBeChecked();
+  await expect(live).toBeDisabled();
+});
+}
 
 test("Allow all is default-off, confirms submission and is cleared for the next job", async ({ page }) => {
   const posts = [];
@@ -2115,12 +2164,13 @@ test("dashboard exposes explicit pull-request approval when validation is comple
   expect(submittedInput.details).toContain("explicitly approve");
 });
 
-async function mockChatWorkspace(page, { job = null, queue = [], history = [], environments } = {}) {
+async function mockChatWorkspace(page, { job = null, queue = [], history = [], environments,
+  profileReady = true, draftOnlyReady = false } = {}) {
   await page.route("**/api/status", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
       instanceId: "workspace-owner",
-      readiness: { repositoryReady: true, profileReady: true,
+      readiness: { repositoryReady: true, profileReady, draftOnlyReady,
         repository: "C:\\code\\alpha", profileName: "Alpha workspace", environments },
       runtime: { name: "copilot", supportsModelSelection: true, defaultModel: "" },
       job, queue, held: [], history

@@ -8,7 +8,7 @@ import test from "node:test";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "../dashboard/repository-settings.js";
 import { canonicalExecutionRepository, createExecutorLease } from "../dashboard/executor-lease.js";
 import { SETUP_PROFILE_PATH } from "../dashboard/repository-setup.js";
-import { validateLiveTestProfile } from "../dashboard/server.js";
+import { configuredTestSynthesis, validateLiveTestProfile } from "../dashboard/server.js";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 function fixture() {
@@ -41,6 +41,9 @@ test("repository onboarding previews without writes and creates only missing rev
       mode: "efficient", publication: "draft", unitTestsAfterPr: false, optionalBuilds: false
     });
     assert.equal(profile.browserAutomation.dataSafety.productionAllowed, false);
+    assert.equal(configuredTestSynthesis(profile, "", undefined, "dev").source, "non-production-read-only");
+    assert.equal(configuredTestSynthesis(profile, "", undefined, "ppe").source, "non-production-read-only");
+    assert.equal(configuredTestSynthesis(profile, "", undefined, "sit").source, "synthetic-intercepted");
     assert.equal(validateLiveTestProfile(profile).ok, true);
     assert.equal(existsSync(join(repository, ".github", "agents", "fixlab-autofix.agent.md")), true);
     assert.equal(existsSync(canonicalExecutionRepository(repository).directory), false);
@@ -60,6 +63,8 @@ test("repository settings preserve undisplayed configuration and never expose en
     profile.pullRequests.requireConfirmation = false;
     profile.workflow.publication = "ready";
     profile.customContract = { retained: true };
+    delete profile.browserAutomation.testSynthesis.devReadOnly;
+    delete profile.browserAutomation.testSynthesis.ppeReadOnly;
     profile.environments = { dev: { syntheticContract: "preserved" } };
     writeFileSync(path, JSON.stringify(profile));
     const inspected = inspectRepositorySettings(repository);
@@ -75,6 +80,8 @@ test("repository settings preserve undisplayed configuration and never expose en
     });
     assert.deepEqual(updated.customContract, { retained: true });
     assert.equal(updated.pullRequests.requireConfirmation, false);
+    assert.equal(configuredTestSynthesis(updated, "", undefined, "dev").source, "synthetic-intercepted");
+    assert.equal(configuredTestSynthesis(updated, "", undefined, "ppe").source, "synthetic-intercepted");
     assert.deepEqual(updated.environments, profile.environments);
     assert.deepEqual(updated.browserAutomation.authentication.environment, profile.browserAutomation.authentication.environment);
   } finally {

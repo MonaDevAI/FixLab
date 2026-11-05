@@ -401,6 +401,8 @@ test("init creates a parseable repository profile", () => {
     assert.deepEqual(profile.browserAutomation.testSynthesis, {
       enabled: true,
       defaultDataSource: "synthetic-intercepted",
+      devReadOnly: true,
+      ppeReadOnly: true,
       mutationMode: "intercepted",
       requireScenarioEvidence: true
     });
@@ -1209,7 +1211,7 @@ test("chat validates a repository before starting a missing dashboard", () => {
   assert.match(result.stderr, /repository does not exist/);
 });
 
-test("run launches the Agency-resolved FixLab agent", () => {
+test("run launches the Agency-resolved FixLab agent with real DEV reads from new onboarding defaults", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
   const executableDirectory = join(repository, "bin");
 
@@ -1222,8 +1224,6 @@ test("run launches the Agency-resolved FixLab agent", () => {
       "repository-profile.json"
     );
     const profile = JSON.parse(readFileSync(profilePath, "utf8"));
-    profile.browserAutomation.testSynthesis.defaultDataSource =
-      "non-production-read-only";
     profile.workflow.publication = "ready";
     writeFileSync(profilePath, JSON.stringify(profile));
     mkdirSync(executableDirectory);
@@ -1278,6 +1278,18 @@ test("run launches the Agency-resolved FixLab agent", () => {
     assert.match(result.stdout, /Verify the PR is no longer draft before reporting the PR stage passed/);
     assert.match(result.stdout, /\*\.auth\.spec\.ts/);
     assert.match(result.stdout, /Request: repair the defect/);
+    const unverified = run([
+      "run", repository, "--environment", "development", "--draft-without-checks",
+      "--skip-live-tests", "--deployed-backend", "--", "prepare the code-only draft"
+    ], repository, {
+      PATH: `${executableDirectory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH}`
+    });
+    assert.equal(unverified.status, 0, unverified.stderr);
+    assert.match(unverified.stdout, /Explicit unverified draft/);
+    assert.match(unverified.stdout, /deferValidation=true; skipLiveTests=true; useDeployedBackend=true/);
+    assert.match(unverified.stdout, /isDraft=true/);
+    assert.doesNotMatch(unverified.stdout, /publish the authorized PR by marking it ready/);
+    assert.match(unverified.stdout, /Request: prepare the code-only draft/);
     const validation = run(
       ["validate", repository, "--pr", "123", "--runtime", "agency"],
       repository,

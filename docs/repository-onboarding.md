@@ -175,6 +175,21 @@ test through its instructions, or the user can request one explicitly;
 otherwise newly created authenticated `*.auth.spec.ts` files are validation
 artifacts rather than product changes.
 
+New installations default `browserAutomation.testSynthesis.devReadOnly` and
+`ppeReadOnly` to `true` for new portal profiles. Selecting `dev`, `development`
+or `ppe` uses real
+read-only backend data while mutations remain intercepted. Unselected/local,
+SIT/UAT and other environments retain `defaultDataSource`; dedicated API-only,
+unit-only and production contracts are not overridden. Existing profiles are
+preserved. Set `devReadOnly: false` to retain synthetic-only DEV validation;
+changing either policy requires a fresh reviewed job. During onboarding, configure
+browser/auth guards for all verified read-only queries on the reviewed DEV/PPE
+HTTPS API origins, not only a feature-specific subset. Include GET/HEAD/OPTIONS
+and verified read-only POST searches; classify POST from its contract,
+implementation and payload rather than the verb or route name. Once that read
+scope is approved, no per-query human confirmation is required. Preserve
+identity-only authentication/proof defaults and all business-write controls.
+
 Use `defaultDataSource: "synthetic-intercepted"` with
 `mutationMode: "intercepted"` when Playwright should fulfill reads locally and
 capture mutation intent without changing an external record. Repositories may

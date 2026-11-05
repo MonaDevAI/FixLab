@@ -89,6 +89,8 @@
     "testSynthesis": {
       "enabled": true,
       "defaultDataSource": "synthetic-intercepted",
+      "devReadOnly": true,
+      "ppeReadOnly": true,
       "mutationMode": "intercepted",
       "requireScenarioEvidence": true
     },
@@ -99,7 +101,7 @@
       "statusPaths": []
     },
     "dataSafety": {
-      "policy": "Use local mock data or intercept every mutating request; require explicit approval before using non-production records.",
+      "policy": "Use the reviewed test data source and intercept mutations; real writes require separate explicit authorization.",
       "productionAllowed": false
     }
   },

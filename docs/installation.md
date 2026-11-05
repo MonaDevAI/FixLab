@@ -1,5 +1,13 @@
 # Installation
 
+For code-work jobs, the dashboard offers an explicit unverified draft option
+without local checks or live tests, plus a separate live-test deferral option.
+Select the deployed-backend option to use a reviewed DEV/SIT/UAT/PPE API without
+starting .NET locally. Unrun checks remain unverified; merge rules are unchanged.
+CLI equivalents are `fixlab run REPOSITORY --draft-without-checks`,
+`--skip-live-tests` and `--deployed-backend --environment dev`, followed by the
+request. See [job architecture](architecture.md) for the boundaries.
+
 New users: start with [Copilot-first setup](FIXLAB-SETUP.md), or
 [First installation](../installation.md) for prerequisites and machine changes.
 This guide provides the detailed fallback when Copilot or the setup file is
@@ -795,6 +803,20 @@ Use `synthetic-intercepted` when reads and writes should remain local. A
 repository that intentionally reads approved DEV or SIT data can use
 `non-production-read-only`; retain `intercepted` unless external writes have a
 separately reviewed approval policy.
+
+New profiles created by CLI or dashboard onboarding additionally set
+`browserAutomation.testSynthesis.devReadOnly: true` and `ppeReadOnly: true`.
+This permits real read-only portal queries when DEV/development or PPE is explicitly selected, with
+mutations still intercepted; other environments keep the configured default.
+Existing profiles and browser/auth guards are not silently rewritten. Opting
+an existing profile in requires reviewing its DEV/PPE read configuration and
+starting a fresh job; set the corresponding flag to false to retain synthetic data.
+Installation/onboarding configures repository adapters for all verified read-only
+queries on reviewed DEV/PPE HTTPS API origins, including read-only POST searches,
+not only one feature's endpoints. Verification uses the query contract,
+implementation and payload; this never admits arbitrary POST writes.
+Authentication/proof remains identity-only unless the validation helper explicitly
+opts into the reviewed query scope. Keep business writes separately authorized.
 
 ## Check the machine and repository
 

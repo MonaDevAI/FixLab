@@ -20,6 +20,7 @@ import {
   buildCopilotInvocation,
   copilotModelArguments,
   configuredValidationEnvironments,
+  configuredTestSynthesis,
   createDashboardServer,
   DEFAULT_DASHBOARD_PORT,
   FIXLAB_RUNTIMES,
@@ -50,7 +51,7 @@ import { runValidationGate } from "./validation-gate-client.js";
 import { installNotifications } from "./notifications.js";
 import { linkedApiProofPlan, runLinkedApiProof } from "../dashboard/linked-api-proof.js";
 import { runPortalApiProof } from "../dashboard/portal-api-proof.js";
-import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "../dashboard/workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "../dashboard/workflow-policy.js";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const profileRelativePath = join(
@@ -137,6 +138,7 @@ Set FIXLAB_RUNTIME or pass --runtime to select the runtime.
 Set FIXLAB_MODEL or pass --model to select a GitHub Copilot CLI model.
 HydraFusion research preview: --runtime copilot --model ${HYDRAFUSION_MODEL}.
 Run with --environment to select an allowed non-production environment from the repository profile.
+Run with --draft-without-checks for an unverified draft, --skip-live-tests to defer integration, or --deployed-backend to use the approved non-production API without local .NET.
 For the Agency-like interactive experience, run FixLab with only the repository path.
 
 Troubleshooting:
@@ -1027,7 +1029,7 @@ function authenticate(repository, approved) {
   return 0;
 }
 
-function launch(repository, request, runtime, targetEnvironment = "", model = "", readOnly = false, interactiveRequest = "") {
+function launch(repository, request, runtime, targetEnvironment = "", model = "", readOnly = false, interactiveRequest = "", choices = {}) {
   const { profile, error } = loadProfile(repository);
   if (error) {
     console.error(
@@ -1049,12 +1051,21 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
 
   let selectedEnvironment;
   let workflow;
+  let testEvidence;
   try {
     workflow = configuredWorkflow(profile);
     selectedEnvironment = validateTargetEnvironment(
       targetEnvironment,
       configuredValidationEnvironments(profile)
     );
+    testEvidence = configuredTestSynthesis(profile, "", undefined, selectedEnvironment);
+    if (choices.useDeployedBackend && (!/^(dev|development|ppe|sit|uat)$/iu.test(selectedEnvironment) ||
+        testEvidence.unitTestsOnly)) {
+      throw new Error("--deployed-backend requires an explicitly selected, profile-approved DEV/SIT/UAT/PPE environment permitting live access.");
+    }
+    if (choices.deferValidation || choices.skipLiveTests) {
+      workflow = { ...workflow, publication: "draft" };
+    }
   } catch (validationError) {
     console.error(validationError.message);
     return 1;
@@ -1077,13 +1088,18 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
     ...(profile.validation?.liveTestsRequired === false ? [UNIT_TEST_ONLY_GUIDANCE] : []),
     ...(!readOnly ? [CONCISE_PR_GUIDANCE] : []),
     ...(!readOnly && request ? [PR_LEARNING_GUIDANCE] : []),
+    ...(!readOnly && request && !choices.deferValidation ? [AUTONOMOUS_RECOVERY_GUIDANCE] : []),
     ...(profile.browserAutomation?.mode === "api" ? [API_ONLY_PLAYWRIGHT_GUIDANCE] : []),
-    ...(request && allowsDraftIntegrationDeferral({ mode: readOnly ? "validate-only" : "fix-and-validate", workflow })
+    ...(request && !choices.deferValidation && allowsDraftIntegrationDeferral({ mode: readOnly ? "validate-only" : "fix-and-validate", workflow })
       ? [DRAFT_INTEGRATION_GUIDANCE] : []),
+    ...(choices.deferValidation ? [UNVERIFIED_DRAFT_GUIDANCE] : []),
+    ...(choices.skipLiveTests || choices.useDeployedBackend || choices.deferValidation
+      ? [OPTIONAL_INTEGRATION_GUIDANCE,
+        `Selected job choices: deferValidation=${choices.deferValidation === true}; skipLiveTests=${choices.skipLiveTests === true || choices.deferValidation === true}; useDeployedBackend=${choices.useDeployedBackend === true}.`] : []),
     "For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.",
     "Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For 'test this PR', verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.",
     "For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed; for strict ready publication, PR readiness stays blocked. Draft publication follows the local/integration distinction above. Efficient delivery permits publication after focused checks and explicitly required pre-publication gates. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.",
-    !readOnly && workflow.mode === "efficient"
+    choices.deferValidation ? "Explicit unverified draft overrides the default focused-check-before-publication checkpoint; preserve every actual gate outcome." : !readOnly && workflow.mode === "efficient"
       ? efficientWorkflowGuidance(workflow, { dashboard: false })
       : "Use strict delivery: all applicable local gates and required approvals remain mandatory before readiness. Honor the saved draft/ready publication choice. Read-only runs never create or update a PR.",
     "Do not delete or edit transient test artifacts while validation is discovering or executing them; wait for owned validation to finish before cleanup.",
@@ -1092,15 +1108,14 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
     readOnly
       ? "Do not publish a pull request or change its draft status in read-only mode."
       : workflow.publication === "draft"
-        ? "Keep the published PR draft and read back provider isDraft=true before reporting publication passed. Marking ready requires a separate reviewed decision. Strict required checks remain mandatory."
+        ? `Keep the published PR draft and read back provider isDraft=true before reporting publication passed. Marking ready requires a separate reviewed decision. ${choices.deferValidation ? "Local and live checks are deferred, not passed." : "Strict required checks remain mandatory."}`
       : "After required local validation and approval gates pass or have an explicitly accepted outcome, publish the authorized PR by marking it ready for review. Do not wait for remote PR CI or build completion before publication; publication can trigger those checks. Verify the PR is no longer draft before reporting the PR stage passed. Report remote checks as pending, not passed, and leave merge policies intact. Use `gh pr ready PR_NUMBER` for GitHub or `az repos pr update --id PR_ID --draft false` for Azure DevOps, then read back `isDraft` from the provider to confirm it is false. If publication or state verification fails, report the PR stage blocked or failed, not passed.",
     "Treat runtime-synthesized Playwright scenarios as transient validation artifacts by default. Remove their source files and validation-only configuration edits before review, commit, push, or pull-request creation. Do not add newly generated authenticated tests such as *.auth.spec.ts unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.",
     ...(selectedEnvironment
       ? [
         `Use ${selectedEnvironment} as the user-selected validation environment for profile-defined application startup and Playwright live testing. Do not silently fall back to another environment; block with the exact prerequisite if ${selectedEnvironment} is unavailable or unsafe.`,
         ...(profile.browserAutomation?.mode !== "api" &&
-        profile.browserAutomation?.testSynthesis?.defaultDataSource ===
-        "non-production-read-only"
+        testEvidence.source === "non-production-read-only"
           ? [
               `Use the selected ${selectedEnvironment} backend and API as the primary business-data source. Keep backend access read-only and intercept every mutating request.`,
               "Do not fulfill or intercept business-data reads while the selected backend is available and returns safe records that can prove the required assertions.",
@@ -1113,7 +1128,7 @@ function launch(repository, request, runtime, targetEnvironment = "", model = ""
       : [])
   ].join(" ").replace(/\s+/gu, " ");
   const prompt =
-    request || selectedEnvironment || interactiveRequest
+    request || selectedEnvironment || interactiveRequest || Object.keys(choices).length
       ? `${guidance}${request || interactiveRequest ? ` Request: ${request || interactiveRequest}` : ""}`
       : "";
   const invocation = request
@@ -1158,11 +1173,18 @@ function parseRunArguments(args) {
   let repositoryArgument;
   let targetEnvironment = "";
   const request = [];
+  const choices = {};
   let afterSeparator = false;
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
     if (argument === "--") {
       afterSeparator = true;
+      continue;
+    }
+    if (!afterSeparator && ["--draft-without-checks", "--skip-live-tests", "--deployed-backend"].includes(argument)) {
+      const key = argument === "--draft-without-checks" ? "deferValidation"
+        : argument === "--skip-live-tests" ? "skipLiveTests" : "useDeployedBackend";
+      choices[key] = true;
       continue;
     }
     if (!afterSeparator && argument === "--environment") {
@@ -1189,7 +1211,8 @@ function parseRunArguments(args) {
   return {
     repository: resolveRepository(repositoryArgument),
     request: request.join(" ").trim(),
-    targetEnvironment
+    targetEnvironment,
+    choices
   };
 }
 
@@ -1877,7 +1900,10 @@ async function main(args) {
       runArguments.request,
       parsed.runtime,
       runArguments.targetEnvironment,
-      parsed.model
+      parsed.model,
+      false,
+      "",
+      runArguments.choices
     );
   }
 

@@ -17,9 +17,12 @@ Work from the FixLab repository root.
 - Preserve the grant through the native worker protocol. Never persist it in
   snapshots or inherit it on hold, recovery, restart, or another job.
 - Scoped POST approval retains endpoint/test-record checks. Separate broad DEV
-  consent selects `mode: dev-origin` on the same memory-only grant and worker
-  protocol; it permits POST/PUT/PATCH/DELETE on exact reviewed `dataSafety.devWrite`
-  HTTPS origins without a record marker. Require fresh explicit DEV-only consent,
+  or PPE consent selects `mode: dev-origin` or `ppe-origin` on the same memory-only
+  grant and worker protocol; it permits POST/PUT/PATCH/DELETE on exact reviewed
+  `dataSafety.devWrite` or `dataSafety.ppeWrite` HTTPS origins without a record
+  marker. Require fresh explicit consent for that environment; never inherit
+  origins or grants across environments. Require its explicit hostname label
+  and reject conflicting labels. Require separate consent,
   never generic Allow all tools or a recovered capability preference.
 - Both scopes retain existing authentication. Never disable browser guards or
   substitute a browser write. API-only/unit-only and explicit read-only contracts

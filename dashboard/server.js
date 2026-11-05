@@ -41,10 +41,10 @@ import { canonicalExecutionRepository, createExecutorLease } from "./executor-le
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
-import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, allowsUnverifiedDraft, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
-import { createDevWriteApproval, createPostWriteApproval } from "./dev-post.js";
+import { createDevWriteApproval, createPpeWriteApproval, createPostWriteApproval, isOriginWriteApproval } from "./dev-post.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "./repository-settings.js";
 import { configuredLinkedApplications, resolveLinkedApplications } from "./linked-applications.js";
@@ -421,6 +421,11 @@ export function validateLiveTestProfile(profile, repository) {
       if (!mutationModes.has(testSynthesis?.mutationMode)) {
         missing.push("browserAutomation.testSynthesis.mutationMode");
       }
+      for (const key of ["devReadOnly", "ppeReadOnly"]) {
+        if (testSynthesis?.[key] !== undefined && typeof testSynthesis[key] !== "boolean") {
+          missing.push(`browserAutomation.testSynthesis.${key} (boolean)`);
+        }
+      }
       if (testSynthesis?.requireScenarioEvidence !== true) {
         missing.push(
           "browserAutomation.testSynthesis.requireScenarioEvidence=true"
@@ -438,7 +443,7 @@ export function validateLiveTestProfile(profile, repository) {
   };
 }
 
-export function configuredTestSynthesis(profile, selectedMutationMode = "", allowPostRequests) {
+export function configuredTestSynthesis(profile, selectedMutationMode = "", allowPostRequests, targetEnvironment = "") {
   if (allowPostRequests !== undefined && typeof allowPostRequests !== "boolean") {
     throw new Error("allowPostRequests must be a boolean.");
   }
@@ -464,13 +469,25 @@ export function configuredTestSynthesis(profile, selectedMutationMode = "", allo
     };
   }
   const configuration = profile?.browserAutomation?.testSynthesis;
+  for (const key of ["devReadOnly", "ppeReadOnly"]) {
+    if (configuration?.[key] !== undefined && typeof configuration[key] !== "boolean") {
+      throw new Error(`browserAutomation.testSynthesis.${key} must be a boolean.`);
+    }
+  }
+  const defaultReads = configuration?.enabled !== false && profile?.browserAutomation?.mode !== "api" &&
+    !profile?.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly &&
+    configuration?.defaultDataSource === "synthetic-intercepted" && configuration?.mutationMode === "intercepted";
+  const devReadOnly = defaultReads && configuration?.devReadOnly === true && /^(dev|development)$/i.test(targetEnvironment);
+  const ppeReadOnly = defaultReads && configuration?.ppeReadOnly === true && /^ppe$/i.test(targetEnvironment);
   const result = {
+    ...(devReadOnly ? { devReadOnly: true } : {}),
+    ...(ppeReadOnly ? { ppeReadOnly: true } : {}),
     ...(profile?.browserAutomation?.mode === "api" ? { apiOnly: true } : {}),
     ...(profile?.browserAutomation?.mode === "api" &&
       profile.browserAutomation.apiAuthentication?.productionDatabaseReadOnly === true
       ? { productionDatabaseReadOnly: true } : {}),
     enabled: configuration?.enabled !== false,
-    source: testDataSources.has(configuration?.defaultDataSource)
+    source: devReadOnly || ppeReadOnly ? "non-production-read-only" : testDataSources.has(configuration?.defaultDataSource)
       ? configuration.defaultDataSource
       : "profile-defined",
     mutationMode: mutationModes.has(configuration?.mutationMode)
@@ -579,10 +596,15 @@ function publicQueue(jobs) {
     validationIntent: job.validationIntent ?? "full",
     workflow: job.workflow ?? { mode: "strict" },
     prestartFrontend: job.prestartFrontend ?? false,
+    deferValidation: job.deferValidation === true,
+    skipLiveTests: job.skipLiveTests === true,
+    useDeployedBackend: job.useDeployedBackend === true,
+    setupRecovery: job.setupRecovery ?? [],
     inputTokenLimit: job.inputTokenLimit ?? 0,
     toolApprovalMode: job.toolApprovalMode ?? "ask",
-    postWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode !== "dev-origin",
+    postWriteApproved: Boolean(job.postWriteApproval?.revision) && !isOriginWriteApproval(job.postWriteApproval),
     devWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "dev-origin",
+    ppeWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "ppe-origin",
     fileAccess: job.fileAccess ?? null,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
@@ -635,6 +657,10 @@ function dashboardSnapshot(job) {
     runAllUiScenarios: job.runAllUiScenarios,
     targetEnvironment: job.targetEnvironment,
     prestartFrontend: job.prestartFrontend ?? false,
+    deferValidation: job.deferValidation === true,
+    skipLiveTests: job.skipLiveTests === true,
+    useDeployedBackend: job.useDeployedBackend === true,
+    setupRecovery: job.setupRecovery ?? [],
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: "",
@@ -648,6 +674,8 @@ function dashboardSnapshot(job) {
         liveTestsDeferredReason: safePersistedSummary(job.testEvidence.liveTestsDeferredReason)
       } : {}),
       ...(job.testEvidence.apiOnly === true ? { apiOnly: true } : {}),
+      ...(job.testEvidence.devReadOnly === true ? { devReadOnly: true } : {}),
+      ...(job.testEvidence.ppeReadOnly === true ? { ppeReadOnly: true } : {}),
       ...(job.testEvidence.productionDatabaseReadOnly === true ? { productionDatabaseReadOnly: true } : {}),
       source: job.testEvidence.source,
       mutationMode: job.testEvidence.mutationMode,
@@ -818,6 +846,10 @@ function restoreDashboardJob(snapshot, repository) {
     targetEnvironment: restored.targetEnvironment,
     recordPlaywrightVideo: restored.recordPlaywrightVideo,
     manualLocalhostTest: restored.manualLocalhostTest,
+    deferValidation: restored.deferValidation === true,
+    skipLiveTests: restored.skipLiveTests === true,
+    useDeployedBackend: restored.useDeployedBackend === true,
+    setupRecovery: restored.setupRecovery ?? [],
     manualLocalhostUrl: restored.manualLocalhostUrl,
     testEvidence: restored.testEvidence,
     branchNaming: restored.branchNaming,
@@ -905,25 +937,28 @@ function getPullRequestReadiness(job) {
       : PERMISSION_BLOCKED_MESSAGE };
   }
   const draftDeferral = allowsDraftIntegrationDeferral(job);
+  const unverifiedDraft = allowsUnverifiedDraft(job);
   if ((job.workflow?.mode === "efficient" && job.mode === "fix-and-validate") || draftDeferral) {
     const validation = job.validationSession?.summary();
-    if (!validation || !["passed", "advisory",
+    if (!unverifiedDraft && (!validation || !["passed", "advisory",
       ...(job.workflow?.mode === "efficient" ? ["unconfigured"] : [])].includes(validation.status) &&
-        !(draftDeferral && validation.draftReady)) {
+        !(draftDeferral && validation.draftReady))) {
       return { status: "blocked", ready: false, message: "Explicitly required local validation is pending, failed or stale." };
     }
     if (job.manualLocalhostPending || job.manualLocalhostResult === "failed" || job.testEvidence?.modeViolation) {
       return { status: "blocked", ready: false, message: "An explicitly requested manual check or data-safety requirement is unresolved." };
     }
     if (job.stages?.pr?.status === "passed") {
-      return { status: "created", ready: false, message: `${job.stages.pr.message || "Pull request created or updated."} ${draftDeferral ? "Draft publication does not verify live integration; pending or failed checks remain explicit." : "Optional/remote checks retain their actual status; ready for review does not mean fully validated."}` };
+      return { status: "created", ready: false, message: `${job.stages.pr.message || "Pull request created or updated."} ${unverifiedDraft ? "Unverified draft: local and live checks retain their actual not-run, pending or failed status." : draftDeferral ? "Draft publication does not verify live integration; pending or failed checks remain explicit." : "Optional/remote checks retain their actual status; ready for review does not mean fully validated."}` };
     }
     if (job.stages?.fix?.status !== "passed" || job.stages?.review?.status !== "passed" ||
         ["held", "holding"].includes(job.status)) {
       return { status: "blocked", ready: false, message: "Waiting for the focused fix, regression checks and diff review." };
     }
     return { status: job.stages?.pr?.status === "blocked" ? "approval-required" : "ready",
-      ready: true, message: draftDeferral
+      ready: true, message: unverifiedDraft
+        ? "Diff reviewed. An authorized unverified draft PR may proceed without local or live checks; ready/merge requirements remain unchanged."
+        : draftDeferral
         ? "Focused checkpoint and required local checks reviewed. An authorized draft PR may proceed; live integration remains unverified until its gates pass."
         : "Focused checkpoint reviewed. The authorized PR can be ready for review before optional broad validation; pending checks are not passed." };
   }
@@ -1040,6 +1075,7 @@ export function inspectRepository(repository) {
         repository: resolvedRepository,
         repositoryReady: true,
         profileReady: false,
+        draftOnlyReady: true,
         playwrightMode: profile.browserAutomation?.mode ?? "browser",
         profilePath,
         profileName:
@@ -1084,6 +1120,10 @@ export function buildJobPrompt({
   targetEnvironment = "",
   recordPlaywrightVideo = false,
   manualLocalhostTest = false,
+  deferValidation = false,
+  skipLiveTests = false,
+  useDeployedBackend = false,
+  setupRecovery = [],
   manualLocalhostUrl = "",
   testEvidence = {
     enabled: true,
@@ -1104,6 +1144,9 @@ export function buildJobPrompt({
   const readOnly = validateOnly || playwrightOnly;
   const apiOnly = testEvidence.apiOnly === true;
   const efficient = !readOnly && workflow?.mode === "efficient";
+  const unverifiedDraft = allowsUnverifiedDraft({
+    mode, workflow, deferValidation, manualLocalhostTest, runAllUiScenarios, testEvidence
+  });
   const smallEnhancement = requestType === "small-enhancement";
   const intakeWorkItems =
     workItems.length > 0 ? workItems : workItem ? [workItem] : [];
@@ -1222,6 +1265,7 @@ ${COPILOT_EXECUTION_GUIDANCE}
 ${RUNTIME_RECOVERY_GUIDANCE}
 ${!apiOnly && !testEvidence.unitTestsOnly ? READ_ONLY_POST_GUIDANCE : ""}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : EXISTING_APPLICATION_GUIDANCE}
+${apiOnly && useDeployedBackend ? "useDeployedBackend=true: use the configured deployed API; never start local .NET/Key Vault." : ""}
 - Skip source diagnosis, separate reproduction, implementation, diff review and unrelated non-browser gates. The diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped unless their own required prerequisite fails.
 - Do not edit files other than an authorized transient browser-validation artifact. Do not commit, push, create or update pull requests, or change repository configuration.
 - Use the request to select expected behavior and the focused Playwright journey. Read the profile, browser configuration, fixture and nearest test in one bounded batch; prefer an existing journey or retained script. Inspect implementation only for a concrete missing selector or prerequisite.
@@ -1284,7 +1328,10 @@ ${COPILOT_EXECUTION_GUIDANCE}
 ${RUNTIME_RECOVERY_GUIDANCE}
 ${!apiOnly && !testEvidence.unitTestsOnly ? READ_ONLY_POST_GUIDANCE : ""}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : ""}
-${allowsDraftIntegrationDeferral({ mode, workflow, manualLocalhostTest, runAllUiScenarios, testEvidence }) ? DRAFT_INTEGRATION_GUIDANCE : ""}
+${unverifiedDraft ? UNVERIFIED_DRAFT_GUIDANCE : allowsDraftIntegrationDeferral({ mode, workflow, manualLocalhostTest, runAllUiScenarios, testEvidence }) ? DRAFT_INTEGRATION_GUIDANCE : ""}
+${skipLiveTests || useDeployedBackend ? `${OPTIONAL_INTEGRATION_GUIDANCE}\nSelected job choices: skipLiveTests=${skipLiveTests}; useDeployedBackend=${useDeployedBackend}; deferValidation=${deferValidation}.` : ""}
+${!readOnly && !unverifiedDraft ? AUTONOMOUS_RECOVERY_GUIDANCE : ""}
+${setupRecovery.length ? `Offline setup diagnostics to repair when needed for this task:\n${JSON.stringify(setupRecovery)}` : ""}
 - For a fix request, begin with the smallest known reproduction, using an approved existing application when appropriate; prepare the local stack only when needed to exercise changed code. Do not claim a deployed baseline proves an unpublished fix.
 - Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker for the dependent check; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
 - For repeat work, inspect the current git status and effective diff first, then search task-relevant symbols and files instead of rescanning the whole repository.
@@ -1300,13 +1347,13 @@ ${manualLocalhostGuidance}
 ${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
-- Saved delivery workflow: ${efficient ? `efficient; focused checks before the ${workflow.publication === "ready" ? "ready-for-review" : "draft"} PR, broader checks only by saved preference or explicit selection` : "strict; all applicable configured gates remain required for full validation and ready publication"}. This recorded job policy takes precedence over the product default.
+- Saved delivery workflow: ${unverifiedDraft ? "explicit unverified draft; local and live checks are deferred, not passed" : efficient ? `efficient; focused checks before the ${workflow.publication === "ready" ? "ready-for-review" : "draft"} PR, broader checks only by saved preference or explicit selection` : "strict; all applicable configured gates remain required for full validation and ready publication"}. This recorded job policy takes precedence over the product default.
 - Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For "test this PR", verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.
 - For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed${allowsDraftIntegrationDeferral({ mode, workflow, manualLocalhostTest, runAllUiScenarios, testEvidence }) ? "; draft publication follows verified local checks; full integration remains unverified" : efficient ? "; publication follows the saved efficient workflow and explicitly required gates" : ", and PR readiness stays blocked"}. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.
 - For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.
 - Do not delete or edit transient test artifacts while validation is discovering or executing them; wait for owned validation to finish before cleanup.
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
-- ${playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
+- ${unverifiedDraft ? "Do not run local checks or live tests for this explicitly unverified draft. Preserve every gate as not run or its actual previous outcome." : playwrightOnly ? "Run only setup commands strictly required to launch the profile-defined applications and focused Playwright journey. Do not reinstall dependencies that are already available." : "Run the focused repository-owned tests, type-checks, and builds needed for the affected surface and risk. Preserve exact results."}
 - Run verbose repository-owned tests, builds, linters, type checks, and package validation through \`fixlab exec --stage <stage> -- <command> [args...]\`. In Windows PowerShell quote the separator (\`'--'\`) because an unquoted \`--\` is dropped, and never wrap \`fixlab exec\` in \`cmd /c\`; that wrapper is denied in non-interactive sessions. Keep its compact result in context and inspect the private evidence path only when an exact diagnostic is needed.
 - Add \`--reuse\` only for deterministic local validation when command, arguments, Git state, working directory, profile, and stage are unchanged. Never reuse startup, health, authentication, Playwright or live-environment validation, external-data checks, dependency installation, deployments, or mutating commands.
 - Do not skip Playwright merely because an unrelated non-browser test, build, or backend startup is failed or blocked. If frontend startup, authentication, safe data, and the selected browser journey are independently ready, run the live-test gate and preserve the other blocker separately.
@@ -1316,7 +1363,7 @@ ${branchNamingGuidance}
 - Do not add a newly generated authenticated test such as \`*.auth.spec.ts\` to the product change unless the user explicitly requests permanent browser-test coverage or repository instructions require that exact persisted test.
 - Existing repository-owned Playwright tests may be changed only when the reported product behavior directly requires that regression update; do not broaden the pull request to repair unrelated or stale browser journeys.
 ${testDataGuidance}
-${efficient ? efficientWorkflowGuidance(workflow) : `- Once the scoped production change and its smallest focused regression checks pass, remove transient validation artifacts and self-review the effective diff. When pull-request publication is already authorized, commit and push that reviewed checkpoint and create or update a draft pull request before remaining independent validation completes.
+${unverifiedDraft ? UNVERIFIED_DRAFT_GUIDANCE : efficient ? efficientWorkflowGuidance(workflow) : `- Once the scoped production change and its smallest focused regression checks pass, remove transient validation artifacts and self-review the effective diff. When pull-request publication is already authorized, commit and push that reviewed checkpoint and create or update a draft pull request before remaining independent validation completes.
 - Start long-running independent validation commands in parallel when the runtime supports it. While those commands run, prepare or refresh the authorized draft PR description with the confirmed symptom, scoped change, checks already passed, checks still running, and known risks.
 - Push later reviewed checkpoints to the same branch only after their affected focused checks pass. Reuse the same draft PR and update its evidence instead of waiting to publish one large final update or creating duplicates.
 - Keep the pull request draft and clearly marked validation-in-progress while any required local validation or approval gate is pending, running, blocked, skipped with unaccepted risk, or failed. Never mark it ready for review or report the pr stage passed until all required local gates pass or repository policy records an explicitly accepted outcome.`}
@@ -2307,6 +2354,10 @@ function publicJob(job) {
     id: job.id,
     request: job.request,
     requestType: job.requestType,
+    deferValidation: job.deferValidation === true,
+    skipLiveTests: job.skipLiveTests === true,
+    useDeployedBackend: job.useDeployedBackend === true,
+    setupRecovery: job.setupRecovery ?? [],
     model: job.model,
     runtime: job.runtime,
     pullRequestStrategy: job.pullRequestStrategy,
@@ -2344,8 +2395,9 @@ function publicJob(job) {
     fileAccess: job.fileAccess ?? null,
     inputTokenLimit: job.inputTokenLimit ?? 0,
     toolApprovalMode: job.toolApprovalMode ?? "ask",
-    postWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode !== "dev-origin",
+    postWriteApproved: Boolean(job.postWriteApproval?.revision) && !isOriginWriteApproval(job.postWriteApproval),
     devWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "dev-origin",
+    ppeWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "ppe-origin",
     budgetExceeded: job.budgetExceeded === true,
     runtimeDirectoryGrants: (job.runtimeDirectoryGrants ?? []).map((scope) => scope.directory),
     canResume:
@@ -2863,7 +2915,8 @@ function finishJob(job, result) {
     try {
       const validation = job.validationSession.verify();
       if (!["passed", "unconfigured", ...(job.workflow?.mode === "efficient" ? ["advisory"] : [])].includes(validation.status) &&
-          !(allowsDraftIntegrationDeferral(job) && validation.draftReady)) {
+          !(allowsDraftIntegrationDeferral(job) && validation.draftReady) &&
+          !allowsUnverifiedDraft(job)) {
         job.stages.review = {
           status: "blocked",
           message: "Required executor-backed validation is missing, failed, or stale."
@@ -3822,7 +3875,8 @@ export function createDashboardServer({
       testEvidence: configuredTestSynthesis(
         loadRepositoryProfile(resolvedRepository),
         sourceJob.testEvidence.selectedMutationMode ?? "",
-        sourceJob.testEvidence.allowPostRequests
+        sourceJob.testEvidence.allowPostRequests,
+        sourceJob.targetEnvironment
       ),
       stages: Object.fromEntries(
         FIXLAB_STAGES.map((stage) => [
@@ -3902,6 +3956,14 @@ export function createDashboardServer({
         (currentProfile.validation?.liveTestsRequired === false)) {
       throw new Error("The repository live-test policy changed; start a newly reviewed job.");
     }
+    const currentDevReads = configuredTestSynthesis(currentProfile, "", undefined, job.targetEnvironment).devReadOnly === true;
+    if (currentDevReads !== (job.testEvidence.devReadOnly === true)) {
+      throw new Error("The DEV portal read policy changed; start a newly reviewed job.");
+    }
+    const currentPpeReads = configuredTestSynthesis(currentProfile, "", undefined, job.targetEnvironment).ppeReadOnly === true;
+    if (currentPpeReads !== (job.testEvidence.ppeReadOnly === true)) {
+      throw new Error("The PPE portal read policy changed; start a newly reviewed job.");
+    }
     if (currentProfile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly &&
         currentProfile.browserAutomation.mode !== "api") {
       throw new Error("Production database approval permits dedicated API proof only in a portal workspace; run jobs from an API-only profile.");
@@ -3909,7 +3971,7 @@ export function createDashboardServer({
     if (job.testEvidence.productionDatabaseReadOnly ||
         (currentProfile.browserAutomation?.mode === "api" &&
           currentProfile.browserAutomation.apiAuthentication?.productionDatabaseReadOnly)) {
-      const currentEvidence = configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "");
+      const currentEvidence = configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "", undefined, job.targetEnvironment);
       if ((currentEvidence.productionDatabaseReadOnly === true) !== (job.testEvidence.productionDatabaseReadOnly === true) ||
           (job.targetEnvironment && job.targetEnvironment !== "local") ||
           job.testEvidence.source !== "production-read-only" || job.testEvidence.mutationMode !== "none") {
@@ -3961,17 +4023,18 @@ export function createDashboardServer({
       job.browserPreflightBlocked = false;
       job.browserSessionNotStarted = false;
     }
-    if (job.postWriteApproval?.mode === "dev-origin") {
-      configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "", true);
-      prompt += "\nThe user explicitly authorized all DEV API writes for this job on the reviewed dataSafety.devWrite HTTPS origins. Use fixlab_dev_write for POST, PUT, PATCH and DELETE without repeat confirmation or endpoint/test-record enumeration. This can change any record accessible to the signed-in account on those origins. The grant binds this job, DEV and the profile/helper revision, expires with execution, and stops after unsuccessful or ambiguous attempts. No SIT/UAT/production, redirects, retries, shell/browser-write substitutes or browser-guard bypass. Existing authentication is required. Report approved-write evidence; HTTP success alone is not scenario success.";
+    if (isOriginWriteApproval(job.postWriteApproval)) {
+      configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "", true, job.targetEnvironment);
+      const environment = job.postWriteApproval.environment;
+      prompt += `\nThe user explicitly authorized all ${environment.toUpperCase()} API writes for this job on the reviewed dataSafety.${environment}Write HTTPS origins. Use fixlab_${environment}_write for POST, PUT, PATCH and DELETE without repeat confirmation or endpoint/test-record enumeration. This can change any record accessible to the signed-in account on those origins. The grant binds this job, ${environment.toUpperCase()} and the profile/helper revision, expires with execution, and stops after unsuccessful or ambiguous attempts. No other environments, redirects, retries, shell/browser-write substitutes or browser-guard bypass. Existing authentication is required. Report approved-write evidence; HTTP success alone is not scenario success.`;
     } else if (typeof job.testEvidence.allowPostRequests === "boolean") {
       configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "",
-        job.testEvidence.allowPostRequests);
+        job.testEvidence.allowPostRequests, job.targetEnvironment);
       prompt += `\n${job.postWriteApproval ? "The user explicitly authorized configured DEV/SIT/UAT POST writes for this job through the POST checkbox. Use fixlab_nonproduction_post without repeat confirmation; its approval is bound to this job, environment and reviewed profile/helper revision and expires when execution ends." : "No current job-scoped POST write approval exists. Every data-changing action still requires separate exact destination/payload confirmation through fixlab_nonproduction_post."} Verified read-only POST searches follow the repository query allowlist independently of this checkbox. Approved per-environment endpoint/test-record configuration and an existing authentication helper are required; if missing, name that prerequisite and block only the action. Explicit read-only/intercepted modes, API-only/unit-only contracts and production remain restricted. Never bypass browser guards or substitute a browser/shell write. Report approved-write evidence honestly after a real action; approval alone is not scenario success.`;
     }
     if (job.testEvidence.selectedMutationMode) {
       const effective = configuredTestSynthesis(
-        loadRepositoryProfile(resolvedRepository), job.testEvidence.selectedMutationMode
+        loadRepositoryProfile(resolvedRepository), job.testEvidence.selectedMutationMode, undefined, job.targetEnvironment
       );
       if (effective.mutationMode !== job.testEvidence.mutationMode) {
         throw new Error("The selected run's data-safety configuration changed; start a newly reviewed job.");
@@ -4085,7 +4148,8 @@ export function createDashboardServer({
         if (job.sharedWorkspace) {
           persistDashboardState();
           const readiness = inspectRepository(resolvedRepository);
-          if (!readiness.profileReady) {
+          if (!readiness.profileReady &&
+              !(readiness.draftOnlyReady && allowsUnverifiedDraft(job))) {
             throw new Error(`Shared checkout configuration is not ready after branch acquisition: ${readiness.error}`);
           }
           pushLog(job, {
@@ -6397,22 +6461,27 @@ export function createDashboardServer({
           return;
         }
       }
-      if ((body.allowDevWrites !== undefined && typeof body.allowDevWrites !== "boolean") ||
-          (body.devWriteApprovalConfirmed !== undefined && typeof body.devWriteApprovalConfirmed !== "boolean")) {
-        sendJson(response, 400, { error: "allowDevWrites and devWriteApprovalConfirmed must be booleans." });
-        return;
-      }
-      if (body.allowDevWrites === true || body.devWriteApprovalConfirmed === true) {
-        if (body.allowDevWrites !== true || body.devWriteApprovalConfirmed !== true ||
-            body.allowPostRequests === true || runtime !== "copilot") {
-          sendJson(response, 400, { error: "Broad DEV writes require explicit DEV write confirmation, native Copilot and no separate POST checkbox." });
+      for (const [field, confirmation, label, other] of [
+        ["allowDevWrites", "devWriteApprovalConfirmed", "DEV", "allowPpeWrites"],
+        ["allowPpeWrites", "ppeWriteApprovalConfirmed", "PPE", "allowDevWrites"]
+      ]) {
+        if ((body[field] !== undefined && typeof body[field] !== "boolean") ||
+            (body[confirmation] !== undefined && typeof body[confirmation] !== "boolean")) {
+          sendJson(response, 400, { error: `${field} and ${confirmation} must be booleans.` });
           return;
         }
-        const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
-        if (request.headers.host !== new URL(expectedOrigin).host ||
-            request.headers.origin !== expectedOrigin) {
-          sendJson(response, 403, { error: "DEV write approval requires the dashboard's exact loopback host and origin." });
-          return;
+        if (body[field] === true || body[confirmation] === true) {
+          if (body[field] !== true || body[confirmation] !== true || body[other] === true ||
+              body.allowPostRequests === true || runtime !== "copilot") {
+            sendJson(response, 400, { error: `Broad ${label} writes require explicit ${label} write confirmation, native Copilot and no other write checkbox.` });
+            return;
+          }
+          const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+          if (request.headers.host !== new URL(expectedOrigin).host ||
+              request.headers.origin !== expectedOrigin) {
+            sendJson(response, 403, { error: `${label} write approval requires the dashboard's exact loopback host and origin.` });
+            return;
+          }
         }
       }
       if (body.postWriteApprovalConfirmed !== undefined &&
@@ -6479,17 +6548,37 @@ export function createDashboardServer({
         return;
       }
       const repositoryProfile = loadRepositoryProfile(resolvedRepository);
+      for (const key of ["deferValidation", "skipLiveTests", "useDeployedBackend"]) {
+        if (body[key] !== undefined && typeof body[key] !== "boolean") {
+          sendJson(response, 400, { error: `${key} must be a boolean` });
+          return;
+        }
+      }
+      const deferValidation = body.deferValidation === true;
+      const skipLiveTests = deferValidation || body.skipLiveTests === true;
+      const useDeployedBackend = body.useDeployedBackend === true;
+      if (skipLiveTests && (body.mode !== "fix-and-validate" ||
+          body.manualLocalhostTest === true || runAllUiScenarios ||
+          repositoryProfile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly ||
+          repositoryProfile.browserAutomation?.testSynthesis?.defaultDataSource === "production-read-only")) {
+        sendJson(response, 400, { error: "Deferred checks require a draft code-work job without explicit manual/all-UI or production validation." });
+        return;
+      }
       let workflow;
       try {
         workflow = configuredWorkflow(repositoryProfile);
+        if (skipLiveTests) {
+          workflow = { ...workflow, publication: "draft" };
+        }
       } catch (error) {
         sendJson(response, 400, { error: error.message });
         return;
       }
       const preflightIssues = preflight
-        ? preflight({ repository: resolvedRepository, profile: repositoryProfile, mode: body.mode })
+        ? preflight({ repository: resolvedRepository, profile: repositoryProfile, mode: body.mode,
+          deferValidation, skipLiveTests, useDeployedBackend })
         : [];
-      if (preflightIssues.length > 0) {
+      if (preflightIssues.length > 0 && body.mode !== "fix-and-validate") {
         sendJson(response, 400, {
           error: formatPreflightFailure(preflightIssues),
           preflight: preflightIssues
@@ -6518,6 +6607,17 @@ export function createDashboardServer({
         });
         return;
       }
+      if (skipLiveTests && manualLocalhostTest) {
+        sendJson(response, 400, { error: "Deferred checks cannot be combined with manual localhost validation." });
+        return;
+      }
+      if (useDeployedBackend && (!/^(dev|development|ppe|sit|uat)$/iu.test(targetEnvironment) ||
+          repositoryProfile.validation?.liveTestsRequired === false ||
+          repositoryProfile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly ||
+          repositoryProfile.browserAutomation?.testSynthesis?.defaultDataSource === "production-read-only")) {
+        sendJson(response, 400, { error: "A deployed backend requires an explicitly selected, profile-approved DEV/SIT/UAT/PPE environment and a contract permitting non-production live access." });
+        return;
+      }
       if (repositoryProfile.validation?.liveTestsRequired === false &&
           (body.mode === "playwright-only" || manualLocalhostTest ||
            prestartFrontend || recordPlaywrightVideo || runAllUiScenarios)) {
@@ -6537,13 +6637,13 @@ export function createDashboardServer({
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       let testEvidence;
       try {
-        const allowPostRequests = body.allowDevWrites === true ? true : body.allowPostRequests;
+        const allowPostRequests = body.allowDevWrites === true || body.allowPpeWrites === true ? true : body.allowPostRequests;
         if (body.allowPostRequests !== undefined && typeof body.allowPostRequests !== "boolean") {
           throw new Error("allowPostRequests must be a boolean.");
         }
         if (allowPostRequests !== undefined && !targetEnvironment &&
             allowedEnvironments.length === 1 &&
-            ["dev", "sit", "uat"].includes(allowedEnvironments[0].toLowerCase()) &&
+            ["dev", "sit", "uat", "ppe"].includes(allowedEnvironments[0].toLowerCase()) &&
             repositoryProfile.browserAutomation?.mode !== "api" &&
             repositoryProfile.validation?.liveTestsRequired !== false) {
           targetEnvironment = allowedEnvironments[0];
@@ -6551,9 +6651,12 @@ export function createDashboardServer({
         if (body.allowDevWrites === true && targetEnvironment.toLowerCase() !== "dev") {
           throw new Error("Broad DEV writes are available only for an explicitly selected DEV environment.");
         }
+        if (body.allowPpeWrites === true && targetEnvironment.toLowerCase() !== "ppe") {
+          throw new Error("Broad PPE writes are available only for an explicitly selected PPE environment.");
+        }
         if (allowPostRequests === true &&
-            !["dev", "sit", "uat"].includes(targetEnvironment.toLowerCase())) {
-          throw new Error("POST support is available only for an explicitly selected DEV, SIT or UAT environment.");
+            !["dev", "sit", "uat", "ppe"].includes(targetEnvironment.toLowerCase())) {
+          throw new Error("POST support is available only for an explicitly selected DEV, SIT, UAT or PPE environment.");
         }
         if (repositoryProfile.browserAutomation?.apiAuthentication?.productionDatabaseReadOnly &&
             repositoryProfile.browserAutomation.mode !== "api") {
@@ -6561,7 +6664,7 @@ export function createDashboardServer({
         }
         testEvidence = configuredTestSynthesis(repositoryProfile,
           body.testMutationMode === undefined ? "" : body.testMutationMode,
-          allowPostRequests);
+          allowPostRequests, targetEnvironment);
         if (testEvidence.productionDatabaseReadOnly && targetEnvironment && targetEnvironment !== "local") {
           throw new Error("The production database read-only exception permits only the local API environment.");
         }
@@ -6645,7 +6748,11 @@ export function createDashboardServer({
       }
 
       const readiness = inspectRepository(resolvedRepository);
-      if (!readiness.repositoryReady || !readiness.profileReady) {
+      if (!readiness.repositoryReady || (!readiness.profileReady &&
+          !(readiness.draftOnlyReady && allowsUnverifiedDraft({
+            mode: body.mode, workflow, deferValidation, manualLocalhostTest,
+            runAllUiScenarios, testEvidence
+          })))) {
         sendJson(response, 400, { error: readiness.error, readiness });
         return;
       }
@@ -6655,6 +6762,8 @@ export function createDashboardServer({
       try {
         if (body.allowDevWrites === true) {
           postWriteApproval = createDevWriteApproval(resolvedRepository, targetEnvironment, jobId);
+        } else if (body.allowPpeWrites === true) {
+          postWriteApproval = createPpeWriteApproval(resolvedRepository, targetEnvironment, jobId);
         } else if (body.postWriteApprovalConfirmed === true) {
           postWriteApproval = createPostWriteApproval(resolvedRepository, targetEnvironment, jobId);
         }
@@ -6709,6 +6818,11 @@ export function createDashboardServer({
         requestType,
         validationIntent,
         workflow,
+        deferValidation,
+        skipLiveTests,
+        useDeployedBackend,
+        setupRecovery: preflightIssues.map((issue) =>
+          safePersistedSummary(`${issue.check}: ${issue.detail}`)),
         permissionPreflight: body.permissionPreflight === true,
         toolApprovalMode,
         postWriteApproval,
@@ -6720,7 +6834,7 @@ export function createDashboardServer({
         pullRequestStrategy,
         runAllUiScenarios,
         targetEnvironment,
-        prestartFrontend,
+        prestartFrontend: prestartFrontend && !skipLiveTests,
         recordPlaywrightVideo,
         manualLocalhostTest,
         manualLocalhostUrl,
@@ -6769,8 +6883,8 @@ export function createDashboardServer({
       if (postWriteApproval) {
         pushLog(job, {
           index: job.nextLogIndex, timestamp: new Date().toISOString(), stream: "dashboard",
-          message: postWriteApproval.mode === "dev-origin"
-            ? "The user explicitly authorized POST/PUT/PATCH/DELETE on reviewed DEV origins for this job, including any record accessible to their account. Approval is revision-bound, memory-only and expires with this executor; other environments and explicit read-only restrictions remain blocked."
+          message: isOriginWriteApproval(postWriteApproval)
+            ? `The user explicitly authorized POST/PUT/PATCH/DELETE on reviewed ${postWriteApproval.environment.toUpperCase()} origins for this job, including any record accessible to their account. Approval is revision-bound, memory-only and expires with this executor; other environments and explicit read-only restrictions remain blocked.`
             : "The user explicitly authorized configured POST writes for this job and selected environment without repeat confirmation. Approval is revision-bound, memory-only and expires with this executor; production and read-only restrictions remain in effect."
         });
       }
@@ -6785,6 +6899,10 @@ export function createDashboardServer({
         request: requestText,
         workflow,
         mode: body.mode,
+        deferValidation,
+        skipLiveTests,
+        useDeployedBackend,
+        setupRecovery: job.setupRecovery,
         requestType,
         pullRequestStrategy,
         runAllUiScenarios,

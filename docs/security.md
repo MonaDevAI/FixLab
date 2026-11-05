@@ -150,7 +150,7 @@ it never approves, hides or replays the rejected operation. Managed escalation
 and sensitive-path requests do not offer recovery. Existing evidence and failed
 checks remain authoritative; a missing safe prerequisite still blocks the stage.
 
-### Broad DEV-only API writes
+### Broad DEV and PPE API writes
 
 Native Copilot dashboard jobs provide a separate, off-by-default **Allow all DEV
 API writes for this job** checkbox. Select DEV, leave explicit read-only or
@@ -159,6 +159,12 @@ It authorizes `fixlab_dev_write` to send POST, PUT, PATCH and DELETE to **any pa
 and any record accessible to your account** on the configured DEV HTTPS origins.
 You do not enumerate APIs or test records. This is separate from **Allow all
 tools** and mutually exclusive with the scoped POST checkbox.
+
+PPE uses its own **Allow all PPE API writes** choice, `fixlab_ppe_write` tool and
+`dataSafety.ppeWrite` configuration with the same fields. Declare `ppe` in
+`environments` and configure reviewed origins such as
+`https://api.ppe.example.test`. PPE grants never inherit DEV configuration or
+consent. Neither choice enables broad SIT/UAT or production writes.
 
 In `.github/fixlab/repository-profile.json`, declare DEV in `environments`, keep
 `productionAllowed: false`, and add this inside `browserAutomation.dataSafety`:
@@ -177,7 +183,8 @@ In `.github/fixlab/repository-profile.json`, declare DEV in `environments`, keep
 Review the actual deployment before configuring 1-16 exact HTTPS origins
 (scheme, hostname and optional port; no trailing slash, path or wildcard).
 Hostnames must contain a `dev` or `development` label, separated by dots or
-hyphens, and cannot also contain SIT/UAT/staging/production labels. These checks
+hyphens; PPE hosts must instead contain `ppe`. Reject conflicting environment
+labels, including mixed DEV/PPE names and SIT/UAT/staging/production. These checks
 and the explicit profile are an operator assertion, not deployment attestation;
 they cannot prove that a misleading DNS alias reaches DEV. Do not list aliases
 for another environment.
@@ -196,15 +203,15 @@ Approval uses the same memory-only job/environment/profile/helper-revision grant
 and native worker protocol as scoped POST. It expires on executor end, stop,
 hold, completion or restart; recovered and later jobs never inherit it.
 Configuration changes and unsuccessful or ambiguous attempts require a newly
-reviewed job. No redirects or automatic retries. SIT/UAT/production, API-only,
+reviewed job. No redirects or automatic retries. Other environments, API-only,
 unit-only, production-backed and explicit read-only/intercepted contracts remain
 blocked. Browser guards stay intact: use the mediated tool, not a shell/browser
 write substitute. This is not a same-user OS network sandbox.
 
 ### Individually confirmed non-production POST
 
-Native Copilot dashboard jobs expose `fixlab_nonproduction_post` for DEV, SIT and
-UAT. The **Allow POST writes for this job in the selected environment** checkbox
+Native Copilot dashboard jobs expose `fixlab_nonproduction_post` for DEV, PPE, SIT
+and UAT. The **Allow POST writes for this job in the selected environment** checkbox
 is off by default. Selecting it and starting the job explicitly authorizes writes
 to that environment's configured endpoints and test records without repeated
 payload confirmations. This is business-write approval, not just tool access.
@@ -250,7 +257,7 @@ credential-like/oversized payloads qualify. For example, inside `dataSafety`:
 }
 ```
 
-Add separately approved `sit` and `uat` entries with their own destinations,
+Add separately approved `ppe`, `sit` and `uat` entries with their own destinations,
 test records and authentication configuration; no environment inherits another's
 allowlist. The profile must also declare the selected environment. Legacy
 `dataSafety.devPost` and `fixlab_dev_post` remain supported for DEV. Old snapshots

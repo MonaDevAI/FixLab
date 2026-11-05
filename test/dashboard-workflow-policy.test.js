@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { API_ONLY_PLAYWRIGHT_GUIDANCE, DEV_WRITE_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, PR_LEARNING_GUIDANCE, READ_ONLY_POST_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
+import { API_ONLY_PLAYWRIGHT_GUIDANCE, DEV_WRITE_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, allowsUnverifiedDraft, UNIT_TEST_ONLY_GUIDANCE, PR_LEARNING_GUIDANCE, READ_ONLY_POST_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
 import { ValidationSession, selectedValidationGates, validationGates } from "../dashboard/validation-gates.js";
 import { buildJobPrompt, FIXLAB_STAGES } from "../dashboard/server.js";
 
@@ -60,6 +60,30 @@ test("DEV write guidance stays native-only and aligned across runtime and initia
     const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8").replace(/\s+/gu, " ");
     assert.ok(source.includes(DEV_WRITE_GUIDANCE), path);
   }
+});
+
+test("DEV portal defaults stay aligned across CLI, packaged and initialized agents", () => {
+  for (const path of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md"
+  ]) {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8")
+      .replace(/`/gu, "").replace(/\s+/gu, " ");
+    for (const contract of [
+      "browserAutomation.testSynthesis.devReadOnly: true",
+      "ppeReadOnly: true",
+      "all verified read-only queries",
+      "real read-only backend data while intercepting mutations",
+      "other environments retain defaultDataSource",
+      "policy changes require a fresh reviewed job"
+    ]) {
+      assert.ok(source.includes(contract), `${path}: ${contract}`);
+    }
+  }
+  const cli = readFileSync(new URL("../bin/fixlab.js", import.meta.url), "utf8");
+  assert.match(cli, /configuredTestSynthesis\(profile, "", undefined, selectedEnvironment\)/u);
+  assert.match(cli, /testEvidence\.source === "non-production-read-only"/u);
 });
 
 test("reusable learning is captured within the authorized PR stage without a new roadmap stage", () => {
@@ -284,7 +308,36 @@ test("draft integration guidance stays aligned across CLI and packaged agents", 
     assert.ok(source.includes(DRAFT_INTEGRATION_GUIDANCE), path);
   }
   const cli = readFileSync(new URL("../bin/fixlab.js", import.meta.url), "utf8");
-  assert.match(cli, /request && allowsDraftIntegrationDeferral\(\{ mode: readOnly \? "validate-only" : "fix-and-validate", workflow \}\)/u);
+  assert.match(cli, /request && !choices.deferValidation && allowsDraftIntegrationDeferral\(\{ mode: readOnly \? "validate-only" : "fix-and-validate", workflow \}\)/u);
+});
+
+test("explicit unverified drafts defer checks without changing ready, manual or validation-only contracts", () => {
+  const job = { request: "Small code change.", mode: "fix-and-validate",
+    workflow: { mode: "strict", publication: "draft" }, deferValidation: true,
+    skipLiveTests: true, useDeployedBackend: true };
+  assert.equal(allowsUnverifiedDraft(job), true);
+  const prompt = buildJobPrompt(job);
+  assert.ok(prompt.includes(UNVERIFIED_DRAFT_GUIDANCE));
+  assert.ok(prompt.includes(OPTIONAL_INTEGRATION_GUIDANCE));
+  assert.ok(!prompt.includes(DRAFT_INTEGRATION_GUIDANCE));
+  assert.ok(!prompt.includes("run the focused regression checks that cover it"));
+  for (const overrides of [
+    { deferValidation: false }, { mode: "validate-only" }, { mode: "playwright-only" },
+    { workflow: { mode: "strict", publication: "ready" } }, { manualLocalhostTest: true },
+    { runAllUiScenarios: true }, { testEvidence: { productionDatabaseReadOnly: true } }
+  ]) {
+    assert.equal(allowsUnverifiedDraft({ ...job, ...overrides }), false);
+  }
+  for (const path of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md"
+  ]) {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8").replace(/\s+/gu, " ");
+    assert.ok(source.includes(UNVERIFIED_DRAFT_GUIDANCE), path);
+    assert.ok(source.includes(OPTIONAL_INTEGRATION_GUIDANCE), path);
+    assert.ok(source.includes(AUTONOMOUS_RECOVERY_GUIDANCE), path);
+  }
 });
 
 test("advisory validation retains actual failures and optional gates stay executable", () => {

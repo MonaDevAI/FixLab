@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createDevPostTool, createDevWriteApproval, createPostWriteApproval } from "../dashboard/dev-post.js";
+import { createDevPostTool, createDevWriteApproval, createPpeWriteApproval, createPostWriteApproval } from "../dashboard/dev-post.js";
 import { runCopilotSession } from "../dashboard/copilot-session.js";
 import { createRuntimeRequestBridge, runtimeRequestId } from "../dashboard/runtime-requests.js";
 
@@ -38,23 +38,26 @@ function fixture(t, overrides = {}) {
     tool: () => createDevPostTool(settings) };
 }
 
-function approveDevOrigins(state) {
-  state.profile.browserAutomation.dataSafety.devWrite = {
+function approveOrigins(state, environment = "DEV") {
+  const key = environment.toLowerCase();
+  if (!state.profile.environments.includes(environment)) { state.profile.environments.push(environment); }
+  state.profile.browserAutomation.dataSafety[`${key}Write`] = {
     scope: "api://example-service/access", sessionHelper: "session.mjs",
-    origins: ["https://api.dev.example.test"]
+    origins: [`https://api.${key}.example.test`]
   };
   state.save();
   Object.assign(state.settings, {
-    jobId: "11111111-1111-4111-8111-111111111111", allowPostRequests: true
+    jobId: "11111111-1111-4111-8111-111111111111", allowPostRequests: true, targetEnvironment: environment
   });
-  state.settings.postWriteApproval = createDevWriteApproval(state.repository, "DEV", state.settings.jobId);
+  state.settings.postWriteApproval = (environment === "PPE" ? createPpeWriteApproval : createDevWriteApproval)(
+    state.repository, environment, state.settings.jobId);
   return state.tool();
 }
 
 test("broad DEV approval supports every write method and any record/path only on exact reviewed origins", async (t) => {
   const state = fixture(t);
   delete state.profile.browserAutomation.dataSafety.devPost;
-  const tool = approveDevOrigins(state);
+  const tool = approveOrigins(state);
   assert.equal(tool.name, "fixlab_dev_write");
   for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
     const args = { url: "https://api.dev.example.test/unlisted/path?record=ordinary-record",
@@ -92,7 +95,7 @@ test("broad DEV approval supports every write method and any record/path only on
 
 test("broad DEV approval requires reviewed DEV-only setup and never follows generic tool/POST preferences", async (t) => {
   const state = fixture(t);
-  const tool = approveDevOrigins(state);
+  const tool = approveOrigins(state);
   assert.ok(tool);
   const jobId = state.settings.jobId;
   for (const environment of ["SIT", "UAT", "production", "local", ""]) {
@@ -102,6 +105,7 @@ test("broad DEV approval requires reviewed DEV-only setup and never follows gene
     "https://api.sit.example.test", "https://api.uat.example.test", "https://api.example.test",
     "https://api.dev.production.example.test", "https://api.dev.prod.example.test",
     "https://api.dev.uat.example.test", "https://api.dev.example.test/",
+    "https://api.dev.ppe.example.test",
     "https://api.dev.example.test/path", "http://api.dev.example.test",
     "https://user@api.dev.example.test", "https://*.dev.example.test"
   ]) {
@@ -124,7 +128,7 @@ test("broad DEV approval requires reviewed DEV-only setup and never follows gene
 test("broad DEV grants bind the job/profile/helper and preserve stricter validation contracts", async (t) => {
   for (const change of ["job", "environment", "unchecked", "profile", "helper", "removed", "api", "unit", "production"]) {
     const state = fixture(t);
-    const tool = approveDevOrigins(state);
+    const tool = approveOrigins(state);
     if (change === "job") { state.settings.jobId = "22222222-2222-4222-8222-222222222222"; }
     if (change === "environment") { state.settings.targetEnvironment = "SIT"; }
     if (change === "unchecked") { state.settings.allowPostRequests = false; }
@@ -153,7 +157,7 @@ test("broad DEV approval stops after redirects and failed or ambiguous writes", 
     if (status === "auth") {
       writeFileSync(state.helper, 'export async function withApiToken() { throw new Error("synthetic-private-value"); }\n');
     }
-    approveDevOrigins(state);
+    approveOrigins(state);
     const requests = state.requests;
     const failing = createDevPostTool({ ...state.settings, request: async (url, options) => {
       requests.push({ url, options });
@@ -166,15 +170,46 @@ test("broad DEV approval stops after redirects and failed or ambiguous writes", 
   }
 });
 
-test("native SDK consumes broad DEV approval and expires it on executor shutdown", async (t) => {
+test("PPE origin grants permit CRUD but never accept DEV grants, mixed hosts or another environment", async (t) => {
   const state = fixture(t);
-  approveDevOrigins(state);
+  state.args.url = "https://api.ppe.example.test/records";
+  const tool = approveOrigins(state, "PPE");
+  assert.equal(tool.name, "fixlab_ppe_write");
+  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+    const result = await tool.handler({ ...state.args, method });
+    assert.equal(result.environment, "PPE");
+    assert.equal(result.method, method);
+    assert.equal(result.validationPassed, false);
+  }
+  assert.equal(state.prompts.length, 0);
+  await assert.rejects(tool.handler({ ...state.args, method: "PUT", url: "https://api.dev.example.test/records" }),
+    /approved PPE origins/u);
+  const jobId = state.settings.jobId;
+  assert.throws(() => createPpeWriteApproval(state.repository, "DEV", jobId), /explicitly selected PPE/u);
+  assert.throws(() => createDevWriteApproval(state.repository, "PPE", jobId), /explicitly selected DEV/u);
+  assert.throws(() => createDevPostTool({ ...state.settings, targetEnvironment: "DEV",
+    postWriteApproval: { ...state.settings.postWriteApproval, environment: "dev" } }), /Invalid job-scoped/u);
+  for (const origin of ["https://api.dev.example.test", "https://api.ppe.dev.example.test",
+    "https://api.ppe.sit.example.test", "https://api.ppe.uat.example.test",
+    "https://api.ppe.production.example.test", "https://api.ppe.example.test/path"]) {
+    state.profile.browserAutomation.dataSafety.ppeWrite.origins = [origin];
+    state.save();
+    assert.throws(() => createPpeWriteApproval(state.repository, "PPE", jobId), /PPE.*origins/u);
+  }
+  assert.equal(state.requests.length, 4);
+});
+
+for (const environment of ["DEV", "PPE"]) {
+test(`native SDK consumes broad ${environment} approval and expires it on executor shutdown`, async (t) => {
+  const state = fixture(t);
+  state.args.url = `https://api.${environment.toLowerCase()}.example.test/items`;
+  approveOrigins(state, environment);
   const originalFetch = globalThis.fetch;
   globalThis.fetch = state.settings.request;
   t.after(() => { globalThis.fetch = originalFetch; });
   let exposedTool;
   await runCopilotSession({
-    repository: state.repository, sessionId: state.settings.jobId, targetEnvironment: "DEV",
+    repository: state.repository, sessionId: state.settings.jobId, targetEnvironment: environment,
     allowPostRequests: true, postWriteApproval: state.settings.postWriteApproval,
     testMutationMode: "approved-write", prompt: "Synthetic approved DEV write."
   }, {
@@ -184,7 +219,7 @@ test("native SDK consumes broad DEV approval and expires it on executor shutdown
       async start() {},
       async createSession(options) {
         exposedTool = options.tools[0];
-        assert.equal(exposedTool.name, "fixlab_dev_write");
+        assert.equal(exposedTool.name, `fixlab_${environment.toLowerCase()}_write`);
         return {
           rpc: { managedSettings: { async get() { return { failClosed: false }; } } }, on() {},
           async sendAndWait() {
@@ -198,9 +233,10 @@ test("native SDK consumes broad DEV approval and expires it on executor shutdown
   await assert.rejects(exposedTool.handler({ ...state.args, method: "PUT" }), /policy.*shutdown/u);
   assert.equal(state.requests.length, 1);
 });
+}
 
 test("legacy DEV/SIT/UAT POST preferences still require individual confirmation", async (t) => {
-  for (const environment of ["DEV", "SIT", "UAT"]) {
+  for (const environment of ["DEV", "SIT", "UAT", "PPE"]) {
     for (const enabled of [true, false]) {
       const state = fixture(t);
       const key = environment.toLowerCase();
@@ -208,7 +244,7 @@ test("legacy DEV/SIT/UAT POST preferences still require individual confirmation"
       configuration.actions[0].url = `https://api.${key}.example.test/items`;
       delete state.profile.browserAutomation.dataSafety.devPost;
       state.profile.browserAutomation.dataSafety.post = { [key]: configuration };
-      state.profile.environments = ["DEV", "SIT", "UAT"];
+      state.profile.environments = ["DEV", "SIT", "UAT", "PPE"];
       state.profile.browserAutomation.testSynthesis = {
         defaultDataSource: "non-production-read-only", mutationMode: "none"
       };
@@ -243,14 +279,14 @@ test("legacy DEV/SIT/UAT POST preferences still require individual confirmation"
 });
 
 test("explicit job-scoped POST approval authorizes configured DEV/SIT/UAT writes without repeat prompts", async (t) => {
-  for (const environment of ["DEV", "SIT", "UAT"]) {
+  for (const environment of ["DEV", "SIT", "UAT", "PPE"]) {
     const state = fixture(t);
     const key = environment.toLowerCase();
     const configuration = structuredClone(state.profile.browserAutomation.dataSafety.devPost);
     configuration.actions[0].url = `https://api.${key}.example.test/items`;
     delete state.profile.browserAutomation.dataSafety.devPost;
     state.profile.browserAutomation.dataSafety.post = { [key]: configuration };
-    state.profile.environments = ["DEV", "SIT", "UAT"];
+    state.profile.environments = ["DEV", "SIT", "UAT", "PPE"];
     state.save();
     const jobId = "11111111-1111-4111-8111-111111111111";
     Object.assign(state.settings, {

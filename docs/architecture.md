@@ -11,7 +11,7 @@ Native runtime request classification supplies redacted, reason-specific
 diagnostics. Eligible blocked operations expose **Deny and request safe recovery**:
 the runtime receives a rejection with fixed recovery feedback, not a permission
 grant or automatic replay. Existing stage evidence remains authoritative.
-Separately, `fixlab_nonproduction_post` mediates DEV/SIT/UAT writes through each
+Separately, `fixlab_nonproduction_post` mediates DEV/PPE/SIT/UAT writes through each
 environment's existing authentication helper and exact endpoint/test-record
 allowlist. The off-by-default job-start checkbox authorizes configured writes
 for this job without repeat confirmation. Approval binds the job, environment
@@ -28,7 +28,33 @@ checkbox exposes `fixlab_dev_write` for POST/PUT/PATCH/DELETE on exact reviewed
 It can affect any accessible DEV record and reuses the same revision-bound,
 memory-only grant and lifecycle revocation. No other environment or explicit
 read-only contract is expanded; browser guards remain intact. See
-[DEV write configuration](security.md#broad-dev-only-api-writes).
+[DEV/PPE write configuration](security.md#broad-dev-and-ppe-api-writes).
+
+PPE has an independent `dataSafety.ppeWrite` configuration, per-job confirmation
+and `fixlab_ppe_write` tool with the same CRUD methods and grant lifecycle.
+DEV grants never authorize PPE or other environments.
+
+Job authors may explicitly select **Create an unverified draft PR without
+running checks** (`deferValidation`). This changes draft creation readiness only:
+the reviewed nonempty code diff may be published while local and live gates
+retain their real not-run, pending or failed outcomes. It never makes full
+validation pass or permits ready-for-review/merge. **Defer live/browser/API
+tests** (`skipLiveTests`) retains local checks without requiring live integration.
+Both choices force draft publication and exclude explicit manual/all-UI or
+production validation.
+
+**Use the deployed non-production backend** (`useDeployedBackend`) selects the
+reviewed API for the chosen DEV/SIT/UAT/PPE environment instead of starting local
+.NET/Key Vault. Existing SSO, read/write guards and target allowlists still apply.
+Local API testing is optional for draft creation; unavailable startup is
+disclosed, not a passed integration check. A deployed API cannot validate
+unpublished backend code.
+
+Code-job preflight findings such as missing npm/.NET tools are passed to Copilot
+as setup diagnostics rather than rejecting the job before reasoning starts.
+Recovery uses existing repository commands, verifies each distinct repair and
+continues independent work. Validation-only jobs retain prerequisite enforcement;
+human sign-in and actual permission requirements are never bypassed.
 
 FixLab is distributed and versioned as its own product. It supports Agency
 Copilot as the default compatibility runtime and GitHub Copilot CLI as an
@@ -588,6 +614,17 @@ smallest focused Playwright scenario and measurable assertions. A
 changing external records. The agent emits structured `FIXLAB_TEST` evidence;
 the dashboard highlights the actual data source, mutation behavior, and
 scenario beside the job roadmap.
+
+New CLI and dashboard onboarding profiles set `testSynthesis.devReadOnly: true`
+and `ppeReadOnly: true`. For an explicitly selected `dev`/`development` or `ppe`
+portal run with the default
+synthetic/intercepted baseline, the shared resolver selects
+`non-production-read-only` and retains mutation interception. Other environments,
+API-only/unit-only and production contracts are unchanged. Existing profiles
+are never opted in implicitly. The resolved DEV/PPE policy is job-bound and
+persisted across queue/recovery; activating or revoking it requires a fresh job.
+Repository browser/auth adapters must permit the reviewed reads rather than
+disable guards; verified query contracts and legitimate SSO still apply.
 
 Synthesized Playwright source files are transient validation artifacts by
 default. FixLab removes them, along with validation-only configuration edits,

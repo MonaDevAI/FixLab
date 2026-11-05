@@ -101,12 +101,13 @@ const allowDevWritesInput = document.querySelector("#allow-dev-writes");
 let postUiBlocked = true;
 let postRuntimeAvailable = false;
 let postCheckboxEnvironment = null;
+let repositoryReadiness = null;
 
 function updatePostRequestsOption() {
   const configured = [...targetEnvironmentSelect.options].map((option) => option.value).filter(Boolean);
   const environment = (targetEnvironmentSelect.value ||
     (configured.length === 1 ? configured[0] : "")).toLowerCase();
-  const available = postRuntimeAvailable && !postUiBlocked && ["dev", "sit", "uat"].includes(environment) &&
+  const available = postRuntimeAvailable && !postUiBlocked && ["dev", "sit", "uat", "ppe"].includes(environment) &&
     !document.querySelector('[name="testMutationMode"]').value;
   const key = available ? environment : "";
   if (postCheckboxEnvironment !== key) {
@@ -114,8 +115,35 @@ function updatePostRequestsOption() {
     allowDevWritesInput.checked = false;
     postCheckboxEnvironment = key;
   }
-  allowDevWritesInput.disabled = !available || environment !== "dev";
+  allowDevWritesInput.disabled = !available || !["dev", "ppe"].includes(environment);
+  document.querySelector("#origin-writes-label").textContent =
+    `Allow all ${environment === "ppe" ? "PPE" : "DEV"} API writes for this job`;
   allowPostRequestsInput.disabled = !available || allowDevWritesInput.checked;
+  updateIntegrationOptions();
+}
+
+function updateIntegrationOptions() {
+  const codeWork = form.querySelector('[name="mode"]:checked')?.value === "fix-and-validate";
+  const explicitLive = form.querySelector('[name="manualLocalhostTest"]').checked ||
+    form.querySelector('[name="runAllUiScenarios"]').checked;
+  for (const name of ["deferValidation", "skipLiveTests"]) {
+    const input = form.querySelector(`[name="${name}"]`);
+    input.disabled = !codeWork || explicitLive;
+    if (input.disabled) { input.checked = false; }
+  }
+  if (form.querySelector('[name="deferValidation"]').checked ||
+      form.querySelector('[name="skipLiveTests"]').checked) {
+    form.querySelector('[name="prestartFrontend"]').checked = false;
+  }
+}
+
+for (const name of ["mode", "deferValidation", "skipLiveTests", "manualLocalhostTest", "runAllUiScenarios"]) {
+  for (const input of form.querySelectorAll(`[name="${name}"]`)) {
+    input.addEventListener("change", () => {
+      updateIntegrationOptions();
+      if (repositoryReadiness) { renderReadiness(repositoryReadiness); }
+    });
+  }
 }
 
 allowDevWritesInput.addEventListener("change", () => {
@@ -1198,10 +1226,14 @@ function formatDuration(milliseconds) {
 }
 
 function renderReadiness(readiness) {
+  repositoryReadiness = readiness;
   dashboardRepository = readiness.repository;
   document.querySelector("#workspace-title").textContent = readiness.profileName || "FixLab";
   document.querySelector("#workspace-repository").textContent = readiness.repository;
-  const ready = readiness.repositoryReady && readiness.profileReady;
+  const draftOnly = readiness.draftOnlyReady &&
+    form.querySelector('[name="mode"]:checked')?.value === "fix-and-validate" &&
+    form.querySelector('[name="deferValidation"]').checked;
+  const ready = readiness.repositoryReady && (readiness.profileReady || draftOnly);
   const apiOnly = readiness.playwrightMode === "api";
   const unitTestsOnly = readiness.unitTestsOnly === true;
   const noUi = apiOnly || unitTestsOnly;
@@ -2467,6 +2499,9 @@ form.addEventListener("submit", async (event) => {
         model: data.get("model") ?? "",
         mode: data.get("mode"),
         validationIntent: data.get("validationIntent") || undefined,
+        deferValidation: data.get("deferValidation") === "on",
+        skipLiveTests: data.get("skipLiveTests") === "on",
+        useDeployedBackend: data.get("useDeployedBackend") === "on",
         toolApprovalMode: allowAllTools ? "allow-all" : "ask",
         allowAllConfirmed: allowAllTools,
         routineFileAccess: data.get("routineFileAccess") === "on",
@@ -2479,8 +2514,10 @@ form.addEventListener("submit", async (event) => {
         testMutationMode: data.get("testMutationMode") ?? "",
         allowPostRequests: !allowPostRequestsInput.disabled && data.get("allowPostRequests") === "on",
         postWriteApprovalConfirmed: !allowPostRequestsInput.disabled && data.get("allowPostRequests") === "on",
-        allowDevWrites: !allowDevWritesInput.disabled && data.get("allowDevWrites") === "on",
-        devWriteApprovalConfirmed: !allowDevWritesInput.disabled && data.get("allowDevWrites") === "on",
+        allowDevWrites: !allowDevWritesInput.disabled && postCheckboxEnvironment === "dev" && data.get("allowDevWrites") === "on",
+        devWriteApprovalConfirmed: !allowDevWritesInput.disabled && postCheckboxEnvironment === "dev" && data.get("allowDevWrites") === "on",
+        allowPpeWrites: !allowDevWritesInput.disabled && postCheckboxEnvironment === "ppe" && data.get("allowDevWrites") === "on",
+        ppeWriteApprovalConfirmed: !allowDevWritesInput.disabled && postCheckboxEnvironment === "ppe" && data.get("allowDevWrites") === "on",
         prestartFrontend: data.get("prestartFrontend") === "on",
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",
@@ -2493,6 +2530,9 @@ form.addEventListener("submit", async (event) => {
     });
     requestInput.value = "";
     form.querySelector('[name="allowAllTools"]').checked = false;
+    for (const name of ["deferValidation", "skipLiveTests", "useDeployedBackend"]) {
+      form.querySelector(`[name="${name}"]`).checked = false;
+    }
     allowPostRequestsInput.checked = false;
     allowDevWritesInput.checked = false;
     updatePostRequestsOption();

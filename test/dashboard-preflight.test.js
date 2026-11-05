@@ -32,6 +32,18 @@ test("preflight passes when every required tool resolves", () => {
   assert.deepEqual(runJobPreflight({ profile, resolve: () => true }), []);
 });
 
+test("unverified drafts need no validation tools and deployed APIs need no local dotnet", () => {
+  const backendProfile = { ...profile, applications: {
+    ...profile.applications, backend: { command: "dotnet run" }
+  } };
+  assert.deepEqual(runJobPreflight({ profile: backendProfile, mode: "fix-and-validate",
+    deferValidation: true, resolve: () => false }), []);
+  assert.deepEqual(runJobPreflight({ profile: backendProfile, mode: "fix-and-validate",
+    useDeployedBackend: true, resolve: (tool) => tool === "npm" }), []);
+  assert.ok(runJobPreflight({ profile: backendProfile, mode: "validate-only",
+    deferValidation: true, resolve: () => false }).length > 0);
+});
+
 test("browser-only preflight checks only its runner and required authentication, not local-stack tools", () => {
   const resolved = [];
   const browserProfile = { ...profile,

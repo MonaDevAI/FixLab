@@ -218,12 +218,14 @@ function configuredProfile(root, original, values) {
       package: "@playwright/test", ...(!apiOnly ? { browser: "chromium" } : {}), ...original.browserAutomation,
       workingDirectory: browserDirectory, testCommand: values.browserCommand,
       testSynthesis: original.browserAutomation?.testSynthesis ?? {
-        enabled: true, defaultDataSource: "synthetic-intercepted", mutationMode: "intercepted", requireScenarioEvidence: true
+        enabled: true, defaultDataSource: "synthetic-intercepted", devReadOnly: Object.keys(original).length === 0,
+        ppeReadOnly: Object.keys(original).length === 0,
+        mutationMode: "intercepted", requireScenarioEvidence: true
       },
       authentication: { ...original.browserAutomation?.authentication,
         required: values.authenticationRequired, command: values.authenticationRequired ? values.authenticationCommand : "",
         statusPaths },
-      dataSafety: { policy: "Use synthetic data and intercept mutations; real writes require separate explicit authorization.",
+      dataSafety: { policy: "Use the reviewed test data source and intercept mutations; real writes require separate explicit authorization.",
         ...original.browserAutomation?.dataSafety, productionAllowed: false }
     },
     environments: environmentDefinitions

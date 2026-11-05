@@ -40,7 +40,8 @@ import {
   MAX_CACHE_ENTRIES,
   MAX_JOB_LOG_ENTRIES,
   openLocalUrl,
-  validateCopilotModel
+  validateCopilotModel,
+  validateLiveTestProfile
 } from "../dashboard/server.js";
 import { createExecutorLease } from "../dashboard/executor-lease.js";
 import { createSessionRegistry } from "../dashboard/sessions.js";
@@ -1672,6 +1673,120 @@ test("job admission rejects invalid default validation profiles without stopping
   }
 });
 
+test("new DEV/PPE portal defaults use real reads only in their environments and preserve existing safety contracts", () => {
+  const profile = validProfile();
+  profile.browserAutomation.testSynthesis.devReadOnly = true;
+  profile.browserAutomation.testSynthesis.ppeReadOnly = true;
+  const original = JSON.stringify(profile);
+  for (const environment of ["dev", "DEV", "development"]) {
+    const evidence = configuredTestSynthesis(profile, "", undefined, environment);
+    assert.equal(evidence.source, "non-production-read-only");
+    assert.equal(evidence.mutationMode, "intercepted");
+    assert.equal(evidence.devReadOnly, true);
+    assert.equal(configuredTestSynthesis(profile, "none", undefined, environment).mutationMode, "none");
+  }
+  for (const environment of ["ppe", "PPE"]) {
+    const evidence = configuredTestSynthesis(profile, "", undefined, environment);
+    assert.equal(evidence.source, "non-production-read-only");
+    assert.equal(evidence.mutationMode, "intercepted");
+    assert.equal(evidence.ppeReadOnly, true);
+    assert.equal(evidence.devReadOnly, undefined);
+  }
+  for (const environment of ["", "local", "sit", "uat", "production", "dev-production", "ppe-production"]) {
+    const evidence = configuredTestSynthesis(profile, "", undefined, environment);
+    assert.equal(evidence.source, "synthetic-intercepted", environment);
+    assert.equal(evidence.devReadOnly, undefined);
+  }
+  assert.equal(JSON.stringify(profile), original);
+  profile.browserAutomation.testSynthesis.devReadOnly = false;
+  assert.equal(configuredTestSynthesis(profile, "", undefined, "dev").source, "synthetic-intercepted");
+  delete profile.browserAutomation.testSynthesis.devReadOnly;
+  assert.equal(configuredTestSynthesis(profile, "", undefined, "dev").source, "synthetic-intercepted");
+  profile.browserAutomation.testSynthesis.devReadOnly = "yes";
+  assert.throws(() => configuredTestSynthesis(profile, "", undefined, "dev"), /devReadOnly must be a boolean/u);
+  assert.equal(validateLiveTestProfile(profile).ok, false);
+  profile.browserAutomation.testSynthesis.devReadOnly = true;
+  profile.browserAutomation.testSynthesis.ppeReadOnly = false;
+  assert.equal(configuredTestSynthesis(profile, "", undefined, "ppe").source, "synthetic-intercepted");
+  delete profile.browserAutomation.testSynthesis.ppeReadOnly;
+  assert.equal(configuredTestSynthesis(profile, "", undefined, "ppe").source, "synthetic-intercepted");
+  profile.browserAutomation.testSynthesis.ppeReadOnly = "yes";
+  assert.throws(() => configuredTestSynthesis(profile, "", undefined, "ppe"), /ppeReadOnly must be a boolean/u);
+  assert.equal(validateLiveTestProfile(profile).ok, false);
+  profile.browserAutomation.testSynthesis.ppeReadOnly = true;
+  profile.browserAutomation.testSynthesis.defaultDataSource = "local-fixture";
+  assert.equal(configuredTestSynthesis(profile, "", undefined, "dev").source, "local-fixture");
+  profile.browserAutomation.mode = "api";
+  profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
+  profile.browserAutomation.testSynthesis.mutationMode = "none";
+  assert.equal(configuredTestSynthesis(profile, "", undefined, "dev").devReadOnly, undefined);
+  profile.validation = { liveTestsRequired: false };
+  assert.equal(configuredTestSynthesis(profile, "", undefined, "dev").unitTestsOnly, true);
+});
+
+for (const environment of ["dev", "ppe"]) {
+for (const enabled of [true, false]) {
+  test(`${environment.toUpperCase()} portal default ${enabled} is environment-bound, recovered and cannot change on retry`, async () => {
+    const repository = createGitRepository();
+    const path = join(repository, ".github", "fixlab", "repository-profile.json");
+    const profile = validProfile();
+    profile.environments = [environment, "sit"];
+    const flag = environment === "dev" ? "devReadOnly" : "ppeReadOnly";
+    profile.browserAutomation.testSynthesis[flag] = enabled;
+    writeFileSync(path, JSON.stringify(profile));
+    const prompts = [];
+    const executor = ({ prompt }) => {
+      prompts.push(prompt);
+      return { completion: new Promise(() => {}), terminate() {} };
+    };
+    let running = await startDashboard(repository, executor);
+    try {
+      const create = (environment) => jsonRequest(running.url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: `Validate the ${environment} portal using the reviewed environment.`,
+          mode: "playwright-only", targetEnvironment: environment })
+      });
+      const started = await create(environment);
+      assert.equal(started.response.status, 202, started.body.error);
+      assert.equal(started.body.job.testEvidence.source, enabled ? "non-production-read-only" : "synthetic-intercepted");
+      assert.equal(started.body.job.testEvidence.mutationMode, "intercepted");
+      if (enabled) {
+        assert.match(prompts[0], /primary business-data source/u);
+        assert.match(prompts[0], /intercept every mutating request/u);
+      }
+      const queued = await create("sit");
+      assert.equal(queued.response.status, 202, JSON.stringify(queued.body));
+      const sit = queued.body.queue.find((job) => job.targetEnvironment === "sit");
+      assert.ok(sit, JSON.stringify(queued.body));
+      assert.equal(sit.testEvidence.source, "synthetic-intercepted");
+      await running.dashboard.close();
+      running = await startDashboard(repository, executor);
+      let recovered = (await jsonRequest(running.url, "/api/job")).body.job;
+      assert.equal(recovered.testEvidence[flag] === true, enabled);
+      const retry = () => jsonRequest(running.url, "/api/job/input", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "retry", details: "Continue the same reviewed read policy." })
+      });
+      assert.equal((await retry()).response.status, 202);
+      await running.dashboard.close();
+      profile.browserAutomation.testSynthesis[flag] = !enabled;
+      writeFileSync(path, JSON.stringify(profile));
+      running = await startDashboard(repository, executor);
+      const count = prompts.length;
+      const changed = await retry();
+      assert.equal(changed.response.status, 202);
+      recovered = (await jsonRequest(running.url, "/api/job")).body.job;
+      assert.match(recovered.error, new RegExp(`${environment.toUpperCase()} portal read policy changed.*newly reviewed job`, "u"));
+      assert.equal(prompts.length, count);
+      assert.equal(recovered.testEvidence[flag] === true, enabled);
+    } finally {
+      await running.dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
+}
+
 test("per-run interception keeps defaults unchanged and never grants live writes", () => {
   const profile = validProfile();
   profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-read-only";
@@ -1870,13 +1985,17 @@ test("POST checkbox write consent is origin-bound, job-scoped and never recovere
   }
 });
 
-test("DEV write checkbox requires fresh native loopback consent and loses broad approval on hold/recovery", async () => {
+for (const environment of ["dev", "ppe"]) {
+test(`${environment.toUpperCase()} write checkbox requires fresh native loopback consent and loses broad approval on hold/recovery`, async () => {
   const repository = createGitRepository();
+  const writeField = environment === "dev" ? "allowDevWrites" : "allowPpeWrites";
+  const confirmField = environment === "dev" ? "devWriteApprovalConfirmed" : "ppeWriteApprovalConfirmed";
+  const approvedField = `${environment}WriteApproved`;
   const profile = validProfile();
-  profile.environments = ["dev", "sit", "uat"];
-  profile.browserAutomation.dataSafety.devWrite = {
+  profile.environments = ["dev", "sit", "uat", "ppe"];
+  profile.browserAutomation.dataSafety[`${environment}Write`] = {
     scope: "api://example-service/access", sessionHelper: "dev-session.mjs",
-    origins: ["https://api.dev.example.test"]
+    origins: [`https://api.${environment}.example.test`]
   };
   writeFileSync(join(repository, "dev-session.mjs"),
     'export async function withApiToken(options, run) { await run("synthetic-value"); }\n');
@@ -1891,14 +2010,16 @@ test("DEV write checkbox requires fresh native loopback consent and loses broad 
     const post = (changes = {}, origin = running.url) => jsonRequest(running.url, "/api/jobs", {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) },
-      body: JSON.stringify({ request: "Synthetic approved broad DEV writes.", mode: "validate-only",
-        targetEnvironment: "dev", allowDevWrites: true, devWriteApprovalConfirmed: true, ...changes })
+      body: JSON.stringify({ request: `Synthetic approved broad ${environment} writes.`, mode: "validate-only",
+        targetEnvironment: environment, [writeField]: true, [confirmField]: true, ...changes })
     });
     for (const changes of [
-      { allowDevWrites: "yes" }, { allowDevWrites: null }, { allowDevWrites: false },
-      { devWriteApprovalConfirmed: "yes" }, { devWriteApprovalConfirmed: null },
-      { devWriteApprovalConfirmed: false }, { allowPostRequests: true },
+      { [writeField]: "yes" }, { [writeField]: null }, { [writeField]: false },
+      { [confirmField]: "yes" }, { [confirmField]: null },
+      { [confirmField]: false }, { allowPostRequests: true },
       { targetEnvironment: "sit" }, { targetEnvironment: "uat" },
+      { targetEnvironment: environment === "dev" ? "ppe" : "dev" },
+      { [environment === "dev" ? "allowPpeWrites" : "allowDevWrites"]: true },
       { testMutationMode: "none" }, { testMutationMode: "intercepted" }
     ]) {
       assert.equal((await post(changes)).response.status, 400, JSON.stringify(changes));
@@ -1908,31 +2029,32 @@ test("DEV write checkbox requires fresh native loopback consent and loses broad 
     }
     const created = await post();
     assert.equal(created.response.status, 202, created.body.error);
-    assert.equal(created.body.job.devWriteApproved, true);
+    assert.equal(created.body.job[approvedField], true);
+    assert.equal(created.body.job[environment === "dev" ? "ppeWriteApproved" : "devWriteApproved"], false);
     assert.equal(created.body.job.postWriteApproved, false);
-    assert.equal(launches[0].postWriteApproval.mode, "dev-origin");
+    assert.equal(launches[0].postWriteApproval.mode, `${environment}-origin`);
     assert.equal(launches[0].postWriteApproval.jobId, created.body.job.id);
     assert.equal(launches[0].allowPostRequests, true);
-    assert.match(launches[0].prompt, /fixlab_dev_write.*POST, PUT, PATCH and DELETE/u);
+    assert.match(launches[0].prompt, new RegExp(`fixlab_${environment}_write.*POST, PUT, PATCH and DELETE`, "u"));
     const queued = await post();
-    assert.equal(queued.body.queue[0].devWriteApproved, true);
+    assert.equal(queued.body.queue[0][approvedField], true);
     const held = await jsonRequest(running.url, "/api/jobs/hold", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId: queued.body.queue[0].id })
     });
-    assert.equal(held.body.held[0].devWriteApproved, false);
+    assert.equal(held.body.held[0][approvedField], false);
     const snapshot = readFileSync(join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json"), "utf8");
-    assert.doesNotMatch(snapshot, /"postWriteApproval":|"dev-origin"|"devWriteApproved":true/u);
+    assert.doesNotMatch(snapshot, /"postWriteApproval":|"(dev|ppe)-origin"|"(dev|ppe)WriteApproved":true/u);
     await running.dashboard.close();
     running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
-    assert.equal((await jsonRequest(running.url, "/api/status")).body.job.devWriteApproved, false);
+    assert.equal((await jsonRequest(running.url, "/api/status")).body.job[approvedField], false);
     const resumed = await jsonRequest(running.url, "/api/job/input", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "retry", details: "Resume without broad DEV approval." })
     });
     assert.equal(resumed.response.status, 202, resumed.body.error);
     assert.equal(launches.at(-1).postWriteApproval, undefined);
-    assert.doesNotMatch(launches.at(-1).prompt, /The user explicitly authorized all DEV API writes/u);
+    assert.doesNotMatch(launches.at(-1).prompt, /The user explicitly authorized all (DEV|PPE) API writes/u);
     await running.dashboard.close();
     running = await startDashboard(repository, executor);
     assert.equal((await post()).response.status, 400, "Agency cannot gain this native capability");
@@ -1941,6 +2063,7 @@ test("DEV write checkbox requires fresh native loopback consent and loses broad 
     rmSync(repository, { recursive: true, force: true });
   }
 });
+}
 
 test("reviewed file trust is exact-job bound, persists on resume/restart and is never inherited by new jobs", async () => {
   const repository = createGitRepository();
@@ -3128,7 +3251,7 @@ test("dashboard reports readiness and serves only known static assets", async ()
   }
 });
 
-test("dashboard rejects a job when preflight finds a missing tool", async () => {
+test("dashboard rejects validation-only work when preflight finds a missing tool", async () => {
   const repository = createRepository();
   const { dashboard, url } = await startDashboard(
     repository,
@@ -3148,12 +3271,37 @@ test("dashboard rejects a job when preflight finds a missing tool", async () => 
       body: JSON.stringify({
         request: "Fix the defect.",
         requestType: "bug-fix",
-        mode: "fix-and-validate"
+        mode: "validate-only"
       })
     });
     assert.equal(result.response.status, 400);
     assert.match(result.body.error, /Preflight failed: npm on PATH/);
     assert.equal(result.body.preflight.length, 1);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("code jobs receive missing-tool diagnostics for autonomous repair instead of a startup rejection", async () => {
+  const repository = createRepository();
+  let prompt;
+  let finish;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    prompt = input.prompt;
+    return { completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); } };
+  }, undefined, { preflight: () => [{ check: "npm on PATH", detail: "npm was not found" }] });
+  try {
+    const result = await jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Repair the focused code path.", mode: "fix-and-validate" })
+    });
+    assert.equal(result.response.status, 202, result.body.error);
+    assert.deepEqual(result.body.job.setupRecovery, ["npm on PATH: npm was not found"]);
+    assert.match(prompt, /Autonomous recovery: diagnose and repair recoverable/);
+    assert.match(prompt, /npm on PATH: npm was not found/);
+    assert.equal(result.body.job.validation.fullValidationPassed, false);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -7298,6 +7446,81 @@ test("dashboard gate execution rejects forged readiness and stale final-source e
     assert.equal(status.body.job.status, "blocked");
     assert.equal(status.body.job.validation.gates[0].status, "stale");
     assert.equal(status.body.job.pullRequestReadiness.ready, false);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("unverified drafts bypass neither validation evidence nor merge policy and need no live authentication or local tools", async () => {
+  const repository = createGitRepository();
+  git(repository, ["checkout", "-b", "users/fixlab-test/unverified"]);
+  const profile = validProfile({ environments: ["dev"],
+    workflow: { mode: "strict", publication: "ready" }, validation: { gates: [
+      { id: "local-tests", stage: "review", required: true, command: process.execPath,
+        args: ["-e", "process.exit(7)"], workingDirectory: ".", timeoutSeconds: 30 },
+      { id: "api-integration", stage: "live-test", required: true, command: process.execPath,
+        args: ["-e", "process.exit(41)"], workingDirectory: ".", timeoutSeconds: 30 }
+    ] } });
+  profile.browserAutomation.authentication = { required: true, command: "npm run sso",
+    statusPaths: ["missing-sign-in-state"] };
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  let emit;
+  let finish;
+  let prompt;
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    emit = input.onOutput;
+    prompt = input.prompt;
+    return { completion: new Promise((resolve) => { finish = resolve; }),
+      terminate() { finish({ code: 130 }); } };
+  }, undefined, { preflight: (input) => runJobPreflight({ ...input, resolve: () => false }) });
+  try {
+    const post = (body) => jsonRequest(url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({
+        request: "Create a reviewed unverified draft.", mode: "fix-and-validate",
+        targetEnvironment: "dev", ...body
+      })
+    });
+    for (const fields of [
+      { deferValidation: "true" }, { skipLiveTests: "true" }, { useDeployedBackend: "true" },
+      { deferValidation: true, mode: "validate-only" },
+      { deferValidation: true, manualLocalhostTest: true },
+      { deferValidation: true, holdForManualLiveTest: true },
+      { deferValidation: true, runAllUiScenarios: true }
+    ]) {
+      assert.equal((await post(fields)).response.status, 400);
+    }
+    const started = await post({ deferValidation: true, useDeployedBackend: true, prestartFrontend: true });
+    assert.equal(started.response.status, 202, started.body.error);
+    assert.equal(started.body.job.workflow.publication, "draft");
+    assert.equal(started.body.job.deferValidation, true);
+    assert.equal(started.body.job.skipLiveTests, true);
+    assert.equal(started.body.job.useDeployedBackend, true);
+    assert.match(prompt, /Explicit unverified draft/);
+    assert.match(prompt, /useDeployedBackend=true/);
+    for (const stage of ["intake", "diagnosis", "fix", "review"]) {
+      emit("stdout", `FIXLAB_STAGE|${stage}|passed|Code and effective diff reviewed\n`);
+    }
+    for (const stage of ["reproduce", "local-stack", "live-test"]) {
+      emit("stdout", `FIXLAB_STAGE|${stage}|skipped|User deferred local and live checks\n`);
+    }
+    const context = await jsonRequest(url, "/api/job/publication-context", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: started.body.job.id, repository, verify: true })
+    });
+    assert.equal(context.body.ready, true, context.body.message);
+    assert.equal(context.body.publication, "draft");
+    emit("stdout", "FIXLAB_STAGE|pr|passed|Verified authorized draft; local and live checks not run\n");
+    finish({ code: 0 });
+    await new Promise((resolve) => setImmediate(resolve));
+    const job = (await jsonRequest(url, "/api/job")).body.job;
+    assert.equal(job.status, "passed", job.error);
+    assert.equal(job.validation.fullValidationPassed, false);
+    assert.equal(job.validation.status, "pending");
+    assert.ok(job.validation.gates.every((gate) => gate.status === "pending"));
+    assert.equal(job.stages["live-test"].status, "skipped");
+    assert.equal(job.pullRequestReadiness.status, "created");
+    assert.match(job.pullRequestReadiness.message, /Unverified draft/);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });

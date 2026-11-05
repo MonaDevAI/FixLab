@@ -26,7 +26,7 @@ repackage the rejected operation to evade review. **Deny and request safe recove
 reuses existing reviewed tests/helpers in the same blocked stage; preserve
 completed evidence and failures, and stop if a safe prerequisite is missing.
 
-For authorized DEV/SIT/UAT data-changing POST actions, discover
+For authorized DEV/PPE/SIT/UAT data-changing POST actions, discover
 `fixlab_nonproduction_post` in a native Copilot dashboard job. The **Allow POST
 writes** checkbox is off by default. Explicit selection authorizes configured
 writes for this job without repeat confirmation. Unchecked or recovered jobs
@@ -35,11 +35,50 @@ payload. Allow all and batch approval never apply. Job approval binds the job,
 environment and profile/helper revision; it expires on executor end, stop, hold
 or restart and is never recovered or inherited. Configuration changes require a
 newly reviewed job; unsuccessful or ambiguous attempts stop job-scoped approval.
-`dataSafety.post.dev`, `.sit` and `.uat` hold separate
+`dataSafety.post.dev`, `.ppe`, `.sit` and `.uat` hold separate
 exact endpoint/test-record configuration and existing `withApiToken` helpers.
 Legacy DEV `fixlab_dev_post` and `dataSafety.devPost` remain supported.
-Native Copilot DEV-only: separate consent enables fixlab_dev_write
-POST/PUT/PATCH/DELETE on dataSafety.devWrite HTTPS origins, any record; same job guards.
+Native Copilot DEV/PPE: separate consent enables
+fixlab_dev_write/fixlab_ppe_write POST/PUT/PATCH/DELETE on
+dataSafety.devWrite/ppeWrite HTTPS origins, any record; job guards.
+
+Explicit unverified draft: when deferValidation is true, create or update the
+authorized DRAFT PR after implementing and reviewing the nonempty diff,
+without running local checks or live tests. Skip reproduction execution,
+application startup and live-test stages with the reason user deferred
+validation; leave configured gates not run, never passed. Do not install test
+dependencies, start .NET/Key Vault, authenticate or access live data merely to
+create the PR. Verify provider isDraft=true. Disclose all not-run, failed and
+pending checks in the PR and dashboard. This permits draft creation only,
+never ready-for-review, merge, deployment, waived organization policy or
+fabricated evidence. Required authorization, authentication for publication,
+diff review and data-safety controls remain.
+
+Per-job integration choices: useDeployedBackend selects the existing approved
+DEV/PPE/SIT/UAT API for the selected environment, not a local .NET backend.
+Resolve targets from reviewed repository configuration; do not start local
+.NET/Key Vault, invent URLs, change authentication guards or broaden API
+access. Preserve genuine SSO and existing read/write controls. Record the
+deployed target/version; it cannot validate unpublished backend code.
+skipLiveTests defers application startup and browser/API/live-data checks for
+draft code work, not local checks unless deferValidation is also true. Mark
+deferred stages skipped and integration unverified. Local API testing is
+optional for draft publication; if requested but unavailable, report the exact
+startup/authentication prerequisite without blocking independent code work or
+an otherwise authorized draft. Explicit validation-only/manual/all-UI and
+production contracts remain authoritative.
+
+Autonomous recovery: diagnose and repair recoverable missing dependencies,
+setup, syntax, build and test errors within the authorized task instead of
+stopping at the first failure. Reuse repository helpers and existing tools;
+explain why a missing tool/package is needed before installing it. Verify each
+distinct repair with the smallest failed check and retain original
+diagnostics. Never retry an unchanged failure, rewrite credentials, bypass
+guards or fix unrelated baseline defects. Continue independent work and the
+authorized unverified draft path when integration is unavailable. Ask only for
+a genuine missing permission, human sign-in or material decision. Respect
+read-only modes and never modify product code during validation-only work;
+report actual failed, skipped and blocked checks.
 No credentials or response body enter
 the result. Report `non-production-approved`/`approved-write` evidence; HTTP success
 alone does not prove a scenario passed. No automatic retries or redirects: an
@@ -48,21 +87,36 @@ environments, explicit read-only/intercepted selections, API-only read-only cont
 remain unchanged. If the tool or its prerequisites are unavailable, block that
 action; never substitute a shell/browser POST for a write or relax the profile.
 
-Verified read-only POST searches: for browser live checks permitting real backend
-reads, require a reviewed query contract and implementation proving no
-data/workflow mutation. Match the exact approved environment, origin and path
-through the existing browser/auth guard, including redirects and the supported
-query payload. Route names and the job POST checkbox are not approval. Run
-permitted queries through existing authenticated helpers and use genuine returned
-records in focused assertions, even when writes are intercepted. A missing query
-allowlist entry is a policy blocker, not backend unavailability: inspect bounded
-controller/service evidence and request a narrowly scoped configuration review.
-Do not silently substitute synthetic data, disable guards, add wildcard/global
-POST grants or bypass with another client. Read-only jobs must not edit
-configuration; approved changes require a fresh reviewed context/job. Keep Save,
-Submit, Approve and autosave behind existing write controls. Do not override
-synthetic-only, API-only, unit-only or production policy. Authentication/configuration
-reads and synthetic UI evidence do not prove business-data integration.
+Verified read-only POST searches: approved DEV/PPE browser reads cover all
+verified read-only queries, not just one feature. Installation/onboarding
+configures guards from query contracts and implementation proving no
+business/workflow mutation. Match the exact approved environment, origin and
+path and supported payload, including redirects. Include GET/HEAD/OPTIONS and
+verified POST searches; method or route names alone prove nothing. Use
+existing authenticated helpers and genuine returned records, even with
+intercepted writes. Missing scope is a policy blocker, not backend
+unavailability: during authorized setup, repair the adapter for the approved
+DEV/PPE read scope and test its guards without repeated per-query approval.
+Otherwise request scoped review. Do not silently substitute synthetic data,
+remove guards or grant writes. Read-only jobs must not edit configuration;
+changed helpers require a fresh reviewed job. Keep Save, Submit, Approve and
+autosave behind write controls; identity-only proof stays query-disabled.
+Never override synthetic-only, API-only, unit-only or production policy;
+synthetic evidence is not live integration.
+
+New installation profiles set `browserAutomation.testSynthesis.devReadOnly:
+true` and `ppeReadOnly: true`. Selecting DEV/development or PPE resolves the
+synthetic/intercepted setting to real read-only backend data while
+intercepting mutations; other environments retain `defaultDataSource`. During
+installation/onboarding, configure repository browser/auth guards for all
+verified read-only queries on the reviewed DEV/PPE HTTPS API origins, not only
+one feature. Include GET/HEAD/OPTIONS and read-only POST queries verified from
+their contracts, implementation and payloads; do not infer safety from method
+or route names. Keep identity-only authentication/proof query-disabled and
+business writes separately authorized. Existing synthetic-only profiles and
+active jobs are not silently upgraded; policy changes require a fresh reviewed
+job. API-only, unit-only, production and human authentication controls remain
+unchanged.
 
 Draft integration deferral: for fix-and-validate jobs with saved draft publication
 only, continue authorized frontend or backend code work and local checks when live

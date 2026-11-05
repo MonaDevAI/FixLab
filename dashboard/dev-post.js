@@ -6,7 +6,8 @@ import { safeRuntimeText } from "./runtime-requests.js";
 import { SETUP_PROFILE_PATH, setupPath } from "./repository-setup.js";
 
 function configurationAt(repository, environment = "dev", jobConsent = false, originWrites = false) {
-  const operation = originWrites ? "DEV write" : "POST";
+  const label = environment.toUpperCase();
+  const operation = originWrites ? `${label} write` : "POST";
   const path = setupPath(repository, SETUP_PROFILE_PATH);
   const info = lstatSync(path);
   if (!info.isFile() || info.nlink !== 1 || info.size > 65536) {
@@ -18,7 +19,7 @@ function configurationAt(repository, environment = "dev", jobConsent = false, or
     throw new Error(`${operation} requires a valid JSON repository profile.`);
   }
   const safety = profile.browserAutomation?.dataSafety;
-  const configuration = originWrites ? safety?.devWrite : safety?.post?.[environment] ??
+  const configuration = originWrites ? safety?.[`${environment}Write`] : safety?.post?.[environment] ??
     (environment === "dev" ? safety?.devPost : undefined);
   if (!configuration) { return null; }
   const environments = Array.isArray(profile.environments)
@@ -40,18 +41,21 @@ function configurationAt(repository, environment = "dev", jobConsent = false, or
   }
   const scope = apiScope(configuration.scope);
   if (originWrites) {
-    if (environment !== "dev" || !jobConsent ||
+    if (!["dev", "ppe"].includes(environment) || !jobConsent ||
         !Array.isArray(configuration.origins) || !configuration.origins.length ||
         configuration.origins.length > 16) {
-      throw new Error("DEV writes require 1-16 explicitly reviewed DEV HTTPS origins.");
+      throw new Error(`${label} writes require 1-16 explicitly reviewed ${label} HTTPS origins.`);
     }
     for (const origin of configuration.origins) {
       const url = new URL(origin);
+      const labels = url.hostname.toLowerCase().split(/[.-]/u);
+      const expected = environment === "dev" ? ["dev", "development"] : ["ppe"];
       if (url.protocol !== "https:" || url.origin !== origin || url.username || url.password ||
           !safeRuntimeText(origin, 1000) || url.hostname.includes("*") ||
-          !/(?:^|[.-])(?:dev|development)(?:[.-]|$)/iu.test(url.hostname) ||
-          /(?:^|[.-])(?:sit|uat|stage|staging|prod|prd|production)(?:[.-]|$)/iu.test(url.hostname)) {
-        throw new Error("DEV write origins must be exact credential-free HTTPS origins with a DEV hostname, not SIT/UAT/production.");
+          !expected.some((value) => labels.includes(value)) ||
+          ["dev", "development", "ppe", "sit", "uat", "stage", "staging", "prod", "prd", "production"]
+            .some((value) => labels.includes(value) && !expected.includes(value))) {
+        throw new Error(`${label} write origins must be exact credential-free HTTPS origins with a ${label} hostname, not another environment.`);
       }
     }
   } else {
@@ -77,23 +81,36 @@ function configurationAt(repository, environment = "dev", jobConsent = false, or
 
 export function createPostWriteApproval(repository, targetEnvironment, jobId) {
   const environment = typeof targetEnvironment === "string" ? targetEnvironment.toLowerCase() : "";
-  if (!["dev", "sit", "uat"].includes(environment) ||
+  if (!["dev", "sit", "uat", "ppe"].includes(environment) ||
       typeof jobId !== "string" || !/^[a-f0-9-]{36}$/u.test(jobId)) {
-    throw new Error("Job-scoped POST approval requires an exact job and DEV/SIT/UAT environment.");
+    throw new Error("Job-scoped POST approval requires an exact job and DEV/SIT/UAT/PPE environment.");
   }
   return { jobId, environment, revision: configurationAt(repository, environment, true)?.revision ?? null };
 }
 
-export function createDevWriteApproval(repository, targetEnvironment, jobId) {
+function createOriginWriteApproval(repository, targetEnvironment, jobId, expectedEnvironment) {
   const environment = typeof targetEnvironment === "string" ? targetEnvironment.toLowerCase() : "";
-  if (environment !== "dev" || typeof jobId !== "string" || !/^[a-f0-9-]{36}$/u.test(jobId)) {
-    throw new Error("Broad DEV write approval requires an exact job and explicitly selected DEV environment.");
+  const label = expectedEnvironment.toUpperCase();
+  if (environment !== expectedEnvironment || typeof jobId !== "string" || !/^[a-f0-9-]{36}$/u.test(jobId)) {
+    throw new Error(`Broad ${label} write approval requires an exact job and explicitly selected ${label} environment.`);
   }
   const plan = configurationAt(repository, environment, true, true);
   if (!plan) {
-    throw new Error("Configure dataSafety.devWrite with reviewed DEV origins and an existing authentication helper before approval.");
+    throw new Error(`Configure dataSafety.${environment}Write with reviewed ${label} origins and an existing authentication helper before approval.`);
   }
-  return { jobId, environment, revision: plan.revision, mode: "dev-origin" };
+  return { jobId, environment, revision: plan.revision, mode: `${environment}-origin` };
+}
+
+export function createDevWriteApproval(repository, targetEnvironment, jobId) {
+  return createOriginWriteApproval(repository, targetEnvironment, jobId, "dev");
+}
+
+export function createPpeWriteApproval(repository, targetEnvironment, jobId) {
+  return createOriginWriteApproval(repository, targetEnvironment, jobId, "ppe");
+}
+
+export function isOriginWriteApproval(approval) {
+  return approval?.mode === "dev-origin" || approval?.mode === "ppe-origin";
 }
 
 export function createNonProductionPostTool({ repository, targetEnvironment, mutationMode,
@@ -105,14 +122,16 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
   const environment = typeof targetEnvironment === "string" ? targetEnvironment.toLowerCase() : "";
   const jobConsent = typeof allowPostRequests === "boolean";
   const jobScoped = postWriteApproval !== undefined && postWriteApproval !== null;
-  const originWrites = postWriteApproval?.mode === "dev-origin";
-  const operation = originWrites ? "DEV write" : "POST";
+  const originWrites = isOriginWriteApproval(postWriteApproval);
+  const label = environment.toUpperCase();
+  const operation = originWrites ? `${label} write` : "POST";
   if (jobScoped &&
       (typeof postWriteApproval !== "object" || Array.isArray(postWriteApproval) ||
         allowPostRequests !== true || postWriteApproval.jobId !== jobId ||
         postWriteApproval.environment !== environment ||
         (postWriteApproval.mode !== undefined && !originWrites) ||
-        (originWrites && (environment !== "dev" || postWriteApproval.revision === null)) ||
+        (originWrites && (!["dev", "ppe"].includes(environment) ||
+          postWriteApproval.mode !== `${environment}-origin` || postWriteApproval.revision === null)) ||
         typeof jobId !== "string" || !/^[a-f0-9-]{36}$/u.test(jobId) ||
         (postWriteApproval.revision !== null &&
           !/^[a-f0-9]{64}$/u.test(postWriteApproval.revision)))) {
@@ -120,7 +139,7 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
   }
   const approvedRevision = postWriteApproval?.revision;
   let approvalStopped = false;
-  if (!["dev", "sit", "uat"].includes(environment) || selectedMutationMode ||
+  if (!["dev", "sit", "uat", "ppe"].includes(environment) || selectedMutationMode ||
       (!jobConsent && (environment !== "dev" || mutationMode !== "approved-write"))) {
     return null;
   }
@@ -131,12 +150,11 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
     }
   };
   if (!jobConsent && !planAt()) { return null; }
-  const label = environment.toUpperCase();
   return {
-    name: originWrites ? "fixlab_dev_write" :
+    name: originWrites ? `fixlab_${environment}_write` :
       !jobConsent && environment === "dev" ? "fixlab_dev_post" : "fixlab_nonproduction_post",
     description: originWrites
-      ? "Send a POST, PUT, PATCH or DELETE to any path/record on the configured DEV HTTPS origins, using existing authentication. The user explicitly approved broad DEV writes for this job; no endpoint/test-record list or repeat confirmation is needed. Approval is job/profile/helper-bound and expires with execution. No other environments, redirects, retries, credentials or response bodies. A real write is not a passed scenario assertion."
+      ? `Send a POST, PUT, PATCH or DELETE to any path/record on the configured ${label} HTTPS origins, using existing authentication. The user explicitly approved broad ${label} writes for this job; no endpoint/test-record list or repeat confirmation is needed. Approval is job/profile/helper-bound and expires with execution. No other environments, redirects, retries, credentials or response bodies. A real write is not a passed scenario assertion.`
       : `Send one ${label} POST using its configured endpoint/test-record allowlist and existing authentication helper. ${jobScoped ? "The user approved this job's configured writes through the POST checkbox; no repeat confirmation is needed. Approval is bound to this job and the reviewed profile/helper revision." : "The complete URL and JSON payload require individual human confirmation, even with Allow all."} Missing setup blocks the action, not unrelated work. No redirects, retries, credentials or response bodies. This is a real write, not intercepted evidence.`,
     skipPermission: true,
     parameters: {
@@ -164,7 +182,7 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
       if (!plan) {
         approvalStopped = jobScoped;
         if (originWrites) {
-          throw new Error("DEV writes are not configured. Configure dataSafety.devWrite and start a newly reviewed job. No request was sent.");
+          throw new Error(`${label} writes are not configured. Configure dataSafety.${environment}Write and start a newly reviewed job. No request was sent.`);
         }
         throw new Error(`${label} POST is not configured. Configure dataSafety.post.${environment} with approved endpoints, test records and an existing API session helper. No request was sent.`);
       }
@@ -187,11 +205,11 @@ export function createNonProductionPostTool({ repository, targetEnvironment, mut
       const body = payload === undefined ? undefined : JSON.parse(payload);
       let url;
       if (originWrites) {
-        if (!safeRuntimeText(args.url, 1000)) { throw new Error("DEV write URL is sensitive or invalid."); }
+        if (!safeRuntimeText(args.url, 1000)) { throw new Error(`${label} write URL is sensitive or invalid.`); }
         const target = new URL(args.url);
         if (target.protocol !== "https:" || target.username || target.password || target.hash ||
             target.href !== args.url || !plan.configuration.origins.includes(target.origin)) {
-          throw new Error("DEV write destination is outside the explicitly approved DEV origins.");
+          throw new Error(`${label} write destination is outside the explicitly approved ${label} origins.`);
         }
         url = target.href;
       } else {

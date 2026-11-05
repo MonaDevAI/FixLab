@@ -10,21 +10,22 @@ Playwright journey on the developer or registered-runner machine. Capture
 sanitized screenshots, API assertions, logs, cleanup, and the exact observable
 result.
 
-Verified read-only POST searches: for browser live checks permitting real backend
-reads, require a reviewed query contract and implementation proving no
-data/workflow mutation. Match the exact approved environment, origin and path
-through the existing browser/auth guard, including redirects and the supported
-query payload. Route names and the job POST checkbox are not approval. Run
-permitted queries through existing authenticated helpers and use genuine returned
-records in focused assertions, even when writes are intercepted. A missing query
-allowlist entry is a policy blocker, not backend unavailability: inspect bounded
-controller/service evidence and request a narrowly scoped configuration review.
-Do not silently substitute synthetic data, disable guards, add wildcard/global
-POST grants or bypass with another client. Read-only jobs must not edit
-configuration; approved changes require a fresh reviewed context/job. Keep Save,
-Submit, Approve and autosave behind existing write controls. Do not override
-synthetic-only, API-only, unit-only or production policy. Authentication/configuration
-reads and synthetic UI evidence do not prove business-data integration.
+Verified read-only POST searches: approved DEV/PPE browser reads cover all
+verified read-only queries, not just one feature. Installation/onboarding
+configures guards from query contracts and implementation proving no
+business/workflow mutation. Match the exact approved environment, origin and
+path and supported payload, including redirects. Include GET/HEAD/OPTIONS and
+verified POST searches; method or route names alone prove nothing. Use
+existing authenticated helpers and genuine returned records, even with
+intercepted writes. Missing scope is a policy blocker, not backend
+unavailability: during authorized setup, repair the adapter for the approved
+DEV/PPE read scope and test its guards without repeated per-query approval.
+Otherwise request scoped review. Do not silently substitute synthetic data,
+remove guards or grant writes. Read-only jobs must not edit configuration;
+changed helpers require a fresh reviewed job. Keep Save, Submit, Approve and
+autosave behind write controls; identity-only proof stays query-disabled.
+Never override synthetic-only, API-only, unit-only or production policy;
+synthetic evidence is not live integration.
 
 For `browserAutomation.mode: "api"`, use `APIRequestContext` without a frontend,
 browser binary, screenshot or video. Enforce the profile's approved origins,
