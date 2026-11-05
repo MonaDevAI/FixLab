@@ -56,6 +56,15 @@ Recovery uses existing repository commands, verifies each distinct repair and
 continues independent work. Validation-only jobs retain prerequisite enforcement;
 human sign-in and actual permission requirements are never bypassed.
 
+Validation-only and Playwright-only jobs may create focused, job-owned transient
+journeys in the configured test directory and retain runner evidence in configured
+artifact directories. Existing tests, product source, repository configuration,
+authentication helpers and browser state remain unchanged. The journey is kept
+for same-job retries while validation is blocked and cleaned up after owned
+execution finishes. This exception is included in continuation prompts for older
+jobs as well as new jobs; it does not grant runtime permissions, reverse prior
+denials or authorize business-data writes.
+
 FixLab is distributed and versioned as its own product. It supports Agency
 Copilot as the default compatibility runtime and GitHub Copilot CLI as an
 optional direct runtime. Both provide agent execution, authentication, plugin

@@ -3977,6 +3977,18 @@ test("dashboard parses complete stage markers and passes a job", async () => {
   }
 });
 
+test("read-only job prompts permit new transient journeys without authorizing product edits", () => {
+  for (const mode of ["validate-only", "playwright-only"]) {
+    const prompt = buildJobPrompt({ request: "Validate a missing browser scenario.", mode });
+    assert.match(prompt, /Do not edit files other than job-owned transient Playwright journeys and runner evidence/u);
+    assert.doesNotMatch(prompt, /Do not edit files, create commits/u);
+    assert.match(prompt, /Reuse an equivalent existing journey first/u);
+    assert.match(prompt, /configured test directory/u);
+    assert.match(prompt, /Never overwrite pre-existing tests or change configuration, authentication helpers, credentials or browser state/u);
+    assert.match(prompt, /this exception grants no runtime access or business writes/u);
+  }
+});
+
 test("dashboard fails a passed live test without required scenario evidence", async () => {
   const repository = createRepository();
   const executor = ({ onOutput }) => {
@@ -4140,6 +4152,8 @@ test("blocked job accepts user input and resumes the same Agency session", async
     assert.equal(calls[1].sessionId, calls[0].sessionId);
     assert.match(calls[1].prompt, /Authentication is complete/);
     assert.match(calls[1].prompt, /Resume the existing FixLab dashboard session/);
+    assert.match(calls[1].prompt, /it does not prohibit job-owned transient Playwright journeys/u);
+    assert.match(calls[1].prompt, /Normal runtime permissions, prior denials/u);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -8486,6 +8500,8 @@ test("browser-only resume retains scope, scripts and environment instead of PR l
     assert.match(calls[1].prompt, /exactly 50 synthetic rows; no writes/);
     assert.match(calls[1].prompt, /Do not perform implementation, review, commits, push, pull-request creation/);
     assert.match(calls[1].prompt, /Keep the same-job test script/);
+    assert.match(calls[1].prompt, /it does not prohibit job-owned transient Playwright journeys/u);
+    assert.match(calls[1].prompt, /Normal runtime permissions, prior denials/u);
     assert.doesNotMatch(calls[1].prompt, /Reuse an existing pull request|Reuse the completed diagnosis/);
   } finally {
     await dashboard.close();

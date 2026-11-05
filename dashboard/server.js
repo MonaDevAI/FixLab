@@ -41,7 +41,7 @@ import { canonicalExecutionRepository, createExecutorLease } from "./executor-le
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
-import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, allowsUnverifiedDraft, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, allowsUnverifiedDraft, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, TRANSIENT_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
 import { createDevWriteApproval, createPpeWriteApproval, createPostWriteApproval, isOriginWriteApproval } from "./dev-post.js";
@@ -1267,7 +1267,8 @@ ${!apiOnly && !testEvidence.unitTestsOnly ? READ_ONLY_POST_GUIDANCE : ""}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : EXISTING_APPLICATION_GUIDANCE}
 ${apiOnly && useDeployedBackend ? "useDeployedBackend=true: use the configured deployed API; never start local .NET/Key Vault." : ""}
 - Skip source diagnosis, separate reproduction, implementation, diff review and unrelated non-browser gates. The diagnosis, reproduce, fix, review, and pr stages must be explicitly skipped unless their own required prerequisite fails.
-- Do not edit files other than an authorized transient browser-validation artifact. Do not commit, push, create or update pull requests, or change repository configuration.
+- Do not edit files other than job-owned transient Playwright journeys and runner evidence. Do not commit, push, create or update pull requests, or change repository configuration.
+${TRANSIENT_PLAYWRIGHT_GUIDANCE}
 - Use the request to select expected behavior and the focused Playwright journey. Read the profile, browser configuration, fixture and nearest test in one bounded batch; prefer an existing journey or retained script. Inspect implementation only for a concrete missing selector or prerequisite.
 - Generate one parameterized deterministic Playwright script for repeated rows/scenarios; use the repository runner, not per-row/field model round-trips.
 - Keep the same-job script and compact results through retries/human waits; reuse unchanged selectors/helpers and change only failing steps. Never delete running artifacts. Remove transient source only after validation and continuations finish; permanent coverage needs separate authorization.
@@ -1345,7 +1346,8 @@ ${environmentGuidance}
 ${videoGuidance}
 ${manualLocalhostGuidance}
 ${branchNamingGuidance}
-- ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
+- ${readOnly ? "Do not edit files other than job-owned transient Playwright journeys and runner evidence. Do not create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
+${readOnly ? TRANSIENT_PLAYWRIGHT_GUIDANCE : ""}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
 - Saved delivery workflow: ${unverifiedDraft ? "explicit unverified draft; local and live checks are deferred, not passed" : efficient ? `efficient; focused checks before the ${workflow.publication === "ready" ? "ready-for-review" : "draft"} PR, broader checks only by saved preference or explicit selection` : "strict; all applicable configured gates remain required for full validation and ready publication"}. This recorded job policy takes precedence over the product default.
 - Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For "test this PR", verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.
@@ -3016,6 +3018,8 @@ function holdJob(job) {
 }
 
 function buildResumePrompt(job, { action, details }) {
+  const transientGuidance = ["validate-only", "playwright-only"].includes(job.mode)
+    ? TRANSIENT_PLAYWRIGHT_GUIDANCE : "";
   if (job.mode === "playwright-only") {
     return `${job.initialPrompt}
 
@@ -3023,6 +3027,7 @@ Resume the existing FixLab dashboard session for job ${job.id}.
 User action: ${action}
 User input:
 ${details}
+${transientGuidance}
 
 Browser-only continuation:
 - The original browser-only mode, environment, interception selection and data-safety rules above remain authoritative over generic retry wording.
@@ -3044,6 +3049,7 @@ User action: ${action}
 User input:
 ${details}
 ${manualResult}
+${transientGuidance}
 
 Resume requirements:
 - Reuse the completed diagnosis, current worktree, validation evidence, branch, and pull request from this session.

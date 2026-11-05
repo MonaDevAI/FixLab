@@ -335,6 +335,18 @@ unless the user explicitly requests permanent browser-test coverage or
 repository instructions require that exact persisted test. Do not modify
 unrelated or stale browser journeys merely to make a broad suite pass.
 
+In validate-only and playwright-only modes, read-only protects product source,
+existing tests, repository configuration and business data; it does not prohibit
+job-owned transient Playwright journeys. Reuse an equivalent existing journey
+first; otherwise create a new focused journey in the configured test directory.
+Use existing reviewed fixtures and authentication helpers unchanged. Update or
+remove only this job's generated journey; retain runner evidence in configured
+artifact directories. Keep the journey for same-job retries while validation is
+blocked; clean up only after owned execution finishes. Never overwrite
+pre-existing tests or change configuration, credentials or browser state.
+Normal runtime permissions, prior denials, managed policy, human sign-in and
+data-safety controls still apply; this grants no runtime access or business writes.
+
 When the repository profile selects `non-production-read-only` test data and
 the user selects any profile-approved non-production environment, use that
 backend and API as the primary business-data source. Keep access read-only and
