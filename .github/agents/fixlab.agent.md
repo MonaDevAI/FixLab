@@ -58,6 +58,23 @@ Submit, Approve and autosave behind existing write controls. Do not override
 synthetic-only, API-only, unit-only or production policy. Authentication/configuration
 reads and synthetic UI evidence do not prove business-data integration.
 
+Draft integration deferral: for fix-and-validate jobs with saved draft publication
+only, continue authorized frontend or backend code work and local checks when live
+integration is unavailable. A configured backend does not require local .NET/Key Vault
+startup for a frontend-only draft. Verify the complete diff; start only applications
+needed by the actual checks. Existing approved DEV APIs may support authenticated
+reads without a local backend; deployed APIs never prove unpublished backend changes.
+Identity-only SSO does not authorize business reads: preserve its guards and require
+separately reviewed API access. After focused regression, required local gates and
+diff review pass, publish only the authorized DRAFT PR. Disclose every unavailable
+startup, authentication, browser/API check and unverified integration. Mark deferred
+stages skipped with the exact prerequisite, never passed; retain all gate results.
+Live-test gates and explicitly marked requiresLiveIntegration gates remain required
+for full validation, not draft publication. Explicit manual/all-UI requests,
+production read-only approval, ready/merge gates, repository instructions and runtime
+permissions remain authoritative. Do not disable guards, change the profile to fake
+readiness, widen SSO scopes or manufacture live evidence.
+
 When `validation.liveTestsRequired` is `false`, follow unit-test-only validation:
 run configured local unit tests and required offline checks, without application
 startup, authentication, API requests or remote database access. This overrides

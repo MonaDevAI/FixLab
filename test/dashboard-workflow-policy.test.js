@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { API_ONLY_PLAYWRIGHT_GUIDANCE, DEV_WRITE_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, PR_LEARNING_GUIDANCE, READ_ONLY_POST_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
+import { API_ONLY_PLAYWRIGHT_GUIDANCE, DEV_WRITE_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, PR_LEARNING_GUIDANCE, READ_ONLY_POST_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, configuredWorkflow, efficientWorkflowGuidance } from "../dashboard/workflow-policy.js";
 import { ValidationSession, selectedValidationGates, validationGates } from "../dashboard/validation-gates.js";
 import { buildJobPrompt, FIXLAB_STAGES } from "../dashboard/server.js";
 
@@ -214,6 +214,79 @@ test("browser-only reproduction is existing-application first without claiming d
   assert.match(prompt, /Do not commit, push, create or update pull requests/);
   assert.match(prompt, /No Save, Submit, Approve, autosave/);
 });
+test("draft checkpoints separate live prerequisites from required local checks without passing integration", () => {
+  const repository = mkdtempSync(join(tmpdir(), "fixlab-draft-checkpoint-"));
+  const gate = (id, properties = {}) => ({
+    id, command: process.execPath, args: ["-e", "process.exit(0)"],
+    workingDirectory: ".", timeoutSeconds: 10, required: true, ...properties
+  });
+  try {
+    const profile = { validation: { gates: [
+      gate("frontend-tests"), gate("backend-tests"),
+      gate("browser", { stage: "live-test" }),
+      gate("backend-health", { stage: "local-stack", requiresLiveIntegration: true })
+    ] } };
+    const session = new ValidationSession(repository, profile, "fix-and-validate");
+    assert.equal(session.summary().draftReady, false);
+    session.results.set("frontend-tests", { status: "passed", exitCode: 0 });
+    session.results.set("backend-tests", { status: "passed", exitCode: 0 });
+    let summary = session.summary();
+    assert.equal(summary.draftReady, true);
+    assert.equal(summary.status, "pending");
+    assert.equal(summary.fullValidationPassed, false);
+    assert.equal(summary.gates.find((item) => item.id === "browser").status, "pending");
+    session.results.set("browser", { status: "failed", exitCode: 1 });
+    summary = session.summary();
+    assert.equal(summary.draftReady, true);
+    assert.equal(summary.status, "blocked");
+    assert.equal(summary.gates.find((item) => item.id === "browser").status, "failed");
+    for (const status of ["failed", "stale", "running"]) {
+      session.results.set("backend-tests", { status });
+      assert.equal(session.summary().draftReady, false, status);
+    }
+    session.results.set("backend-tests", { status: "passed", exitCode: 0 });
+    session.error = "Source/profile verification failed.";
+    assert.equal(session.summary().draftReady, false);
+    const localBrowser = new ValidationSession(repository, { validation: { gates: [
+      gate("local-browser", { stage: "live-test", requiresLiveIntegration: false })
+    ] } }, "fix-and-validate");
+    assert.equal(localBrowser.summary().draftReady, false, "explicit local browser checks stay mandatory");
+    assert.throws(() => validationGates({ validation: { gates: [
+      gate("invalid", { requiresLiveIntegration: "yes" })
+    ] } }), /Each validation gate/u);
+  } finally { rmSync(repository, { recursive: true, force: true }); }
+});
+
+test("draft integration guidance permits both code surfaces without changing live-only, ready or explicit checks", () => {
+  for (const mode of ["efficient", "strict"]) {
+    const workflow = configuredWorkflow({ workflow: { mode, publication: "draft" } });
+    for (const request of ["Frontend-only panel fix", "Backend service correction"]) {
+      assert.ok(buildJobPrompt({ request, workflow, mode: "fix-and-validate" }).includes(DRAFT_INTEGRATION_GUIDANCE));
+    }
+    for (const overrides of [
+      { mode: "validate-only" }, { mode: "playwright-only" },
+      { workflow: { ...workflow, publication: "ready" } },
+      { manualLocalhostTest: true }, { runAllUiScenarios: true },
+      { testEvidence: { productionDatabaseReadOnly: true } }
+    ]) {
+      assert.ok(!buildJobPrompt({ request: "Keep mandatory live checks.", workflow,
+        mode: "fix-and-validate", ...overrides }).includes(DRAFT_INTEGRATION_GUIDANCE));
+    }
+  }
+});
+test("draft integration guidance stays aligned across CLI and packaged agents", () => {
+  for (const path of [
+    "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md"
+  ]) {
+    const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8").replace(/\s+/gu, " ");
+    assert.ok(source.includes(DRAFT_INTEGRATION_GUIDANCE), path);
+  }
+  const cli = readFileSync(new URL("../bin/fixlab.js", import.meta.url), "utf8");
+  assert.match(cli, /request && allowsDraftIntegrationDeferral\(\{ mode: readOnly \? "validate-only" : "fix-and-validate", workflow \}\)/u);
+});
+
 test("advisory validation retains actual failures and optional gates stay executable", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-workflow-"));
   const gate = (id, required) => ({

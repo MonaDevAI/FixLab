@@ -132,6 +132,18 @@ also preserves legacy strict-ready intent when no publication preference is
 specified. An explicit strict plus draft choice remains draft, with provider
 `isDraft: true` verified; strict validation requirements are unchanged.
 
+Editing jobs with saved draft publication separate local checkpoint readiness
+from full integration readiness. After focused regression, required local gates
+and effective-diff review pass, authorized frontend or backend draft work can
+proceed without unavailable API/SSO/browser integration. Declaring a backend
+does not itself require local .NET/Key Vault startup for frontend-only work.
+Approved deployed DEV reads need legitimate API access, not necessarily a local
+backend; identity-only SSO does not authorize business reads, and a deployed
+API does not validate unpublished backend changes. Deferred integration stages
+are skipped with prerequisites and disclosed in the draft, never passed.
+Explicit manual/all-UI, production-read-only, ready/merge and permission gates
+remain unchanged.
+
 Portal-backed API authentication is an opt-in repository onboarding/settings
 contract. The portal's repository-owned session adapter supplies a scoped token
 only to an in-process callback. The generic `portal-api-proof` worker creates a
@@ -972,6 +984,16 @@ repository-relative `workingDirectory`, and `timeoutSeconds` (1-7200).
 Choose the smallest commands that cover the repository contract; gates are
 not inferred from restore, startup, authentication, or deployment commands.
 The template contains examples and must be adapted during onboarding.
+
+Each gate may declare boolean `requiresLiveIntegration`; it defaults to true
+for `stage: "live-test"` and false otherwise. Other genuinely live-dependent
+startup/health gates require an explicit true value; local build/test gates
+must not be reclassified to hide failures. An explicit false preserves a
+live-stage offline gate as local. `draftReady` requires verified applicable
+local gates to pass independently of pending/failed integration gates.
+Full validation status, gate requirements, exit codes and stale evidence are
+unchanged. This readiness is accepted only for authorized editing draft jobs,
+never as evidence for ready publication, full validation or merge.
 
 An optional `validation.apiOnly` policy supplies a reviewed base reference,
 literal internal-API paths, mandatory full-validation paths, and a subset of

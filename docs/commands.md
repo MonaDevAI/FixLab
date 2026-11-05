@@ -8,8 +8,14 @@ default in efficient mode, `ready` by default in strict mode),
 `workflow.unitTestsAfterPr` (default `false`) and `workflow.optionalBuilds`
 (default `false`) once. Marking a draft ready requires a separate reviewed
 decision. No per-stage workflow selection is needed.
-`validation.gates[].required: true` remains publication-blocking in efficient
-mode. Optional gates remain runnable and keep their actual status; neither
+Required local `validation.gates` remain publication-blocking in efficient
+mode. For editing jobs with saved `publication: "draft"` (efficient or strict),
+unavailable live integration does not block authorized frontend/backend code work
+or the reviewed draft after required local checks pass. Record unavailable
+startup, API authentication and browser checks as deferred, never passed; keep
+actual gate outcomes and disclose unverified integration in the draft.
+Ready/merge, explicit manual/all-UI and production-backed approval gates remain
+unchanged. Optional gates remain runnable and keep their actual status; neither
 publication nor `advisory` implies validation passed. Existing saved jobs retain
 strict behavior unless explicitly migrated while stopped.
 
@@ -99,6 +105,16 @@ for live/browser checks or mutations. Source edits require revalidation.
 Legacy profiles without gates
 remain runnable but cannot establish executor-backed PR readiness. These
 checks do not intercept all agent tools or enforce external PR permissions.
+
+`stage: "live-test"` classifies a gate as integration-dependent by default.
+Set the optional boolean `requiresLiveIntegration: true` for other commands
+that genuinely require live services, such as backend health/Key Vault checks.
+Use `requiresLiveIntegration: false` to retain a live-stage offline check as
+draft-blocking. Local builds, type-checks and unit tests remain local gates;
+do not relabel them to bypass failures. This classification affects only
+eligible draft publication: all applicable gates keep their outcomes and
+remain required for full validation. Missing or stale local evidence blocks
+the draft, and profile/source changes require fresh verification.
 
 ### API-only validation
 

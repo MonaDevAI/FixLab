@@ -41,7 +41,7 @@ import { canonicalExecutionRepository, createExecutorLease } from "./executor-le
 import { spawnWindowsExecutor } from "./windows-executor.js";
 import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
-import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
+import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
 import { createDevWriteApproval, createPostWriteApproval } from "./dev-post.js";
@@ -904,23 +904,28 @@ function getPullRequestReadiness(job) {
       ? "External-folder review is pending before executor launch. No permission has been granted."
       : PERMISSION_BLOCKED_MESSAGE };
   }
-  if (job.workflow?.mode === "efficient" && job.mode === "fix-and-validate") {
+  const draftDeferral = allowsDraftIntegrationDeferral(job);
+  if ((job.workflow?.mode === "efficient" && job.mode === "fix-and-validate") || draftDeferral) {
     const validation = job.validationSession?.summary();
-    if (validation && !["passed", "advisory", "unconfigured"].includes(validation.status)) {
+    if (!validation || !["passed", "advisory",
+      ...(job.workflow?.mode === "efficient" ? ["unconfigured"] : [])].includes(validation.status) &&
+        !(draftDeferral && validation.draftReady)) {
       return { status: "blocked", ready: false, message: "Explicitly required local validation is pending, failed or stale." };
     }
     if (job.manualLocalhostPending || job.manualLocalhostResult === "failed" || job.testEvidence?.modeViolation) {
       return { status: "blocked", ready: false, message: "An explicitly requested manual check or data-safety requirement is unresolved." };
     }
     if (job.stages?.pr?.status === "passed") {
-      return { status: "created", ready: false, message: `${job.stages.pr.message || "Pull request created or updated."} Optional/remote checks retain their actual status; ready for review does not mean fully validated.` };
+      return { status: "created", ready: false, message: `${job.stages.pr.message || "Pull request created or updated."} ${draftDeferral ? "Draft publication does not verify live integration; pending or failed checks remain explicit." : "Optional/remote checks retain their actual status; ready for review does not mean fully validated."}` };
     }
     if (job.stages?.fix?.status !== "passed" || job.stages?.review?.status !== "passed" ||
         ["held", "holding"].includes(job.status)) {
       return { status: "blocked", ready: false, message: "Waiting for the focused fix, regression checks and diff review." };
     }
     return { status: job.stages?.pr?.status === "blocked" ? "approval-required" : "ready",
-      ready: true, message: "Focused checkpoint reviewed. The authorized PR can be ready for review before optional broad validation; pending checks are not passed." };
+      ready: true, message: draftDeferral
+        ? "Focused checkpoint and required local checks reviewed. An authorized draft PR may proceed; live integration remains unverified until its gates pass."
+        : "Focused checkpoint reviewed. The authorized PR can be ready for review before optional broad validation; pending checks are not passed." };
   }
   if (job.validationIntent === "scoped") {
     return { status: "blocked", ready: false, message: "Full regression is explicitly deferred during scoped iteration, not passed." };
@@ -1279,8 +1284,9 @@ ${COPILOT_EXECUTION_GUIDANCE}
 ${RUNTIME_RECOVERY_GUIDANCE}
 ${!apiOnly && !testEvidence.unitTestsOnly ? READ_ONLY_POST_GUIDANCE : ""}
 ${apiOnly ? API_ONLY_PLAYWRIGHT_GUIDANCE : ""}
+${allowsDraftIntegrationDeferral({ mode, workflow, manualLocalhostTest, runAllUiScenarios, testEvidence }) ? DRAFT_INTEGRATION_GUIDANCE : ""}
 - For a fix request, begin with the smallest known reproduction, using an approved existing application when appropriate; prepare the local stack only when needed to exercise changed code. Do not claim a deployed baseline proves an unpublished fix.
-- Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
+- Before validation in a new isolated worktree, plan \`fixlab onboard WORKTREE --from SOURCE --runtime RUNTIME\`. After scoped setup approval, add \`--yes\`. The source profile declares non-sensitive configuration in \`worktreeSetup.files\`. Never copy credentials or browser state. Missing configuration, authentication or denied runtime access is a blocker for the dependent check; do not retry unchanged approvals or grant blanket path access. Sign-in and MFA remain human-controlled. In read-only modes, do not provision or alter configuration; report missing prerequisites as blocked.
 - For repeat work, inspect the current git status and effective diff first, then search task-relevant symbols and files instead of rescanning the whole repository.
 - Do not perform a whole-repository rescan when the current diff, cached metadata, and focused symbol/path searches are sufficient.
 - Reuse this job/session context. Do not reread unchanged files, repeat completed diagnosis, reinstall available dependencies, or rerun broad checks without new evidence.
@@ -1294,9 +1300,9 @@ ${manualLocalhostGuidance}
 ${branchNamingGuidance}
 - ${readOnly ? "Do not edit files, create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
-- Saved delivery workflow: ${efficient ? `efficient; focused checks before the ${workflow.publication === "ready" ? "ready-for-review" : "draft"} PR, broader checks only by saved preference or explicit selection` : "strict; all applicable configured gates remain required before readiness"}. This recorded job policy takes precedence over the product default.
+- Saved delivery workflow: ${efficient ? `efficient; focused checks before the ${workflow.publication === "ready" ? "ready-for-review" : "draft"} PR, broader checks only by saved preference or explicit selection` : "strict; all applicable configured gates remain required for full validation and ready publication"}. This recorded job policy takes precedence over the product default.
 - Use fixlab_dashboard_control for user-authorized dashboard operations. Read status first and bind its instance and current job. Do not ask again for routine steps already authorized; ask only for missing decisions or required approvals. For "test this PR", verify the assigned checkout matches the PR source commit, then start playwright-only using the repository's Playwright configuration, selected environment and human-controlled authentication. Do not change code or use another checkout's evidence. Normal guards apply.
-- For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed${efficient ? "; publication follows the saved efficient workflow and explicitly required gates" : ", and PR readiness stays blocked"}. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.
+- For a connected host conversation, use fixlab_dashboard_status and fixlab_dashboard_reply to surface a recovery question using the host's question UI and submit only the user's explicit answer to the same instance and job. Never infer approval. Honor user-selected scoped iteration: full regression is explicitly deferred, not passed${allowsDraftIntegrationDeferral({ mode, workflow, manualLocalhostTest, runAllUiScenarios, testEvidence }) ? "; draft publication follows verified local checks; full integration remains unverified" : efficient ? "; publication follows the saved efficient workflow and explicitly required gates" : ", and PR readiness stays blocked"}. Continue independent safe checks after unrelated failures without bypassing dependencies. Reviewed workspace reuse must preserve the current branch, uncommitted work and existing PR; a changed fingerprint requires a new review. Runtime permissions and human authentication remain separate approvals.
 - For known external-folder prerequisites, offer permissionPreflight before executor launch; it only opens review, never grants access. Use reviewed component path-to-gate policies for change-aware validation; unknown paths, full-validation paths, explicit full coverage, and previously executed gates retain their required checks.
 - Do not delete or edit transient test artifacts while validation is discovering or executing them; wait for owned validation to finish before cleanup.
 - ${playwrightOnly ? "Skip source diagnosis, separate reproduction, implementation, diff review, and non-browser validation. Mark diagnosis, reproduce, fix, and review skipped with the reason Playwright-only mode was selected." : "Inspect the affected surface, implement the smallest required code when edits are allowed, and self-review the effective diff for correctness, scope, and unrelated changes."}
@@ -2849,13 +2855,15 @@ function finishJob(job, result) {
     job.error = job.error ? `${job.error}; ${message}` : message;
   }
   if (job.validationIntent === "scoped" &&
-      !(job.mode === "fix-and-validate" && job.workflow?.mode === "efficient")) {
+      !(job.mode === "fix-and-validate" && job.workflow?.mode === "efficient") &&
+      !allowsDraftIntegrationDeferral(job)) {
     job.stages.review = { status: "blocked", message: "Full regression is explicitly deferred during scoped iteration, not passed." };
   }
   if (job.validationSession) {
     try {
       const validation = job.validationSession.verify();
-      if (!["passed", "unconfigured", ...(job.workflow?.mode === "efficient" ? ["advisory"] : [])].includes(validation.status)) {
+      if (!["passed", "unconfigured", ...(job.workflow?.mode === "efficient" ? ["advisory"] : [])].includes(validation.status) &&
+          !(allowsDraftIntegrationDeferral(job) && validation.draftReady)) {
         job.stages.review = {
           status: "blocked",
           message: "Required executor-backed validation is missing, failed, or stale."

@@ -7304,6 +7304,78 @@ test("dashboard gate execution rejects forged readiness and stale final-source e
   }
 });
 
+for (const [mode, publication] of [["efficient", "draft"], ["strict", "draft"], ["efficient", "ready"]]) {
+  test(`${mode} ${publication} publication separates verified local checks from failed live integration`, async () => {
+    const repository = createGitRepository();
+    git(repository, ["checkout", "-b", "users/fixlab-test/integration"]);
+    writeFileSync(join(repository, "local-fail.fixture"), "synthetic local failure");
+    writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"),
+      JSON.stringify(validProfile({ workflow: { mode, publication }, validation: { gates: [
+        { id: "local-tests", stage: "review", required: true, command: process.execPath,
+          args: ["-e", "process.exit(require('node:fs').existsSync('local-fail.fixture') ? 7 : 0)"],
+          workingDirectory: ".", timeoutSeconds: 30 },
+        { id: "api-integration", stage: "live-test", required: true, command: process.execPath,
+          args: ["-e", "process.exit(41)"], workingDirectory: ".", timeoutSeconds: 30 }
+      ] } })));
+    let emit;
+    let finish;
+    const { dashboard, url } = await startDashboard(repository, (input) => {
+      emit = input.onOutput;
+      return { completion: new Promise((resolve) => { finish = resolve; }),
+        terminate() { finish({ code: 130 }); } };
+    });
+    try {
+      const started = await jsonRequest(url, "/api/jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ request: "Fix frontend/backend behavior; disclose unavailable DEV integration.",
+          mode: "fix-and-validate", validationIntent: publication === "draft" ? "scoped" : "full" })
+      });
+      assert.equal(started.response.status, 202, started.body.error);
+      const request = (path, fields = {}) => jsonRequest(url, path, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jobId: started.body.job.id, repository, ...fields })
+      });
+      for (const stage of ["intake", "diagnosis", "reproduce", "fix", "review"]) {
+        emit("stdout", `FIXLAB_STAGE|${stage}|passed|Focused synthetic change and review\n`);
+      }
+      const context = () => request("/api/job/publication-context", { verify: true });
+      assert.equal((await context()).body.ready, false, "local evidence is required");
+      assert.equal((await request("/api/validation/run", { gateId: "local-tests" })).body.status, 7);
+      assert.equal((await context()).body.ready, false, "local failure cannot be deferred");
+      rmSync(join(repository, "local-fail.fixture"));
+      assert.equal((await request("/api/validation/run", { gateId: "local-tests" })).body.status, 0);
+      assert.equal((await context()).body.ready, publication === "draft");
+      writeFileSync(join(repository, "backend-change.fixture"), "synthetic reviewed backend edit");
+      assert.equal((await context()).body.ready, false, "changed source invalidates the local checkpoint");
+      assert.equal((await request("/api/validation/run", { gateId: "local-tests" })).body.status, 0);
+      assert.equal((await request("/api/validation/run", { gateId: "api-integration" })).body.status, 41);
+      const verified = await context();
+      assert.equal(verified.response.status, 200, verified.body.error);
+      assert.equal(verified.body.ready, publication === "draft");
+      assert.equal(verified.body.publication, publication);
+      for (const stage of ["local-stack", "live-test"]) {
+        emit("stdout", `FIXLAB_STAGE|${stage}|skipped|Integration failed; DEV/API validation deferred, not passed\n`);
+      }
+      emit("stdout", publication === "draft"
+        ? "FIXLAB_STAGE|pr|passed|Verified draft; local tests passed, DEV integration failed and remains unverified\n"
+        : "FIXLAB_STAGE|pr|blocked|Required live integration failed; ready publication is unavailable\n");
+      finish({ code: 0 });
+      await new Promise((resolve) => setImmediate(resolve));
+      const status = (await jsonRequest(url, "/api/job")).body.job;
+      assert.equal(status.status, publication === "draft" ? "passed" : "blocked");
+      assert.equal(status.validation.status, "blocked");
+      assert.equal(status.validation.fullValidationPassed, false);
+      assert.equal(status.validation.gates.find((gate) => gate.id === "api-integration").status, "failed");
+      assert.equal(status.stages["live-test"].status, "skipped");
+      assert.equal(status.stages.review.status, publication === "draft" ? "passed" : "blocked");
+      assert.equal(status.pullRequestReadiness.status, publication === "draft" ? "created" : "blocked");
+    } finally {
+      await dashboard.close();
+      rmSync(repository, { recursive: true, force: true });
+    }
+  });
+}
+
 test("new efficient jobs publish the focused checkpoint while optional tests remain pending", async () => {
   const repository = createGitRepository();
   git(repository, ["checkout", "-b", "users/fixlab-test/checkpoint"]);

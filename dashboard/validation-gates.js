@@ -163,6 +163,7 @@ export function validationGates(profile, mode) {
       typeof gate.workingDirectory !== "string" ||
       (gate.reuse !== undefined && typeof gate.reuse !== "boolean") ||
       (gate.required !== undefined && typeof gate.required !== "boolean") ||
+      (gate.requiresLiveIntegration !== undefined && typeof gate.requiresLiveIntegration !== "boolean") ||
       (gate.kind !== undefined && !["tests", "builds", "checks"].includes(gate.kind)) ||
       (gate.stage !== undefined && !["review", "local-stack", "live-test", "fix", "pr"].includes(gate.stage)) ||
       !Number.isInteger(gate.timeoutSeconds) ||
@@ -179,6 +180,7 @@ export function validationGates(profile, mode) {
       workingDirectory: gate.workingDirectory,
       reuse: gate.reuse === true && reusableValidationCommand(gate.command, gate.args),
       required: gate.required === true,
+      requiresLiveIntegration: gate.requiresLiveIntegration ?? (gate.stage === "live-test"),
       kind: gate.kind ?? (/^(?:test|test:|--test)/.test(gate.args[0] === "run" ? gate.args[1] ?? "" : gate.args[0] ?? "")
         ? "tests" : gate.args.includes("build") ? "builds" : "checks"),
       stage: gate.stage ?? "review",
@@ -353,6 +355,9 @@ export class ValidationSession {
       status,
       scope,
       reason,
+      draftReady: !this.error && this.gates !== null && this.gates.every((gate) =>
+        !this.blocking(gate, scope) || gate.requiresLiveIntegration ||
+          this.results.get(gate.id)?.status === "passed"),
       ...(this.scopeResult.components && this.validationIntent === "affected" ? {
         components: this.scopeResult.components,
         applications: this.scopeResult.applications,
@@ -373,6 +378,7 @@ export class ValidationSession {
         id: gate.id,
         kind: gate.kind,
         stage: gate.stage,
+        requiresLiveIntegration: gate.requiresLiveIntegration,
         required: this.blocking(gate, scope),
         ...Object.fromEntries(Object.entries(
           this.results.get(gate.id) ?? (this.required(gate, scope)

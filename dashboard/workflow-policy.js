@@ -42,6 +42,15 @@ export const PR_LEARNING_GUIDANCE =
 export const EXISTING_APPLICATION_GUIDANCE =
   "Existing-application fast path: explicit deployed/browser-only checks use playwright-only mode and the approved existing application for the selected environment. Resolve targets from profile/browser configuration, not report URLs. Reuse profile-supported healthy apps/authorized browser connections; never copy browser state, take over unrelated browsers, bypass profile locks or treat state files as sign-in proof. Do not clone, restore, start another stack or run broad gates just to repeat a deployed UI scenario. Mark unnecessary local-stack work skipped, not passed. Start only journey prerequisites; unavailable deployments block, never silently change environment or target. Record target/version and exact assertions. A baseline/deployed result does not validate unpublished local changes or a PR; use the matching commit/app. Manual-localhost requirements remain.";
 
+export function allowsDraftIntegrationDeferral(job) {
+  return job.mode === "fix-and-validate" && job.workflow?.publication === "draft" &&
+    !job.manualLocalhostTest && !job.runAllUiScenarios &&
+    !job.testEvidence?.productionDatabaseReadOnly;
+}
+
+export const DRAFT_INTEGRATION_GUIDANCE =
+  "Draft integration deferral: for fix-and-validate jobs with saved draft publication only, continue authorized frontend or backend code work and local checks when live integration is unavailable. A configured backend does not require local .NET/Key Vault startup for a frontend-only draft. Verify the complete diff; start only applications needed by the actual checks. Existing approved DEV APIs may support authenticated reads without a local backend; deployed APIs never prove unpublished backend changes. Identity-only SSO does not authorize business reads: preserve its guards and require separately reviewed API access. After focused regression, required local gates and diff review pass, publish only the authorized DRAFT PR. Disclose every unavailable startup, authentication, browser/API check and unverified integration. Mark deferred stages skipped with the exact prerequisite, never passed; retain all gate results. Live-test gates and explicitly marked requiresLiveIntegration gates remain required for full validation, not draft publication. Explicit manual/all-UI requests, production read-only approval, ready/merge gates, repository instructions and runtime permissions remain authoritative. Do not disable guards, change the profile to fake readiness, widen SSO scopes or manufacture live evidence.";
+
 export function efficientWorkflowGuidance(workflow, { dashboard = true } = {}) {
   return `Saved efficient delivery policy (applies without repeated job/stage questions):
 - Inspect the effective diff, make the smallest fix, run the focused regression checks that cover it, and self-review the checkpoint.
