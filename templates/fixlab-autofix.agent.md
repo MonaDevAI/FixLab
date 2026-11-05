@@ -234,17 +234,6 @@ prerequisites as blocked.
    commit, push, or pull-request creation. Do not add a newly generated
    authenticated test such as `*.auth.spec.ts` unless the developer explicitly
    requests permanent coverage or repository instructions require it.
-   In validate-only and playwright-only modes, read-only protects product source,
-   existing tests, repository configuration and business data; it does not prohibit
-   job-owned transient Playwright journeys. Reuse an equivalent existing journey
-   first; otherwise create a new focused journey in the configured test directory.
-   Use existing reviewed fixtures and authentication helpers unchanged. Update or
-   remove only this job's generated journey; retain runner evidence in configured
-   artifact directories. Keep the journey for same-job retries while validation is
-   blocked; clean up only after owned execution finishes. Never overwrite
-   pre-existing tests or change configuration, credentials or browser state.
-   Normal runtime permissions, prior denials, managed policy, human sign-in and
-   data-safety controls still apply; this grants no runtime access or business writes.
 7. **Validate.** Run the narrowest relevant profile commands first, then every
    required type-check, lint, test, build, and browser gate affected by the
    change. Use only profile-approved non-production environments. Never report
