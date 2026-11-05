@@ -3,7 +3,7 @@ import { dirname, isAbsolute, join, parse, relative, resolve, sep } from "node:p
 import { canonicalExecutionRepository } from "./executor-lease.js";
 
 export const SETUP_PROFILE_PATH = join(".github", "fixlab", "repository-profile.json");
-export const REPOSITORY_PROMPT_NAMES = ["bugfix", "intake", "diagnose", "reproduce", "fix", "validate", "live-test", "pr"]
+export const REPOSITORY_PROMPT_NAMES = ["bugfix", "intake", "diagnose", "reproduce", "fix", "validate", "live-test", "pr", "summary"]
   .map((name) => `fixlab.${name}.prompt.md`);
 
 export function localRepository(value) {

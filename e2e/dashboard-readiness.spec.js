@@ -2347,6 +2347,75 @@ function pendingQuestionJob(question) {
   return job;
 }
 
+test("job summary shows recorded findings and gaps without execution, and refreshes the same job", async ({ page }) => {
+  const posts = [];
+  page.on("request", (request) => { if (request.method() === "POST") { posts.push(request.url()); } });
+  const job = {
+    id: "summary-current", request: "Investigate a synthetic regression", requestType: "bug-fix",
+    mode: "fix-and-validate", status: "running", targetEnvironment: "dev",
+    stages: {
+      diagnosis: { status: "passed", message: "Confirmed route mismatch" },
+      fix: { status: "pending", message: "Correction not applied" },
+      "live-test": { status: "blocked", message: "Authentication unavailable" }
+    },
+    validation: { scope: "all", gates: [{ id: "regression-tests", status: "failed", required: true, durationMs: 25 }] },
+    testEvidence: { reported: true, scenario: "Check role visibility", source: "synthetic-intercepted", mutationMode: "intercepted" },
+    bugs: [{ id: "bug-1", outcome: "unresolved", owner: "application", summary: "Role selection remains incorrect" }],
+    logs: [{ stream: "stdout", message: "Raw log sentinel must not enter summary" }], activity: []
+  };
+  await mockChatWorkspace(page, { job });
+  await page.goto(baseUrl);
+  await page.getByRole("button", { name: "View summary", exact: true }).click();
+  const summary = page.locator("#job-summary-content");
+  await expect(summary).toContainText("Interim outcome");
+  await expect(summary).toContainText("Confirmed route mismatch");
+  await expect(summary).toContainText("regression-tests: failed (required)");
+  await expect(summary).toContainText("Role selection remains incorrect");
+  await expect(summary).toContainText("Synthetic or intercepted tests do not prove real backend writes");
+  await expect(summary).toContainText("Validated workaround, tradeoffs and fix-induced side effects: Not verified");
+  await expect(summary).not.toContainText("Raw log sentinel");
+  job.status = "passed";
+  job.validation.gates[0].status = "stale";
+  await expect(summary).toContainText("Recorded outcome");
+  await expect(summary).toContainText("regression-tests: stale (required)");
+  await expect(summary).toContainText("Job completion is not a claim of complete regression coverage");
+  await page.getByRole("button", { name: "Close summary" }).click();
+  await expect(page.locator("#job-summary-dialog")).toBeHidden();
+  await expect(page.getByRole("button", { name: "View summary", exact: true })).toBeFocused();
+  expect(posts).toEqual([]);
+});
+
+test("job summary follows historical selection, handles missing evidence and renders text safely", async ({ page }) => {
+  const posts = [];
+  page.on("request", (request) => { if (request.method() === "POST") { posts.push(request.url()); } });
+  const job = { id: "summary-active", request: "Active summary sentinel", requestType: "bug-fix",
+    mode: "fix-and-validate", status: "running", stages: {}, bugs: [], logs: [], activity: [] };
+  const saved = { ...job, id: "summary-history", status: "held",
+    request: 'Saved <img src=x onerror="window.summaryInjection=true"> https://private.example.test/path',
+    stages: { review: { status: "blocked", message: "authorization=private-sentinel" } } };
+  await mockChatWorkspace(page, { job, history: [saved] });
+  await page.goto(baseUrl);
+  await page.locator('.workspace-navigation [data-open="memory-group"]').click();
+  await page.locator("#repository-memory-list button").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "View summary", exact: true }).click();
+  const summary = page.locator("#job-summary-content");
+  await expect(summary).toContainText(saved.id);
+  await expect(summary).not.toContainText(job.request);
+  await expect(summary).toContainText("No executor-backed gate results recorded");
+  await expect(summary).toContainText("[Sensitive detail omitted]");
+  await expect(summary).not.toContainText("private.example.test");
+  await expect(summary).not.toContainText("private-sentinel");
+  await expect(summary.locator("img")).toHaveCount(0);
+  expect(await page.evaluate(() => window.summaryInjection)).toBeUndefined();
+  const overflow = await page.locator("#job-summary-dialog").evaluate((element) =>
+    element.scrollWidth > element.clientWidth);
+  expect(overflow).toBe(false);
+  await page.keyboard.press("Escape");
+  await expect(page.locator("#job-summary-dialog")).toBeHidden();
+  expect(posts).toEqual([]);
+});
+
 test("current-job full screen ignores historical selection, follows the live job and restores the prior view", async ({ page }) => {
   const posts = [];
   let historicalEvidence;

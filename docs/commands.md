@@ -63,10 +63,34 @@ overwriting repository-owned versions.
 | `/fixlab.validate` | Run focused tests, lint, type-check, and builds | Every required check passes or is explicitly skipped with risk |
 | `/fixlab.live-test` | Start owned applications and run the browser journey | The running application proves the expected behavior |
 | `/fixlab.pr` | Prepare the evidence-backed pull-request outcome | The PR contains the exact change, evidence, and remaining risks |
+| `/fixlab.summary` | Optionally summarize an existing job in the conversation | Actual outcomes, regression gaps, findings, workarounds and must-know items are explicit; no execution or file changes |
 
 The commands read `.github/fixlab/repository-profile.json` and repository
 instructions before acting. They never replace repository-owned commands,
 environment controls, or approval requirements.
+
+For an optional engineering handoff, run `/fixlab.summary` in the VS Code
+conversation containing the job evidence. It is never added to the automatic
+bug-fix lifecycle. The prompt returns Markdown without rerunning checks,
+changing job status, creating files or publishing changes. Active-job summaries
+are interim; unavailable results are marked "Not verified". It distinguishes
+runner-confirmed results from agent claims, local from deployed validation, and
+known findings from suspected side effects. A folder or ZIP is a separate request.
+
+Existing repositories can rerun `fixlab init` after updating FixLab to add the
+missing prompt without replacing their profile, agents or customized prompts.
+Other conversation hosts can paste the packaged
+[`fixlab.summary.prompt.md`](../prompts/fixlab.summary.prompt.md) into the
+same evidence-bearing conversation; this is a prompt file, not a new CLI
+subcommand or a dashboard export button.
+
+In the dashboard, select a current or saved job and click **View summary** in
+the header. This separate read-only view assembles recorded investigation,
+changes, gate results, scenario claims, findings and remaining gaps without an
+AI call or job mutation. It refreshes that same job's evidence while open.
+Missing workarounds, commit inventory and side-effect findings stay unverified;
+it does not infer them from a passed status or parse raw logs. For an AI-written
+handoff with richer context, use the optional prompt in its original conversation.
 
 ## Executor-backed dashboard checks
 

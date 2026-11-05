@@ -422,7 +422,8 @@ test("init creates a parseable repository profile", () => {
       "fixlab.fix.prompt.md",
       "fixlab.validate.prompt.md",
       "fixlab.live-test.prompt.md",
-      "fixlab.pr.prompt.md"
+      "fixlab.pr.prompt.md",
+      "fixlab.summary.prompt.md"
     ];
     for (const promptName of expectedPrompts) {
       assert.equal(existsSync(join(promptDirectory, promptName)), true);
@@ -446,6 +447,10 @@ test("init creates a parseable repository profile", () => {
     );
     assert.match(bugfixPrompt, /agent: fixlab-autofix/);
     assert.match(bugfixPrompt, /smallest complete correction/);
+    assert.equal(
+      readFileSync(join(promptDirectory, "fixlab.summary.prompt.md"), "utf8"),
+      readFileSync(new URL("../prompts/fixlab.summary.prompt.md", import.meta.url), "utf8")
+    );
   } finally {
     rmSync(repository, { recursive: true, force: true });
   }
@@ -466,7 +471,7 @@ test("init preserves existing profile and prompt files", () => {
       repository,
       ".github",
       "prompts",
-      "fixlab.validate.prompt.md"
+      "fixlab.summary.prompt.md"
     );
     const agentPath = join(
       repository,

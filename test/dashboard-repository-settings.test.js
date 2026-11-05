@@ -32,7 +32,7 @@ test("repository onboarding previews without writes and creates only missing rev
     assert.equal(localRepository(repository), repository);
     const preview = plan(repository);
     assert.equal(existsSync(join(repository, ".github")), false);
-    assert.equal(preview.files.length, 10);
+    assert.equal(preview.files.length, 11);
     const applied = applyRepositorySettings(preview, "synthetic-settings-owner");
     assert.equal(applied.saved, true);
     const profile = JSON.parse(readFileSync(join(repository, SETUP_PROFILE_PATH), "utf8"));
@@ -46,6 +46,10 @@ test("repository onboarding previews without writes and creates only missing rev
     assert.equal(configuredTestSynthesis(profile, "", undefined, "sit").source, "synthetic-intercepted");
     assert.equal(validateLiveTestProfile(profile).ok, true);
     assert.equal(existsSync(join(repository, ".github", "agents", "fixlab-autofix.agent.md")), true);
+    assert.equal(
+      readFileSync(join(repository, ".github", "prompts", "fixlab.summary.prompt.md"), "utf8"),
+      readFileSync(join(packageRoot, "prompts", "fixlab.summary.prompt.md"), "utf8")
+    );
     assert.equal(existsSync(canonicalExecutionRepository(repository).directory), false);
     assert.equal(plan(repository).assets.length, 0);
   } finally {

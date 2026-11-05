@@ -1367,6 +1367,23 @@ pre {
     animation: none;
   }
 }
+#job-summary-dialog {
+  width: min(850px, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  box-sizing: border-box;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  padding: 1.5rem;
+  border: 1px solid #d8d6e8;
+  border-radius: 12px;
+  color: #282638;
+  background: #f7f7fc;
+}
+
+#job-summary-content li {
+  margin-bottom: 0.5rem;
+}
+
 #current-job-dialog {
   width: 100vw;
   max-width: 100vw;
@@ -1380,7 +1397,8 @@ pre {
   background: #f7f7fc;
 }
 
-#current-job-dialog::backdrop {
+#current-job-dialog::backdrop,
+#job-summary-dialog::backdrop {
   background: rgb(20 18 40 / 45%);
 }
 
