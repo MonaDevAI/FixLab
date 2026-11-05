@@ -3942,7 +3942,7 @@ test("dashboard parses complete stage markers and passes a job", async () => {
     );
     assert.match(
       receivedPrompt,
-      /Never mark it ready for review or report the pr stage passed until all required local gates pass/i
+      /Mark ready\/pr passed only after required gates pass or repository policy explicitly accepts the outcome/i
     );
     assert.match(receivedPrompt, /publish the authorized PR by marking it ready for review/);
     assert.match(receivedPrompt, /Do not wait for remote PR CI or build completion before publication/);
@@ -3974,6 +3974,47 @@ test("dashboard parses complete stage markers and passes a job", async () => {
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("read-only job prompts permit new transient journeys without authorizing product edits", () => {
+  for (const mode of ["validate-only", "playwright-only"]) {
+    const prompt = buildJobPrompt({ request: "Validate a missing browser scenario.", mode });
+    assert.match(prompt, /Do not edit files other than job-owned transient Playwright journeys and runner evidence/u);
+    assert.doesNotMatch(prompt, /Do not edit files, create commits/u);
+    assert.match(prompt, /Never overwrite pre-existing tests/u);
+    if (mode === "validate-only") {
+      assert.match(prompt, /Reuse an equivalent existing journey first/u);
+      assert.match(prompt, /configured test directory/u);
+      assert.match(prompt, /Never overwrite pre-existing tests or change configuration, authentication helpers, credentials or browser state/u);
+      assert.match(prompt, /this exception grants no runtime access or business writes/u);
+    } else {
+      assert.match(prompt, /prefer an existing journey or retained script/u);
+      assert.match(prompt, /Do not copy browser state or credentials/u);
+      assert.match(prompt, /writes require separate native approval/u);
+    }
+  }
+});
+
+test("job prompts omit irrelevant publication guidance and keep one output contract", () => {
+  for (const [mode, limit] of [
+    ["fix-and-validate", 19000], ["validate-only", 15000], ["playwright-only", 9500]
+  ]) {
+    const prompt = buildJobPrompt({
+      request: "Validate the reported behavior.", mode, targetEnvironment: "dev"
+    });
+    assert.ok(prompt.length < limit, `${mode}: ${prompt.length} must be below ${limit}`);
+    for (const marker of [
+      "FixLab output protocol", "FIXLAB_TEST|source|mutation-mode|scenario",
+      "FIXLAB_BUG|id|outcome|owner|summary"
+    ]) {
+      assert.equal(prompt.split(marker).length - 1, 1, `${mode}: ${marker}`);
+    }
+    if (mode === "validate-only") {
+      assert.doesNotMatch(prompt, /Prefix FixLab-created pull-request titles|commit\/push the authorized checkpoint|Reusable PR learning/u);
+      assert.match(prompt, /full regression is explicitly deferred, not passed/u);
+      assert.match(prompt, /Runtime permissions and human authentication remain separate approvals/u);
+    }
   }
 });
 
@@ -4140,6 +4181,8 @@ test("blocked job accepts user input and resumes the same Agency session", async
     assert.equal(calls[1].sessionId, calls[0].sessionId);
     assert.match(calls[1].prompt, /Authentication is complete/);
     assert.match(calls[1].prompt, /Resume the existing FixLab dashboard session/);
+    assert.match(calls[1].prompt, /it does not prohibit job-owned transient Playwright journeys/u);
+    assert.match(calls[1].prompt, /Normal runtime permissions, prior denials/u);
   } finally {
     await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
@@ -8191,17 +8234,17 @@ test("dashboard PR strategies publish after local gates without waiting for remo
   }
 });
 
-test("validate-only prompt prohibits repository changes", () => {
+test("validate-only prompt protects product source and prohibits publication", () => {
   const prompt = buildJobPrompt({
     request: "Check the current behavior.",
     mode: "validate-only",
     requestType: "bug-fix"
   });
 
-  assert.match(prompt, /Do not edit files/);
+  assert.match(prompt, /Do not edit files other than job-owned transient Playwright journeys and runner evidence/);
   assert.match(prompt, /create commits/);
   assert.match(prompt, /create pull requests/);
-  assert.match(prompt, /without creating or updating a pull request/);
+  assert.match(prompt, /Do not create commits, push branches, create pull requests, or update pull requests/);
   assert.match(prompt, /fix and pr stages must be explicitly skipped/);
   assert.match(prompt, /FIXLAB_ACTIVITY\|stage\|summary/);
   assert.match(prompt, /not hidden chain-of-thought/);
@@ -8486,6 +8529,8 @@ test("browser-only resume retains scope, scripts and environment instead of PR l
     assert.match(calls[1].prompt, /exactly 50 synthetic rows; no writes/);
     assert.match(calls[1].prompt, /Do not perform implementation, review, commits, push, pull-request creation/);
     assert.match(calls[1].prompt, /Keep the same-job test script/);
+    assert.match(calls[1].prompt, /it does not prohibit job-owned transient Playwright journeys/u);
+    assert.match(calls[1].prompt, /Normal runtime permissions, prior denials/u);
     assert.doesNotMatch(calls[1].prompt, /Reuse an existing pull request|Reuse the completed diagnosis/);
   } finally {
     await dashboard.close();

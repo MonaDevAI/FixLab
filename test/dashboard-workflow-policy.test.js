@@ -220,7 +220,8 @@ test("efficient prompts publish before broad tests without weakening explicit re
   assert.match(prompt, /Saved delivery workflow: efficient/);
   assert.doesNotMatch(prompt, /create or update a draft pull request|PR readiness stays blocked/);
   const readOnly = buildJobPrompt({ request: "Check behavior", mode: "validate-only", workflow });
-  assert.match(readOnly, /Do not edit files, create commits/);
+  assert.match(readOnly, /Do not edit files other than job-owned transient Playwright journeys and runner evidence/);
+  assert.match(readOnly, /Do not create commits, push branches, create pull requests, or update pull requests/);
   assert.doesNotMatch(readOnly, /Saved efficient delivery policy/);
 });
 

@@ -13,6 +13,18 @@ review, local validation, live validation when configured, evidence, and pull
 request outcome. Never report a skipped or timed-out gate as passed. Never stop
 unrelated processes or expose credentials and private test data.
 
+In validate-only and playwright-only modes, read-only protects product source,
+existing tests, repository configuration and business data; it does not prohibit
+job-owned transient Playwright journeys. Reuse an equivalent existing journey
+first; otherwise create a new focused journey in the configured test directory.
+Use existing reviewed fixtures and authentication helpers unchanged. Update or
+remove only this job's generated journey; retain runner evidence in configured
+artifact directories. Keep the journey for same-job retries while validation is
+blocked; clean up only after owned execution finishes. Never overwrite
+pre-existing tests or change configuration, credentials or browser state.
+Normal runtime permissions, prior denials, managed policy, human sign-in and
+data-safety controls still apply; this grants no runtime access or business writes.
+
 Prefer reviewable repository-owned transient tests and configured runner commands
 over oversized inline scripts. Keep credentials inside existing reviewed
 authentication helpers. After a denial, never replay, encode, conceal, split or

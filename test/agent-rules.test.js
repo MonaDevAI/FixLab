@@ -200,6 +200,27 @@ test("cross-runtime validation guidance stays aligned", () => {
   assert.match(browserRule, /event registration/);
 });
 
+test("transient journey exceptions stay bounded across all execution surfaces", () => {
+  const root = join(testDirectory, "..");
+  for (const entryPoint of ["dashboard/server.js", "bin/fixlab.js"]) {
+    assert.match(readFileSync(join(root, entryPoint), "utf8"), /TRANSIENT_PLAYWRIGHT_GUIDANCE/u, entryPoint);
+  }
+  for (const entryPoint of [
+    "dashboard/workflow-policy.js", "agents/fixlab.md", "com.github.copilot/agents/fixlab.agent.md",
+    "templates/fixlab-autofix.agent.md", ".github/agents/fixlab-autofix.agent.md",
+    ".github/agents/fixlab.agent.md"
+  ]) {
+    const text = readFileSync(join(root, entryPoint), "utf8").replace(/\s+/gu, " ");
+    for (const contract of [
+      /validate-only and playwright-only modes/u, /job-owned transient Playwright journeys/u,
+      /configured test directory/u, /fixtures and authentication helpers unchanged/u,
+      /same-job retries while validation is blocked/u, /Never overwrite pre-existing tests/u,
+      /Normal runtime permissions, prior denials, managed policy, human sign-in/u,
+      /no runtime access or business writes/u
+    ]) { assert.match(text, contract, entryPoint); }
+  }
+});
+
 test("connected recovery and scoped iteration guidance remain aligned across runtimes", () => {
   const root = join(testDirectory, "..");
   for (const entryPoint of [
