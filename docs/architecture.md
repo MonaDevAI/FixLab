@@ -65,6 +65,12 @@ execution finishes. This exception is included in continuation prompts for older
 jobs as well as new jobs; it does not grant runtime permissions, reverse prior
 denials or authorize business-data writes.
 
+Dashboard job prompts scope delivery/publication guidance to code jobs and state
+the marker protocol once rather than repeating it throughout the workflow.
+Validation-only prompts retain authentication, permissions, data-safety and
+evidence requirements without instructions to prepare or publish code changes.
+Focused tests bound the generated prompt sizes and check those retained contracts.
+
 FixLab is distributed and versioned as its own product. It supports Agency
 Copilot as the default compatibility runtime and GitHub Copilot CLI as an
 optional direct runtime. Both provide agent execution, authentication, plugin
