@@ -32,6 +32,8 @@ newly reviewed job; unsuccessful or ambiguous attempts stop job-scoped approval.
 `dataSafety.post.dev`, `.sit` and `.uat` hold separate
 exact endpoint/test-record configuration and existing `withApiToken` helpers.
 Legacy DEV `fixlab_dev_post` and `dataSafety.devPost` remain supported.
+Native Copilot DEV-only: separate consent enables fixlab_dev_write
+POST/PUT/PATCH/DELETE on dataSafety.devWrite HTTPS origins, any record; same job guards.
 No credentials or response body enter
 the result. Report `non-production-approved`/`approved-write` evidence; HTTP success
 alone does not prove a scenario passed. No automatic retries or redirects: an

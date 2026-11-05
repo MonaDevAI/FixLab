@@ -1,6 +1,6 @@
 ---
 name: fixlab-job-scoped-post-approval
-description: Preserve explicit, revision-bound write consent when changing the FixLab POST checkbox, native tool, or job lifecycle.
+description: Preserve explicit, revision-bound write consent when changing scoped POST or broad DEV approval, native tools, or job lifecycle.
 ---
 
 # Job-scoped POST approval
@@ -16,8 +16,14 @@ Work from the FixLab repository root.
   Configuration added later must not enlarge an earlier approval.
 - Preserve the grant through the native worker protocol. Never persist it in
   snapshots or inherit it on hold, recovery, restart, or another job.
-- Both approval modes retain endpoint/test-record checks and existing
-  authentication. Never disable browser guards or substitute a browser write.
+- Scoped POST approval retains endpoint/test-record checks. Separate broad DEV
+  consent selects `mode: dev-origin` on the same memory-only grant and worker
+  protocol; it permits POST/PUT/PATCH/DELETE on exact reviewed `dataSafety.devWrite`
+  HTTPS origins without a record marker. Require fresh explicit DEV-only consent,
+  never generic Allow all tools or a recovered capability preference.
+- Both scopes retain existing authentication. Never disable browser guards or
+  substitute a browser write. API-only/unit-only and explicit read-only contracts
+  cannot be overridden.
 - Stop job-scoped approval after failed or ambiguous attempts. Approval is not
   evidence that a scenario passed.
 
@@ -28,6 +34,6 @@ Verify actual HTTP, SDK, worker, and browser behavior, not prompt text alone:
 
 ```powershell
 node --test test\dashboard-dev-post.test.js
-node --test --test-name-pattern="POST checkbox write consent|native executor forwards" test\dashboard-server.test.js
-npm run test:e2e -- dashboard-readiness --grep "POST checkbox"
+node --test --test-name-pattern="POST checkbox write consent|DEV write checkbox|native executor forwards" test\dashboard-server.test.js
+npm run test:e2e -- dashboard-readiness --grep "POST checkbox|DEV write checkbox"
 ```

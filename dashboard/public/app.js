@@ -97,6 +97,7 @@ const targetEnvironmentSelect = document.querySelector(
   "#target-environment"
 );
 const allowPostRequestsInput = document.querySelector("#allow-post-requests");
+const allowDevWritesInput = document.querySelector("#allow-dev-writes");
 let postUiBlocked = true;
 let postRuntimeAvailable = false;
 let postCheckboxEnvironment = null;
@@ -110,11 +111,17 @@ function updatePostRequestsOption() {
   const key = available ? environment : "";
   if (postCheckboxEnvironment !== key) {
     allowPostRequestsInput.checked = false;
+    allowDevWritesInput.checked = false;
     postCheckboxEnvironment = key;
   }
-  allowPostRequestsInput.disabled = !available;
+  allowDevWritesInput.disabled = !available || environment !== "dev";
+  allowPostRequestsInput.disabled = !available || allowDevWritesInput.checked;
 }
 
+allowDevWritesInput.addEventListener("change", () => {
+  if (allowDevWritesInput.checked) { allowPostRequestsInput.checked = false; }
+  updatePostRequestsOption();
+});
 targetEnvironmentSelect.addEventListener("change", updatePostRequestsOption);
 document.querySelector('[name="testMutationMode"]').addEventListener("change", updatePostRequestsOption);
 const jobInputPanel = document.querySelector("#job-input-panel");
@@ -2472,6 +2479,8 @@ form.addEventListener("submit", async (event) => {
         testMutationMode: data.get("testMutationMode") ?? "",
         allowPostRequests: !allowPostRequestsInput.disabled && data.get("allowPostRequests") === "on",
         postWriteApprovalConfirmed: !allowPostRequestsInput.disabled && data.get("allowPostRequests") === "on",
+        allowDevWrites: !allowDevWritesInput.disabled && data.get("allowDevWrites") === "on",
+        devWriteApprovalConfirmed: !allowDevWritesInput.disabled && data.get("allowDevWrites") === "on",
         prestartFrontend: data.get("prestartFrontend") === "on",
         recordPlaywrightVideo:
           data.get("recordPlaywrightVideo") === "on",
@@ -2485,6 +2494,8 @@ form.addEventListener("submit", async (event) => {
     requestInput.value = "";
     form.querySelector('[name="allowAllTools"]').checked = false;
     allowPostRequestsInput.checked = false;
+    allowDevWritesInput.checked = false;
+    updatePostRequestsOption();
     requestInput.focus();
     selectedScreenshots = [];
     renderScreenshots();

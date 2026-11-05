@@ -22,6 +22,14 @@ does not expand API-only/read-only or other-environment contracts. See the
 [security model](security.md#individually-confirmed-non-production-post) for configuration
 and the privileged-execution boundary.
 
+For broader DEV validation, the separate **Allow all DEV API writes for this job**
+checkbox exposes `fixlab_dev_write` for POST/PUT/PATCH/DELETE on exact reviewed
+`dataSafety.devWrite` HTTPS origins, without endpoint/test-record enumeration.
+It can affect any accessible DEV record and reuses the same revision-bound,
+memory-only grant and lifecycle revocation. No other environment or explicit
+read-only contract is expanded; browser guards remain intact. See
+[DEV write configuration](security.md#broad-dev-only-api-writes).
+
 FixLab is distributed and versioned as its own product. It supports Agency
 Copilot as the default compatibility runtime and GitHub Copilot CLI as an
 optional direct runtime. Both provide agent execution, authentication, plugin

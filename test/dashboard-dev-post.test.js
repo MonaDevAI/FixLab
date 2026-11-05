@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { createDevPostTool, createPostWriteApproval } from "../dashboard/dev-post.js";
+import { createDevPostTool, createDevWriteApproval, createPostWriteApproval } from "../dashboard/dev-post.js";
 import { runCopilotSession } from "../dashboard/copilot-session.js";
 import { createRuntimeRequestBridge, runtimeRequestId } from "../dashboard/runtime-requests.js";
 
@@ -37,6 +37,167 @@ function fixture(t, overrides = {}) {
   return { repository, path, helper, url, profile, save, prompts, requests, args, settings,
     tool: () => createDevPostTool(settings) };
 }
+
+function approveDevOrigins(state) {
+  state.profile.browserAutomation.dataSafety.devWrite = {
+    scope: "api://example-service/access", sessionHelper: "session.mjs",
+    origins: ["https://api.dev.example.test"]
+  };
+  state.save();
+  Object.assign(state.settings, {
+    jobId: "11111111-1111-4111-8111-111111111111", allowPostRequests: true
+  });
+  state.settings.postWriteApproval = createDevWriteApproval(state.repository, "DEV", state.settings.jobId);
+  return state.tool();
+}
+
+test("broad DEV approval supports every write method and any record/path only on exact reviewed origins", async (t) => {
+  const state = fixture(t);
+  delete state.profile.browserAutomation.dataSafety.devPost;
+  const tool = approveDevOrigins(state);
+  assert.equal(tool.name, "fixlab_dev_write");
+  for (const method of ["POST", "PUT", "PATCH", "DELETE"]) {
+    const args = { url: "https://api.dev.example.test/unlisted/path?record=ordinary-record",
+      method, purpose: "Verify explicitly approved DEV writes.",
+      ...(method !== "DELETE" ? { payload: method === "PATCH"
+        ? [{ op: "replace", path: "/name", value: "ANY_DEV_RECORD" }] : { name: "ANY_DEV_RECORD" } } : {}) };
+    const result = await tool.handler(args);
+    assert.equal(result.method, method);
+    assert.equal(result.validationPassed, false);
+    const request = state.requests.at(-1);
+    assert.equal(request.options.method, method);
+    assert.equal(request.options.redirect, "manual");
+    assert.equal(request.options.body, method === "DELETE" ? undefined : JSON.stringify(args.payload));
+    assert.equal(result.responseBodyReturned, false);
+  }
+  assert.equal(state.prompts.length, 0);
+  for (const url of [
+    "https://api.sit.example.test/items", "https://api.uat.example.test/items",
+    "https://api.production.example.test/items", "https://other.api.dev.example.test/items",
+    "https://api.dev.example.test.evil.invalid/items", "https://api.dev.example.test:8443/items",
+    "http://api.dev.example.test/items", "https://user@api.dev.example.test/items",
+    "https://api.dev.example.test/items#fragment"
+  ]) {
+    await assert.rejects(tool.handler({ ...state.args, url, method: "PUT" }), /approved DEV origins/u, url);
+  }
+  for (const change of [
+    { method: "GET" }, { method: "TRACE" }, { method: "put" },
+    { payload: { password: "synthetic-private-value" } }, { payload: { name: "x".repeat(5000) } },
+    { headers: { custom: "value" } }
+  ]) {
+    await assert.rejects(tool.handler({ ...state.args, method: "PUT", ...change }), /requires|sensitive|oversized/u);
+  }
+  assert.equal(state.requests.length, 4);
+});
+
+test("broad DEV approval requires reviewed DEV-only setup and never follows generic tool/POST preferences", async (t) => {
+  const state = fixture(t);
+  const tool = approveDevOrigins(state);
+  assert.ok(tool);
+  const jobId = state.settings.jobId;
+  for (const environment of ["SIT", "UAT", "production", "local", ""]) {
+    assert.throws(() => createDevWriteApproval(state.repository, environment, jobId), /explicitly selected DEV/u);
+  }
+  for (const origin of [
+    "https://api.sit.example.test", "https://api.uat.example.test", "https://api.example.test",
+    "https://api.dev.production.example.test", "https://api.dev.prod.example.test",
+    "https://api.dev.uat.example.test", "https://api.dev.example.test/",
+    "https://api.dev.example.test/path", "http://api.dev.example.test",
+    "https://user@api.dev.example.test", "https://*.dev.example.test"
+  ]) {
+    state.profile.browserAutomation.dataSafety.devWrite.origins = [origin];
+    state.save();
+    assert.throws(() => createDevWriteApproval(state.repository, "DEV", jobId), /DEV.*origins/u, origin);
+  }
+  state.profile.browserAutomation.dataSafety.devWrite.origins = [];
+  state.save();
+  assert.throws(() => createDevWriteApproval(state.repository, "DEV", jobId), /1-16/u);
+  delete state.profile.browserAutomation.dataSafety.devWrite;
+  state.save();
+  assert.throws(() => createDevWriteApproval(state.repository, "DEV", jobId), /Configure dataSafety\.devWrite/u);
+  const noGrant = createDevPostTool({ ...state.settings, postWriteApproval: undefined, toolApprovalMode: "allow-all" });
+  assert.equal(noGrant.name, "fixlab_nonproduction_post");
+  await assert.rejects(noGrant.handler({ ...state.args, method: "PUT" }), /requires/u);
+  assert.equal(state.requests.length, 0);
+});
+
+test("broad DEV grants bind the job/profile/helper and preserve stricter validation contracts", async (t) => {
+  for (const change of ["job", "environment", "unchecked", "profile", "helper", "removed", "api", "unit", "production"]) {
+    const state = fixture(t);
+    const tool = approveDevOrigins(state);
+    if (change === "job") { state.settings.jobId = "22222222-2222-4222-8222-222222222222"; }
+    if (change === "environment") { state.settings.targetEnvironment = "SIT"; }
+    if (change === "unchecked") { state.settings.allowPostRequests = false; }
+    if (["job", "environment", "unchecked"].includes(change)) {
+      assert.throws(state.tool, /Invalid job-scoped/u);
+      continue;
+    }
+    for (const selectedMutationMode of ["none", "intercepted"]) {
+      assert.equal(createDevPostTool({ ...state.settings, selectedMutationMode }), null);
+    }
+    if (change === "profile") { state.profile.name = "Changed"; }
+    if (change === "helper") { writeFileSync(state.helper, `${readFileSync(state.helper, "utf8")}\n`); }
+    if (change === "removed") { delete state.profile.browserAutomation.dataSafety.devWrite; }
+    if (change === "api") { state.profile.browserAutomation.mode = "api"; }
+    if (change === "unit") { state.profile.validation = { liveTestsRequired: false }; }
+    if (change === "production") { state.profile.browserAutomation.apiAuthentication = { productionDatabaseReadOnly: true }; }
+    state.save();
+    await assert.rejects(tool.handler({ ...state.args, method: "PUT" }), /changed|not configured|read-only/u);
+    assert.equal(state.requests.length, 0);
+  }
+});
+
+test("broad DEV approval stops after redirects and failed or ambiguous writes", async (t) => {
+  for (const status of [302, 401, 500, "network", "auth"]) {
+    const state = fixture(t);
+    if (status === "auth") {
+      writeFileSync(state.helper, 'export async function withApiToken() { throw new Error("synthetic-private-value"); }\n');
+    }
+    approveDevOrigins(state);
+    const requests = state.requests;
+    const failing = createDevPostTool({ ...state.settings, request: async (url, options) => {
+      requests.push({ url, options });
+      if (status === "network") { throw new Error("synthetic-private-value"); }
+      return new Response(null, { status: typeof status === "number" ? status : 200 });
+    } });
+    await assert.rejects(failing.handler({ ...state.args, method: "DELETE" }), /Approval is spent|no request was sent/u);
+    await assert.rejects(failing.handler({ ...state.args, method: "PUT" }), /approval has stopped/u);
+    assert.equal(state.requests.length, status === "auth" ? 0 : 1);
+  }
+});
+
+test("native SDK consumes broad DEV approval and expires it on executor shutdown", async (t) => {
+  const state = fixture(t);
+  approveDevOrigins(state);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = state.settings.request;
+  t.after(() => { globalThis.fetch = originalFetch; });
+  let exposedTool;
+  await runCopilotSession({
+    repository: state.repository, sessionId: state.settings.jobId, targetEnvironment: "DEV",
+    allowPostRequests: true, postWriteApproval: state.settings.postWriteApproval,
+    testMutationMode: "approved-write", prompt: "Synthetic approved DEV write."
+  }, {
+    output() {},
+    async ask() { assert.fail("broad DEV approval must not ask again"); },
+    client: {
+      async start() {},
+      async createSession(options) {
+        exposedTool = options.tools[0];
+        assert.equal(exposedTool.name, "fixlab_dev_write");
+        return {
+          rpc: { managedSettings: { async get() { return { failClosed: false }; } } }, on() {},
+          async sendAndWait() {
+            await exposedTool.handler({ ...state.args, method: "PUT" });
+          }
+        };
+      },
+      async stop() { return []; }
+    }
+  });
+  await assert.rejects(exposedTool.handler({ ...state.args, method: "PUT" }), /policy.*shutdown/u);
+  assert.equal(state.requests.length, 1);
+});
 
 test("legacy DEV/SIT/UAT POST preferences still require individual confirmation", async (t) => {
   for (const environment of ["DEV", "SIT", "UAT"]) {

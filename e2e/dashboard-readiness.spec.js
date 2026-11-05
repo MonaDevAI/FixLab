@@ -290,6 +290,57 @@ test("POST checkbox explicitly approves this job only and keeps unchecked writes
   await expect(checkbox).not.toBeChecked();
 });
 
+test("DEV write checkbox is DEV-only, excludes scoped POST and resets consent for every job", async ({ page }) => {
+  const posts = [];
+  await mockChatWorkspace(page, { environments: ["dev", "sit", "uat"] });
+  await page.route("**/api/jobs", async (route) => {
+    posts.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", status: 202,
+      body: JSON.stringify({ job: { id: "dev-write-preference", request: "Synthetic DEV writes.",
+        mode: "validate-only", status: "running", stages: {}, bugs: [], logs: [], activity: [] },
+      queue: [], history: [] }) });
+  });
+  await openWorkflowControls(page, baseUrl);
+  const checkbox = page.locator("#allow-dev-writes");
+  const scoped = page.locator("#allow-post-requests");
+  await expect(checkbox).toBeDisabled();
+  await page.locator("#target-environment").selectOption("dev");
+  await expect(checkbox).toBeEnabled();
+  await expect(checkbox).not.toBeChecked();
+  await expect(page.locator("#dev-writes-guidance")).toContainText("any record your account can access");
+  await scoped.check();
+  await checkbox.check();
+  await expect(scoped).not.toBeChecked();
+  await expect(scoped).toBeDisabled();
+  await page.locator("#target-environment").selectOption("sit");
+  await expect(checkbox).toBeDisabled();
+  await expect(checkbox).not.toBeChecked();
+  await page.locator("#target-environment").selectOption("uat");
+  await expect(checkbox).toBeDisabled();
+  await page.locator("#target-environment").selectOption("dev");
+  await checkbox.check();
+  await page.waitForResponse("**/api/status");
+  await expect(checkbox).toBeChecked();
+  await page.locator("#request").fill("Synthetic broad DEV writes.");
+  await page.locator('input[name="mode"][value="validate-only"]').check();
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0].allowDevWrites).toBe(true);
+  expect(posts[0].devWriteApprovalConfirmed).toBe(true);
+  expect(posts[0].allowPostRequests).toBe(false);
+  await expect(checkbox).not.toBeChecked();
+  await expect(scoped).toBeEnabled();
+  await page.locator("#request").fill("Synthetic next job without broad approval.");
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts[1].allowDevWrites).toBe(false);
+  expect(posts[1].devWriteApprovalConfirmed).toBe(false);
+  await checkbox.check();
+  await page.locator("#job-test-mutation-mode").selectOption("intercepted");
+  await expect(checkbox).toBeDisabled();
+  await expect(checkbox).not.toBeChecked();
+});
+
 test("Allow all is default-off, confirms submission and is cleared for the next job", async ({ page }) => {
   const posts = [];
   await mockChatWorkspace(page);

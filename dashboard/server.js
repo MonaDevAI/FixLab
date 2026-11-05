@@ -44,7 +44,7 @@ import { validateJobFileAccess } from "./runtime-permission-policy.js";
 import { configuredWorkflow, efficientWorkflowGuidance, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
-import { createPostWriteApproval } from "./dev-post.js";
+import { createDevWriteApproval, createPostWriteApproval } from "./dev-post.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "./repository-settings.js";
 import { configuredLinkedApplications, resolveLinkedApplications } from "./linked-applications.js";
@@ -581,7 +581,8 @@ function publicQueue(jobs) {
     prestartFrontend: job.prestartFrontend ?? false,
     inputTokenLimit: job.inputTokenLimit ?? 0,
     toolApprovalMode: job.toolApprovalMode ?? "ask",
-    postWriteApproved: Boolean(job.postWriteApproval?.revision),
+    postWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode !== "dev-origin",
+    devWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "dev-origin",
     fileAccess: job.fileAccess ?? null,
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
@@ -2337,7 +2338,8 @@ function publicJob(job) {
     fileAccess: job.fileAccess ?? null,
     inputTokenLimit: job.inputTokenLimit ?? 0,
     toolApprovalMode: job.toolApprovalMode ?? "ask",
-    postWriteApproved: Boolean(job.postWriteApproval?.revision),
+    postWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode !== "dev-origin",
+    devWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "dev-origin",
     budgetExceeded: job.budgetExceeded === true,
     runtimeDirectoryGrants: (job.runtimeDirectoryGrants ?? []).map((scope) => scope.directory),
     canResume:
@@ -3951,7 +3953,10 @@ export function createDashboardServer({
       job.browserPreflightBlocked = false;
       job.browserSessionNotStarted = false;
     }
-    if (typeof job.testEvidence.allowPostRequests === "boolean") {
+    if (job.postWriteApproval?.mode === "dev-origin") {
+      configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "", true);
+      prompt += "\nThe user explicitly authorized all DEV API writes for this job on the reviewed dataSafety.devWrite HTTPS origins. Use fixlab_dev_write for POST, PUT, PATCH and DELETE without repeat confirmation or endpoint/test-record enumeration. This can change any record accessible to the signed-in account on those origins. The grant binds this job, DEV and the profile/helper revision, expires with execution, and stops after unsuccessful or ambiguous attempts. No SIT/UAT/production, redirects, retries, shell/browser-write substitutes or browser-guard bypass. Existing authentication is required. Report approved-write evidence; HTTP success alone is not scenario success.";
+    } else if (typeof job.testEvidence.allowPostRequests === "boolean") {
       configuredTestSynthesis(currentProfile, job.testEvidence.selectedMutationMode ?? "",
         job.testEvidence.allowPostRequests);
       prompt += `\n${job.postWriteApproval ? "The user explicitly authorized configured DEV/SIT/UAT POST writes for this job through the POST checkbox. Use fixlab_nonproduction_post without repeat confirmation; its approval is bound to this job, environment and reviewed profile/helper revision and expires when execution ends." : "No current job-scoped POST write approval exists. Every data-changing action still requires separate exact destination/payload confirmation through fixlab_nonproduction_post."} Verified read-only POST searches follow the repository query allowlist independently of this checkbox. Approved per-environment endpoint/test-record configuration and an existing authentication helper are required; if missing, name that prerequisite and block only the action. Explicit read-only/intercepted modes, API-only/unit-only contracts and production remain restricted. Never bypass browser guards or substitute a browser/shell write. Report approved-write evidence honestly after a real action; approval alone is not scenario success.`;
@@ -6384,6 +6389,24 @@ export function createDashboardServer({
           return;
         }
       }
+      if ((body.allowDevWrites !== undefined && typeof body.allowDevWrites !== "boolean") ||
+          (body.devWriteApprovalConfirmed !== undefined && typeof body.devWriteApprovalConfirmed !== "boolean")) {
+        sendJson(response, 400, { error: "allowDevWrites and devWriteApprovalConfirmed must be booleans." });
+        return;
+      }
+      if (body.allowDevWrites === true || body.devWriteApprovalConfirmed === true) {
+        if (body.allowDevWrites !== true || body.devWriteApprovalConfirmed !== true ||
+            body.allowPostRequests === true || runtime !== "copilot") {
+          sendJson(response, 400, { error: "Broad DEV writes require explicit DEV write confirmation, native Copilot and no separate POST checkbox." });
+          return;
+        }
+        const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+        if (request.headers.host !== new URL(expectedOrigin).host ||
+            request.headers.origin !== expectedOrigin) {
+          sendJson(response, 403, { error: "DEV write approval requires the dashboard's exact loopback host and origin." });
+          return;
+        }
+      }
       if (body.postWriteApprovalConfirmed !== undefined &&
           typeof body.postWriteApprovalConfirmed !== "boolean") {
         sendJson(response, 400, { error: "postWriteApprovalConfirmed must be a boolean." });
@@ -6506,17 +6529,21 @@ export function createDashboardServer({
         repositoryProfile.applications?.frontend?.healthUrl ?? "";
       let testEvidence;
       try {
+        const allowPostRequests = body.allowDevWrites === true ? true : body.allowPostRequests;
         if (body.allowPostRequests !== undefined && typeof body.allowPostRequests !== "boolean") {
           throw new Error("allowPostRequests must be a boolean.");
         }
-        if (body.allowPostRequests !== undefined && !targetEnvironment &&
+        if (allowPostRequests !== undefined && !targetEnvironment &&
             allowedEnvironments.length === 1 &&
             ["dev", "sit", "uat"].includes(allowedEnvironments[0].toLowerCase()) &&
             repositoryProfile.browserAutomation?.mode !== "api" &&
             repositoryProfile.validation?.liveTestsRequired !== false) {
           targetEnvironment = allowedEnvironments[0];
         }
-        if (body.allowPostRequests === true &&
+        if (body.allowDevWrites === true && targetEnvironment.toLowerCase() !== "dev") {
+          throw new Error("Broad DEV writes are available only for an explicitly selected DEV environment.");
+        }
+        if (allowPostRequests === true &&
             !["dev", "sit", "uat"].includes(targetEnvironment.toLowerCase())) {
           throw new Error("POST support is available only for an explicitly selected DEV, SIT or UAT environment.");
         }
@@ -6526,7 +6553,7 @@ export function createDashboardServer({
         }
         testEvidence = configuredTestSynthesis(repositoryProfile,
           body.testMutationMode === undefined ? "" : body.testMutationMode,
-          body.allowPostRequests);
+          allowPostRequests);
         if (testEvidence.productionDatabaseReadOnly && targetEnvironment && targetEnvironment !== "local") {
           throw new Error("The production database read-only exception permits only the local API environment.");
         }
@@ -6618,7 +6645,9 @@ export function createDashboardServer({
       const jobId = randomUUID();
       let postWriteApproval = null;
       try {
-        if (body.postWriteApprovalConfirmed === true) {
+        if (body.allowDevWrites === true) {
+          postWriteApproval = createDevWriteApproval(resolvedRepository, targetEnvironment, jobId);
+        } else if (body.postWriteApprovalConfirmed === true) {
           postWriteApproval = createPostWriteApproval(resolvedRepository, targetEnvironment, jobId);
         }
       } catch (error) {
@@ -6732,7 +6761,9 @@ export function createDashboardServer({
       if (postWriteApproval) {
         pushLog(job, {
           index: job.nextLogIndex, timestamp: new Date().toISOString(), stream: "dashboard",
-          message: "The user explicitly authorized configured POST writes for this job and selected environment without repeat confirmation. Approval is revision-bound, memory-only and expires with this executor; production and read-only restrictions remain in effect."
+          message: postWriteApproval.mode === "dev-origin"
+            ? "The user explicitly authorized POST/PUT/PATCH/DELETE on reviewed DEV origins for this job, including any record accessible to their account. Approval is revision-bound, memory-only and expires with this executor; other environments and explicit read-only restrictions remain blocked."
+            : "The user explicitly authorized configured POST writes for this job and selected environment without repeat confirmation. Approval is revision-bound, memory-only and expires with this executor; production and read-only restrictions remain in effect."
         });
       }
       if (toolApprovalMode === "allow-all") {

@@ -1870,6 +1870,78 @@ test("POST checkbox write consent is origin-bound, job-scoped and never recovere
   }
 });
 
+test("DEV write checkbox requires fresh native loopback consent and loses broad approval on hold/recovery", async () => {
+  const repository = createGitRepository();
+  const profile = validProfile();
+  profile.environments = ["dev", "sit", "uat"];
+  profile.browserAutomation.dataSafety.devWrite = {
+    scope: "api://example-service/access", sessionHelper: "dev-session.mjs",
+    origins: ["https://api.dev.example.test"]
+  };
+  writeFileSync(join(repository, "dev-session.mjs"),
+    'export async function withApiToken(options, run) { await run("synthetic-value"); }\n');
+  writeFileSync(join(repository, ".github", "fixlab", "repository-profile.json"), JSON.stringify(profile));
+  const launches = [];
+  const executor = (input) => {
+    launches.push(input);
+    return { completion: new Promise(() => {}) };
+  };
+  let running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
+  try {
+    const post = (changes = {}, origin = running.url) => jsonRequest(running.url, "/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) },
+      body: JSON.stringify({ request: "Synthetic approved broad DEV writes.", mode: "validate-only",
+        targetEnvironment: "dev", allowDevWrites: true, devWriteApprovalConfirmed: true, ...changes })
+    });
+    for (const changes of [
+      { allowDevWrites: "yes" }, { allowDevWrites: null }, { allowDevWrites: false },
+      { devWriteApprovalConfirmed: "yes" }, { devWriteApprovalConfirmed: null },
+      { devWriteApprovalConfirmed: false }, { allowPostRequests: true },
+      { targetEnvironment: "sit" }, { targetEnvironment: "uat" },
+      { testMutationMode: "none" }, { testMutationMode: "intercepted" }
+    ]) {
+      assert.equal((await post(changes)).response.status, 400, JSON.stringify(changes));
+    }
+    for (const origin of ["", "https://example.invalid"]) {
+      assert.equal((await post({}, origin)).response.status, 403);
+    }
+    const created = await post();
+    assert.equal(created.response.status, 202, created.body.error);
+    assert.equal(created.body.job.devWriteApproved, true);
+    assert.equal(created.body.job.postWriteApproved, false);
+    assert.equal(launches[0].postWriteApproval.mode, "dev-origin");
+    assert.equal(launches[0].postWriteApproval.jobId, created.body.job.id);
+    assert.equal(launches[0].allowPostRequests, true);
+    assert.match(launches[0].prompt, /fixlab_dev_write.*POST, PUT, PATCH and DELETE/u);
+    const queued = await post();
+    assert.equal(queued.body.queue[0].devWriteApproved, true);
+    const held = await jsonRequest(running.url, "/api/jobs/hold", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId: queued.body.queue[0].id })
+    });
+    assert.equal(held.body.held[0].devWriteApproved, false);
+    const snapshot = readFileSync(join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json"), "utf8");
+    assert.doesNotMatch(snapshot, /"postWriteApproval":|"dev-origin"|"devWriteApproved":true/u);
+    await running.dashboard.close();
+    running = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
+    assert.equal((await jsonRequest(running.url, "/api/status")).body.job.devWriteApproved, false);
+    const resumed = await jsonRequest(running.url, "/api/job/input", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "retry", details: "Resume without broad DEV approval." })
+    });
+    assert.equal(resumed.response.status, 202, resumed.body.error);
+    assert.equal(launches.at(-1).postWriteApproval, undefined);
+    assert.doesNotMatch(launches.at(-1).prompt, /The user explicitly authorized all DEV API writes/u);
+    await running.dashboard.close();
+    running = await startDashboard(repository, executor);
+    assert.equal((await post()).response.status, 400, "Agency cannot gain this native capability");
+  } finally {
+    await running.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("reviewed file trust is exact-job bound, persists on resume/restart and is never inherited by new jobs", async () => {
   const repository = createGitRepository();
   let finish;
@@ -2131,6 +2203,7 @@ process.stdin.once("data", (chunk) => {
     config.fileAccess.jobId === config.sessionId &&
     config.postWriteApproval.jobId === config.sessionId &&
     config.postWriteApproval.environment === "dev" &&
+    config.postWriteApproval.mode === "dev-origin" &&
     config.postWriteApproval.revision === "a".repeat(64) &&
     config.protectedPaths.length === 1 && config.protectedPaths[0].endsWith("session.js");
   process.stdout.write(JSON.stringify({
@@ -2149,7 +2222,7 @@ setInterval(() => {}, 1000);
   try {
     handle = createCopilotExecutor({ packageRoot: runtime })({
       repository, sessionId, prompt: "Synthetic owned budget protocol.",
-      postWriteApproval: { jobId: sessionId, environment: "dev", revision: "a".repeat(64) },
+      postWriteApproval: { jobId: sessionId, environment: "dev", revision: "a".repeat(64), mode: "dev-origin" },
       fileAccess: { mode: "source-read-write", repository: realpathSync.native(repository), jobId: sessionId },
       inputTokenLimit: 100, protectedPaths: [join(repository, "session.js")],
       onUsage(value) { usage.push(value); },
