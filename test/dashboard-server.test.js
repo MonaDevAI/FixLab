@@ -8234,17 +8234,17 @@ test("dashboard PR strategies publish after local gates without waiting for remo
   }
 });
 
-test("validate-only prompt prohibits repository changes", () => {
+test("validate-only prompt protects product source and prohibits publication", () => {
   const prompt = buildJobPrompt({
     request: "Check the current behavior.",
     mode: "validate-only",
     requestType: "bug-fix"
   });
 
-  assert.match(prompt, /Do not edit files/);
+  assert.match(prompt, /Do not edit files other than job-owned transient Playwright journeys and runner evidence/);
   assert.match(prompt, /create commits/);
   assert.match(prompt, /create pull requests/);
-  assert.match(prompt, /without creating or updating a pull request/);
+  assert.match(prompt, /Do not create commits, push branches, create pull requests, or update pull requests/);
   assert.match(prompt, /fix and pr stages must be explicitly skipped/);
   assert.match(prompt, /FIXLAB_ACTIVITY\|stage\|summary/);
   assert.match(prompt, /not hidden chain-of-thought/);
