@@ -88,8 +88,14 @@ In the dashboard, select a current or saved job and click **View summary** in
 the header. This separate read-only view assembles recorded investigation,
 changes, gate results, scenario claims, findings and remaining gaps without an
 AI call or job mutation. It refreshes that same job's evidence while open.
-Missing workarounds, commit inventory and side-effect findings stay unverified;
-it does not infer them from a passed status or parse raw logs. For an AI-written
+Detailed engineering records show the original bug, expected/actual behavior,
+root cause, actual code correction, changed files, commit, regression details
+and risks. They survive retries and restart instead of being replaced by a
+"retained fix" stage message. Older jobs without a record explicitly identify
+the missing explanation; reviewed notes can be imported by a confirmed local
+client bound to that stopped job. Neither agent explanations nor reviewed notes
+are new runner proof. Missing facts stay unverified; the view does not infer
+them from a passed status or parse raw logs. For an AI-written
 handoff with richer context, use the optional prompt in its original conversation.
 
 ## Executor-backed dashboard checks

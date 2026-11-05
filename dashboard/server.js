@@ -39,7 +39,7 @@ import { createSessionRegistry } from "./sessions.js";
 import { inspectBrowserProfileOwnership } from "./browser-ownership.js";
 import { canonicalExecutionRepository, createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
-import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
+import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, safeRuntimeText, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
 import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, allowsUnverifiedDraft, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, TRANSIENT_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
@@ -585,6 +585,8 @@ function publicQueue(jobs) {
     position: index + 1,
     request: safeSummary(job.request),
     requestType: job.requestType,
+    engineeringSummary: job.engineeringSummary ?? null,
+    engineeringSummaryOrigin: job.engineeringSummaryOrigin ?? null,
     model: job.model,
     runtime: job.runtime,
     pullRequestStrategy: job.pullRequestStrategy,
@@ -645,6 +647,51 @@ function publicHistory(jobs) {
 function safePersistedSummary(value) {
   return safeSummary(value).replace(/https?:\/\/\S+/giu, "[omitted URL]");
 }
+
+export function normalizeEngineeringSummary(value) {
+  const strings = ["problem", "expectedBehavior", "actualBehavior", "rootCause", "codeFix", "commit"];
+  const lists = ["changedFiles", "regression", "risks", "workarounds"];
+  if (!value || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).some((key) => ![...strings, ...lists].includes(key))) {
+    throw new Error("Engineering summary must contain only the documented bug, fix and evidence fields.");
+  }
+  const result = {};
+  const sanitize = (field, limit) => safeRuntimeText(field, limit)
+    ? safeSummary(field, limit).replace(/https?:\/\/\S+/giu, "[omitted URL]")
+    : "[Sensitive detail omitted]";
+  for (const key of strings) {
+    const field = value[key] ?? "";
+    if (typeof field !== "string" || field.length > 2000 ||
+        (["problem", "rootCause", "codeFix"].includes(key) && !field.trim())) {
+      throw new Error(`Engineering summary ${key} must be a bounded string; problem, rootCause and codeFix are required.`);
+    }
+    if (key === "commit" && field && !/^[a-f0-9]{7,64}$/u.test(field)) {
+      throw new Error("Engineering summary commit must be a hexadecimal commit reference.");
+    }
+    result[key] = sanitize(field, 2000);
+  }
+  for (const key of lists) {
+    const fields = value[key] ?? [];
+    if (!Array.isArray(fields) || fields.length > 20 ||
+        fields.some((field) => typeof field !== "string" || !field.trim() || field.length > 500)) {
+      throw new Error(`Engineering summary ${key} must contain at most 20 bounded strings.`);
+    }
+    if (key === "changedFiles" && fields.some((field) =>
+      /^[\\/]/u.test(field.trim()) || /[:*?"\0\r\n]/u.test(field) ||
+      field.trim().replace(/\\/gu, "/").split("/").some((part) =>
+        !part.trim() || part.trim() === "." || part.trim() === ".."))) {
+      throw new Error("Engineering summary files must be relative paths without traversal.");
+    }
+    result[key] = fields.map((field) => sanitize(field, 500));
+  }
+  if (Buffer.byteLength(JSON.stringify(result)) > 16384) {
+    throw new Error("Engineering summary exceeds 16 KiB.");
+  }
+  return result;
+}
+
+const ENGINEERING_SUMMARY_GUIDANCE =
+  '- At the reviewed fix checkpoint and before finishing, emit FIXLAB_SUMMARY| followed by one-line JSON: problem, expectedBehavior, actualBehavior, rootCause, codeFix (explain the actual change and why), changedFiles[], regression[], risks[], workarounds[], commit (hex or empty). Required: problem, rootCause, codeFix. Use relative file paths, bounded strings, no secrets/private URLs. Preserve the original bug-to-fix explanation across retries; update only for new evidence. Separate historical, skipped and unverified tests from actual passes; report no-change outcomes honestly.';
 
 function dashboardSnapshot(job) {
   return {
@@ -735,6 +782,8 @@ function dashboardSnapshot(job) {
       owner: safePersistedSummary(bug.owner),
       summary: safePersistedSummary(bug.summary)
     })),
+    engineeringSummary: job.engineeringSummary ?? null,
+    engineeringSummaryOrigin: job.engineeringSummaryOrigin ?? null,
     canResume: false,
     canComment: false
   };
@@ -1347,6 +1396,7 @@ ${videoGuidance}
 ${manualLocalhostGuidance}
 ${readOnly ? "" : branchNamingGuidance}
 - ${readOnly ? "Do not edit files other than job-owned transient Playwright journeys and runner evidence. Do not create commits, push branches, create pull requests, or update pull requests." : "Make the smallest complete change that resolves the request. Make no code change when the evidence shows none is required."}
+${readOnly ? "" : ENGINEERING_SUMMARY_GUIDANCE}
 ${readOnly ? TRANSIENT_PLAYWRIGHT_GUIDANCE : ""}
 - Autonomously complete the lifecycle without asking the user to direct routine engineering steps.
 ${readOnly ? "" : `- Saved delivery workflow: ${unverifiedDraft ? "explicit unverified draft; local and live checks are deferred, not passed" : efficient ? `efficient; focused checks before the ${workflow.publication === "ready" ? "ready-for-review" : "draft"} PR, broader checks only by saved preference or explicit selection` : "strict; all applicable configured gates remain required for full validation and ready publication"}. This recorded job policy takes precedence over the product default.`}
@@ -1436,8 +1486,8 @@ function runGit(repository, args) {
   return result.status === 0 ? result.stdout.trim() : null;
 }
 
-function safeSummary(value) {
-  const text = String(value ?? "").replace(/\s+/g, " ").trim().slice(0, 300);
+function safeSummary(value, maximumLength = 300) {
+  const text = String(value ?? "").replace(/\s+/g, " ").trim().slice(0, maximumLength);
   if (
     /(?:password|passwd|secret|token|authorization|bearer|cookie|connection.?string|private.?key|client.?secret|dashboard[-\\/]+artifacts)/i.test(
       text
@@ -2331,6 +2381,8 @@ function publicJob(job) {
     id: job.id,
     request: job.request,
     requestType: job.requestType,
+    engineeringSummary: job.engineeringSummary ?? null,
+    engineeringSummaryOrigin: job.engineeringSummaryOrigin ?? null,
     deferValidation: job.deferValidation === true,
     skipLiveTests: job.skipLiveTests === true,
     useDeployedBackend: job.useDeployedBackend === true,
@@ -2619,15 +2671,65 @@ function appendOutput(job, stream, text) {
 }
 
 function splitRenderedMarkers(line) {
+  const summaryIndex = line.indexOf("FIXLAB_SUMMARY|");
+  if (summaryIndex > 0 && /^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s)/u.test(line)) {
+    return [...splitRenderedMarkers(line.slice(0, summaryIndex)), ...splitRenderedMarkers(line.slice(summaryIndex))];
+  }
+  if (summaryIndex === 0) {
+    if (!line.slice("FIXLAB_SUMMARY|".length).trimStart().startsWith("{")) {
+      return [line];
+    }
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = "FIXLAB_SUMMARY|".length; index < line.length; index += 1) {
+      const character = line[index];
+      if (quoted) {
+        if (escaped) {escaped = false;}
+        else if (character === "\\") {escaped = true;}
+        else if (character === '"') {quoted = false;}
+      } else if (character === '"') {quoted = true;}
+      else if (character === "{") {depth += 1;}
+      else if (character === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          try {
+            JSON.parse(line.slice("FIXLAB_SUMMARY|".length, index + 1));
+          } catch {
+            return [line];
+          }
+          const remainder = line.slice(index + 1).trim();
+          if (remainder && !/^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST|SUMMARY)(?:\||\s)/u.test(remainder)) {
+            return [line];
+          }
+          return [line.slice(0, index + 1), ...(remainder ? splitRenderedMarkers(remainder) : [])];
+        }
+      }
+    }
+    return [line];
+  }
   if (!/^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s)/u.test(line)) {
     return [line];
   }
   return line
-    .split(/(?=FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST)(?:\||\s))/u)
+    .split(/(?=FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST|SUMMARY)(?:\||\s))/u)
     .filter(Boolean);
 }
 
 function appendLine(job, stream, line) {
+  if (line.startsWith("FIXLAB_SUMMARY|")) {
+    try {
+      if (job.permissionRequest || Buffer.byteLength(line) > 16384) {
+        throw new Error("Summary is blocked by pending permission review or exceeds 16 KiB.");
+      }
+      job.engineeringSummary = normalizeEngineeringSummary(JSON.parse(line.slice("FIXLAB_SUMMARY|".length)));
+      job.engineeringSummaryOrigin = "agent-reported";
+    } catch (error) {
+      pushLog(job, { index: job.nextLogIndex, timestamp: new Date().toISOString(),
+        stream: "dashboard", message: `Engineering summary rejected: ${error instanceof SyntaxError ? "Invalid JSON." : error.message}` });
+    }
+    return;
+  }
   const usage = parseUsageLine(line);
   if (usage) {
     if (job.runtime !== "copilot") {
@@ -3025,8 +3127,12 @@ User input:
 ${details}
 ${manualResult}
 ${transientGuidance}
+${job.mode === "fix-and-validate" && job.engineeringSummary
+    ? `Retained bug-to-code-fix explanation (recorded, not new verification):\n${JSON.stringify(job.engineeringSummary)}`
+    : ""}
 
 Resume requirements:
+${job.mode === "fix-and-validate" ? ENGINEERING_SUMMARY_GUIDANCE : ""}
 - Reuse the completed diagnosis, current worktree, validation evidence, branch, and pull request from this session.
 - Re-read repository instructions and the effective diff only when the new input changes them.
 - Continue from the blocked or failed stage, or treat this as a focused addition to the completed job.
@@ -3844,6 +3950,8 @@ export function createDashboardServer({
       workspaceStash: null,
       validationBaseline: null,
       validationHistory: { complete: true, gates: [] },
+      engineeringSummary: null,
+      engineeringSummaryOrigin: null,
       finishedAt: null,
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
@@ -4847,6 +4955,42 @@ export function createDashboardServer({
         history: dashboardHistory(),
         historyWarning: dashboardHistoryWarning
       });
+      return;
+    }
+
+    if (request.method === "POST" && requestUrl.pathname === "/api/job/engineering-summary") {
+      try {
+        const expectedHost = `${DASHBOARD_HOST}:${server.address().port}`;
+        if (request.headers.host !== expectedHost || request.headers.origin ||
+            !request.headers["content-type"]?.startsWith("application/json")) {
+          throw new Error("Engineering notes require a local JSON client without a browser Origin.");
+        }
+        const body = await readJsonBody(request, 16384);
+        if (body.instanceId !== sessions.id || body.repository !== resolvedRepository ||
+            body.confirmed !== true || typeof body.jobId !== "string") {
+          throw new Error("Engineering notes require the exact instance, repository, job and explicit confirmation.");
+        }
+        if (!dashboardHistoryPath) {
+          throw new Error("Engineering notes require persistable repository history.");
+        }
+        const job = [currentJob, ...heldJobs, ...completedJobs, ...persistedJobs]
+          .find((candidate) => candidate?.id === body.jobId);
+        if (closing || !job || job.executorStopping || (job === currentJob && activeHandle) ||
+            !["passed", "failed", "blocked", "held", "cancelled"].includes(job.status)) {
+          throw new Error("Engineering notes require an existing stopped job with a settled executor.");
+        }
+        const summary = normalizeEngineeringSummary(body.summary);
+        job.engineeringSummary = summary;
+        job.engineeringSummaryOrigin = "reviewed-note";
+        persistDashboardState();
+        if (dashboardHistoryWarning || !persistedJobs.some((snapshot) => snapshot.id === job.id)) {
+          sendJson(response, 503, { error: "Engineering notes are retained in memory but could not be persisted." });
+          return;
+        }
+        sendJson(response, 200, { jobId: job.id, engineeringSummary: summary, origin: "reviewed-note" });
+      } catch (error) {
+        sendJson(response, 400, { error: error.message });
+      }
       return;
     }
 
