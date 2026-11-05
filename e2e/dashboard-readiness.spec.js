@@ -2358,6 +2358,19 @@ test("job summary shows recorded findings and gaps without execution, and refres
       fix: { status: "pending", message: "Correction not applied" },
       "live-test": { status: "blocked", message: "Authentication unavailable" }
     },
+    engineeringSummary: {
+      problem: "A removal request returns 404",
+      expectedBehavior: "Remove the selected mapping",
+      actualBehavior: "Gateway returns 404",
+      rootCause: "An existing operation was omitted from the gateway specification",
+      codeFix: "Publish DELETE with both required path parameters and a boolean response",
+      changedFiles: ["deployment\\contract.json", "tests\\contract.test.js"],
+      regression: ["Assert the DELETE operation and its success response"],
+      risks: ["Deploy the contract before validating live removal"],
+      workarounds: ["No validated workaround recorded"],
+      commit: "a".repeat(40)
+    },
+    engineeringSummaryOrigin: "agent-reported",
     validation: { scope: "all", gates: [{ id: "regression-tests", status: "failed", required: true, durationMs: 25 }] },
     testEvidence: { reported: true, scenario: "Check role visibility", source: "synthetic-intercepted", mutationMode: "intercepted" },
     bugs: [{ id: "bug-1", outcome: "unresolved", owner: "application", summary: "Role selection remains incorrect" }],
@@ -2369,10 +2382,14 @@ test("job summary shows recorded findings and gaps without execution, and refres
   const summary = page.locator("#job-summary-content");
   await expect(summary).toContainText("Interim outcome");
   await expect(summary).toContainText("Confirmed route mismatch");
+  await expect(summary).toContainText("Bug-to-code-fix explanation");
+  await expect(summary).toContainText("Publish DELETE with both required path parameters");
+  await expect(summary).toContainText("Changed file: deployment\\contract.json");
+  await expect(summary).toContainText("Assert the DELETE operation and its success response");
   await expect(summary).toContainText("regression-tests: failed (required)");
   await expect(summary).toContainText("Role selection remains incorrect");
   await expect(summary).toContainText("Synthetic or intercepted tests do not prove real backend writes");
-  await expect(summary).toContainText("Validated workaround, tradeoffs and fix-induced side effects: Not verified");
+  await expect(summary).toContainText("No validated workaround recorded");
   await expect(summary).not.toContainText("Raw log sentinel");
   job.status = "passed";
   job.validation.gates[0].status = "stale";
@@ -2403,6 +2420,7 @@ test("job summary follows historical selection, handles missing evidence and ren
   await expect(summary).toContainText(saved.id);
   await expect(summary).not.toContainText(job.request);
   await expect(summary).toContainText("No executor-backed gate results recorded");
+  await expect(summary).toContainText("Detailed code-change explanation was not retained");
   await expect(summary).toContainText("[Sensitive detail omitted]");
   await expect(summary).not.toContainText("private.example.test");
   await expect(summary).not.toContainText("private-sentinel");

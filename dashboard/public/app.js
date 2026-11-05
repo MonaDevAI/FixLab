@@ -12,7 +12,7 @@ const stageNames = [
 ];
 
 function summaryText(value) {
-  const result = String(value ?? "").replace(/\s+/gu, " ").trim().slice(0, 1000);
+  const result = String(value ?? "").replace(/\s+/gu, " ").trim().slice(0, 2000);
   if (/(?:password|passwd|secret|token|authorization|bearer|cookie|connection.?string|private.?key)/iu.test(result)) {
     return "[Sensitive detail omitted]";
   }
@@ -23,6 +23,7 @@ function jobSummarySections(job) {
   const gates = job.validation?.gates ?? [];
   const unresolved = stageNames.filter((name) => job.stages?.[name]?.status !== "passed");
   const evidence = job.testEvidence;
+  const detail = job.engineeringSummary;
   const interim = ["running", "queued", "holding"].includes(job.status);
   const stage = (name) => {
     const recorded = job.stages?.[name];
@@ -32,14 +33,27 @@ function jobSummarySections(job) {
     { heading: interim ? "Interim outcome" : "Recorded outcome", lines: [
       `Job: ${summaryText(job.id)} | Status: ${summaryText(job.status)}`,
       `Request: ${summaryText(job.request)}`,
+      ...(detail ? [
+        `Bug: ${summaryText(detail.problem)}`,
+        `Expected behavior: ${summaryText(detail.expectedBehavior)}`,
+        `Actual behavior: ${summaryText(detail.actualBehavior)}`
+      ] : []),
       `Environment: ${summaryText(job.targetEnvironment)} | Mode: ${summaryText(job.mode)}`,
       "Job completion is not a claim of complete regression coverage."
     ] },
-    { heading: "Investigation and changes (agent-reported)", lines: [
+    { heading: detail ? "Bug-to-code-fix explanation" : "Investigation and changes (agent-reported)", lines: [
+      ...(detail ? [
+        `Explanation source: ${summaryText(job.engineeringSummaryOrigin)}`,
+        `Root cause: ${summaryText(detail.rootCause)}`,
+        `Code fix: ${summaryText(detail.codeFix)}`,
+        ...(detail.changedFiles ?? []).map((file) => `Changed file: ${summaryText(file)}`),
+        `Commit reference: ${summaryText(detail.commit)}`
+      ] : ["Detailed code-change explanation was not retained for this job. Stage messages below are not a substitute for that evidence."]),
       stage("intake"), stage("diagnosis"), stage("reproduce"), stage("fix"), stage("review"),
-      "Exact changed-file and commit inventory: Not verified by this summary."
+      "Code references above are recorded explanations, not newly executed verification."
     ] },
     { heading: "Tests and regression", lines: [
+      ...(detail?.regression ?? []).map((item) => `Recorded regression detail: ${summaryText(item)}`),
       ...gates.map((gate) => `${summaryText(gate.id)}: ${summaryText(gate.status)}${gate.required ? " (required)" : " (optional or not applicable)"}${Number.isFinite(gate.durationMs) ? ` | ${gate.durationMs} ms` : ""}${gate.summary ? ` | ${summaryText(gate.summary)}` : ""}`),
       ...(gates.length ? [] : ["No executor-backed gate results recorded."]),
       `Gate scope: ${summaryText(job.validation?.scope)}. Only the listed configured gates are accounted for.`,
@@ -56,7 +70,11 @@ function jobSummarySections(job) {
       "Deployed-system checks do not verify unpublished local code. Publication does not establish merge or deployment."
     ] },
     { heading: "Workarounds and maintenance traps", lines: [
-      "Validated workaround, tradeoffs and fix-induced side effects: Not verified unless explicitly recorded in the findings above.",
+      ...(detail?.workarounds ?? []).map((item) => `Workaround: ${summaryText(item)}`),
+      ...(detail?.risks ?? []).map((item) => `Risk / must-know: ${summaryText(item)}`),
+      ...((detail?.workarounds?.length || detail?.risks?.length) ? [] : [
+        "Validated workaround, tradeoffs and fix-induced side effects: Not verified unless explicitly recorded in the findings above."
+      ]),
       "Do not infer that no risks exist merely because no finding was recorded."
     ] },
     { heading: "Remaining gaps and next actions", lines: [

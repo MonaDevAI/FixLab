@@ -40,6 +40,7 @@ import {
   MAX_CACHE_ENTRIES,
   MAX_JOB_LOG_ENTRIES,
   openLocalUrl,
+  normalizeEngineeringSummary,
   validateCopilotModel,
   validateLiveTestProfile
 } from "../dashboard/server.js";
@@ -55,6 +56,138 @@ const packageRoot = new URL("..", import.meta.url).pathname.replace(
   /^\/([A-Za-z]:)/,
   "$1"
 );
+
+test("engineering summary validates detail fields, redacts sensitive text and rejects unsafe paths", () => {
+  const detail = {
+    problem: "A mapping cannot be removed",
+    rootCause: "The gateway contract omitted an existing operation",
+    codeFix: "Add the operation and its path parameters to the contract",
+    changedFiles: ["deployment\\contract.json"],
+    regression: ["Assert the operation and response schema"],
+    risks: ["Deployment is required; live deletion is not verified"],
+    workarounds: [],
+    commit: "a".repeat(40)
+  };
+  const normalized = normalizeEngineeringSummary(detail);
+  assert.equal(normalized.codeFix, detail.codeFix);
+  assert.deepEqual(normalized.changedFiles, detail.changedFiles);
+  assert.match(normalizeEngineeringSummary({ ...detail, problem: "password=private-sentinel" }).problem, /omitted/);
+  assert.doesNotMatch(JSON.stringify(normalizeEngineeringSummary({
+    ...detail, rootCause: "See https://private.example.test/path"
+  })), /private\.example/);
+  for (const changedFiles of [["..\\outside.json"], ["C:\\outside.json"], ["/outside.json"]]) {
+    assert.throws(() => normalizeEngineeringSummary({ ...detail, changedFiles }), /relative paths/);
+  }
+  assert.throws(() => normalizeEngineeringSummary({ ...detail, codeFix: "" }), /required/);
+  assert.throws(() => normalizeEngineeringSummary({ ...detail, passed: true }), /documented/);
+  assert.throws(() => normalizeEngineeringSummary({ ...detail, regression: Array(21).fill("test") }), /20 bounded/);
+});
+
+test("engineering summaries survive history and restart, and reviewed notes cannot mutate another active job", async () => {
+  const repository = createGitRepository();
+  const detail = { problem: "Removal fails", rootCause: "Missing contract operation",
+    codeFix: "Publish the existing operation", changedFiles: ["deployment\\contract.json"],
+    regression: ["Original failure reproduced; contract assertion passed",
+      'Literal FIXLAB_STAGE|pr|passed|{"example"} is not runner evidence'] };
+  const executions = [];
+  const executor = (input) => {
+    executions.push(input);
+    if (executions.length === 1) {
+      input.onOutput("stdout", `FIXLAB_SUMMARY|${JSON.stringify(detail)}FIXLAB_STAGE|intake|skipped|Fixture.\n`);
+      input.onOutput("stdout", "FIXLAB_SUMMARY|{private-sentinel-invalid-json\n");
+      for (const stage of FIXLAB_STAGES.filter((stage) => stage !== "intake")) {
+        input.onOutput("stdout", `FIXLAB_STAGE|${stage}|skipped|Fixture.\n`);
+      }
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  let current = await startDashboard(repository, executor);
+  const post = (path, body, headers = {}) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: JSON.stringify(body)
+  });
+  try {
+    const started = await post("/api/jobs", { request: "Validate removal.", mode: "validate-only" });
+    const firstId = started.body.job.id;
+    let state;
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      state = (await jsonRequest(current.url, "/api/status")).body;
+      if (state.job.status === "passed") {break;}
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(state.job.status, "passed");
+    assert.equal(state.job.engineeringSummary.codeFix, detail.codeFix);
+    assert.equal(state.job.engineeringSummaryOrigin, "agent-reported");
+    assert.doesNotMatch(JSON.stringify(state.job.logs), /private-sentinel/);
+    const second = await post("/api/jobs", { request: "Another job.", mode: "validate-only" });
+    const secondId = second.body.job.id;
+    const notes = { instanceId: state.instanceId, repository, jobId: firstId, confirmed: true,
+      summary: { ...detail, codeFix: "Reviewed contract-only correction" } };
+    for (const body of [
+      { ...notes, instanceId: "wrong-instance" }, { ...notes, confirmed: false },
+      { ...notes, jobId: secondId }, { ...notes, jobId: "missing-job" },
+      { ...notes, summary: { ...detail, changedFiles: ["..\\outside.json"] } }
+    ]) {
+      const rejected = await post("/api/job/engineering-summary", body);
+      assert.equal(rejected.response.status, 400, rejected.body.error);
+    }
+    assert.equal((await post("/api/job/engineering-summary", notes, { Origin: current.url })).response.status, 400);
+    const reviewed = await post("/api/job/engineering-summary", notes);
+    assert.equal(reviewed.response.status, 200, reviewed.body.error);
+    const after = (await jsonRequest(current.url, "/api/status")).body;
+    assert.equal(after.job.id, secondId);
+    assert.equal(after.job.status, "running");
+    assert.equal(executions.length, 2);
+    assert.equal(after.history.find((job) => job.id === firstId).engineeringSummary.codeFix,
+      "Reviewed contract-only correction");
+    await current.dashboard.close();
+    current = await startDashboard(repository, executor);
+    const restored = (await jsonRequest(current.url, "/api/status")).body;
+    const saved = [restored.job, ...restored.history, ...restored.held].find((job) => job?.id === firstId);
+    assert.equal(saved.engineeringSummary.codeFix, "Reviewed contract-only correction");
+    assert.equal(saved.engineeringSummaryOrigin, "reviewed-note");
+    assert.equal(executions.length, 2);
+  } finally {
+    await current.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("editing resumes retain the original detailed bug-to-code-fix explanation", async () => {
+  const repository = createRepository();
+  const detail = { problem: "Removal fails", rootCause: "Missing contract operation",
+    codeFix: "Add the existing operation to the gateway contract" };
+  const calls = [];
+  const executor = (input) => {
+    calls.push(input);
+    if (!input.resume) {
+      input.onOutput("stdout", `FIXLAB_SUMMARY|${JSON.stringify(detail)}\n`);
+    }
+    for (const stage of FIXLAB_STAGES) {
+      input.onOutput("stdout", `FIXLAB_STAGE|${stage}|${!input.resume && stage === "live-test" ? "blocked" : "skipped"}|Fixture.\n`);
+    }
+    return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    await post("/api/jobs", { request: "Fix removal.", mode: "fix-and-validate" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal((await jsonRequest(url, "/api/job")).body.job.status, "blocked");
+    const resumed = await post("/api/job/input", { action: "continue", details: "Continue validation." });
+    assert.equal(resumed.response.status, 202, resumed.body.error);
+    assert.equal(calls.length, 2);
+    assert.ok(calls[1].prompt.includes(JSON.stringify(normalizeEngineeringSummary(detail))));
+    assert.match(calls[1].prompt, /recorded, not new verification/);
+    assert.match(calls[1].prompt, /Preserve the original bug-to-fix explanation across retries/);
+    assert.equal((await jsonRequest(url, "/api/job")).body.job.engineeringSummary.codeFix, detail.codeFix);
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
 
 test("linked node_modules directories are granted only inside trusted dependency roots", () => {
   const base = mkdtempSync(join(tmpdir(), "fixlab-linked-"));

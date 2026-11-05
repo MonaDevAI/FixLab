@@ -71,6 +71,22 @@ Validation-only prompts retain authentication, permissions, data-safety and
 evidence requirements without instructions to prepare or publish code changes.
 Focused tests bound the generated prompt sizes and check those retained contracts.
 
+Code jobs emit a bounded `FIXLAB_SUMMARY|<one-line JSON>` engineering explanation
+at their reviewed fix checkpoint and completion. Required fields are `problem`,
+`rootCause` and `codeFix`; optional fields capture expected/actual behavior,
+relative changed files, a commit reference, regression details, risks and
+workarounds. The dashboard sanitizes and preserves this record independently of
+short stage messages through retries, history and restart. Invalid/oversized
+records are explicitly rejected; neither records nor reviewed notes can mark
+tests passed or grant permissions.
+
+For an older stopped job, an explicitly confirmed local JSON client can submit
+reviewed notes to `/api/job/engineering-summary`, binding the exact instance,
+repository and job. It rejects browser Origins, active/unknown jobs and unsafe
+paths. Notes are labeled `reviewed-note`, not runner proof; agent records are
+labeled `agent-reported`. Missing details are not invented from current source
+or a different job. The summary view does not execute tests or fetch source.
+
 FixLab is distributed and versioned as its own product. It supports Agency
 Copilot as the default compatibility runtime and GitHub Copilot CLI as an
 optional direct runtime. Both provide agent execution, authentication, plugin
