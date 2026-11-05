@@ -38,6 +38,7 @@ import {
   MAX_JOB_ACTIVITY_ENTRIES,
   MAX_CACHE_BYTES,
   MAX_CACHE_ENTRIES,
+  MAX_DASHBOARD_HISTORY_ENTRIES,
   MAX_JOB_LOG_ENTRIES,
   openLocalUrl,
   normalizeEngineeringSummary,
@@ -162,6 +163,49 @@ test("engineering summaries survive history and restart, and reviewed notes cann
     assert.equal(executions.length, 2);
   } finally {
     await current.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("engineering notes report when the target falls outside the persisted history window", async () => {
+  const repository = createGitRepository();
+  let executions = 0;
+  const executor = (input) => {
+    executions += 1;
+    if (executions === 1) {
+      for (const stage of FIXLAB_STAGES) {
+        input.onOutput("stdout", `FIXLAB_STAGE|${stage}|skipped|Fixture.\n`);
+      }
+      return { completion: Promise.resolve({ code: 0 }), terminate() {} };
+    }
+    return { completion: new Promise(() => {}), terminate() {} };
+  };
+  const { dashboard, url } = await startDashboard(repository, executor);
+  const post = (path, body) => jsonRequest(url, path, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+  });
+  try {
+    const first = await post("/api/jobs", { request: "Older completed job.", mode: "validate-only" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await post("/api/jobs", { request: "Active job.", mode: "validate-only" });
+    for (let index = 0; index < MAX_DASHBOARD_HISTORY_ENTRIES - 1; index += 1) {
+      const queued = await post("/api/jobs", { request: `Queued job ${index}.`, mode: "validate-only" });
+      assert.equal(queued.response.status, 202, queued.body.error);
+      const held = await post("/api/jobs/hold", { jobId: queued.body.queuedJob.id });
+      assert.equal(held.response.status, 202, held.body.error);
+    }
+    const state = (await jsonRequest(url, "/api/status")).body;
+    const result = await post("/api/job/engineering-summary", {
+      instanceId: state.instanceId, repository, jobId: first.body.job.id, confirmed: true,
+      summary: { problem: "Older bug", rootCause: "Original cause", codeFix: "Reviewed correction" }
+    });
+    assert.equal(result.response.status, 503, result.body.error);
+    assert.match(result.body.error, /could not be persisted/);
+    const saved = JSON.parse(readFileSync(join(dirname(createCacheContext(repository).cachePath),
+      "dashboard-jobs.json"), "utf8"));
+    assert.ok(!saved.jobs.some((job) => job.id === first.body.job.id));
+  } finally {
+    await dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });

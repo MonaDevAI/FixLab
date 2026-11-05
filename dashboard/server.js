@@ -4983,7 +4983,7 @@ export function createDashboardServer({
         job.engineeringSummary = summary;
         job.engineeringSummaryOrigin = "reviewed-note";
         persistDashboardState();
-        if (dashboardHistoryWarning) {
+        if (dashboardHistoryWarning || !persistedJobs.some((snapshot) => snapshot.id === job.id)) {
           sendJson(response, 503, { error: "Engineering notes are retained in memory but could not be persisted." });
           return;
         }
