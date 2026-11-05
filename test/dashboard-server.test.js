@@ -75,7 +75,8 @@ test("engineering summary validates detail fields, redacts sensitive text and re
   assert.doesNotMatch(JSON.stringify(normalizeEngineeringSummary({
     ...detail, rootCause: "See https://private.example.test/path"
   })), /private\.example/);
-  for (const changedFiles of [["..\\outside.json"], ["C:\\outside.json"], ["/outside.json"]]) {
+  for (const changedFiles of [["..\\outside.json"], ["C:\\outside.json"], ["/outside.json"],
+    [" ../outside.json"], [" /outside.json"], ["folder/.. "], ["folder/ .. /outside.json"]]) {
     assert.throws(() => normalizeEngineeringSummary({ ...detail, changedFiles }), /relative paths/);
   }
   assert.throws(() => normalizeEngineeringSummary({ ...detail, codeFix: "" }), /required/);
@@ -5455,6 +5456,10 @@ test("dashboard holds queued and active jobs and resumes the same session", asyn
 
     executions[0].options.onOutput(
       "stdout",
+      'FIXLAB_SUMMARY|{"problem":"Removal fails","rootCause":"Missing operation","codeFix":"Retained correction"}\n'
+    );
+    executions[0].options.onOutput(
+      "stdout",
       "FIXLAB_STAGE|intake|passed|Intake retainedFIXLAB_ACTIVITY|diagnosis|Retain partial output"
     );
     const holding = await jsonRequest(url, "/api/jobs/hold", {
@@ -5495,6 +5500,10 @@ test("dashboard holds queued and active jobs and resumes the same session", asyn
       resumedActive.body.queue.map((job) => job.id),
       [firstId]
     );
+    assert.equal(resumedActive.body.queue[0].engineeringSummary.codeFix, "Retained correction");
+    assert.equal(resumedActive.body.queue[0].engineeringSummaryOrigin, "agent-reported");
+    const reloaded = await jsonRequest(url, "/api/status");
+    assert.equal(reloaded.body.queue[0].engineeringSummary.codeFix, "Retained correction");
 
     for (const stage of FIXLAB_STAGES) {
       executions[1].options.onOutput(
@@ -5580,6 +5589,8 @@ test("dashboard restarts a completed job with a new id and session", async () =>
   const executor = (options) => {
     executions.push(options);
     if (executions.length === 1) {
+      options.onOutput("stdout",
+        'FIXLAB_SUMMARY|{"problem":"Original bug","rootCause":"Original cause","codeFix":"Original correction"}\n');
       for (const stage of FIXLAB_STAGES) {
         options.onOutput(
           "stdout",
@@ -5624,6 +5635,9 @@ test("dashboard restarts a completed job with a new id and session", async () =>
     assert.notEqual(executions[1].sessionId, originalSessionId);
     assert.equal(restarted.body.job.status, "running");
     assert.equal(restarted.body.history[0].id, originalId);
+    assert.equal(restarted.body.job.engineeringSummary, null);
+    assert.equal(restarted.body.job.engineeringSummaryOrigin, null);
+    assert.equal(restarted.body.history[0].engineeringSummary.codeFix, "Original correction");
     assert.equal(
       restarted.body.job.request,
       "Restart this completed lifecycle job."
@@ -6410,6 +6424,15 @@ test("idle finalization retains the atomic lease and blocks resume until executo
       body: JSON.stringify({ action: "retry", details: "Retry too soon." })
     });
     assert.equal(resume.response.status, 409);
+    const instance = (await jsonRequest(url, "/api/status")).body.instanceId;
+    const notes = { instanceId: instance, repository, jobId: status.body.job.id, confirmed: true,
+      summary: { problem: "Removal fails", rootCause: "Missing operation", codeFix: "Reviewed correction" } };
+    const importNotes = () => jsonRequest(url, "/api/job/engineering-summary", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(notes)
+    });
+    const unsettled = await importNotes();
+    assert.equal(unsettled.response.status, 400);
+    assert.match(unsettled.body.error, /settled executor/);
     finish({ code: null, signal: "SIGTERM" });
     for (let attempt = 0; attempt < 40; attempt += 1) {
       status = await jsonRequest(url, "/api/job");
@@ -6419,6 +6442,9 @@ test("idle finalization retains the atomic lease and blocks resume until executo
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     assert.equal(status.body.job.canResume, true);
+    const settled = await importNotes();
+    assert.equal(settled.response.status, 200, settled.body.error);
+    assert.equal(settled.body.origin, "reviewed-note");
     contender.acquire("after-exit").release();
   } finally {
     finish?.({ code: null });

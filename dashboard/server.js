@@ -585,6 +585,8 @@ function publicQueue(jobs) {
     position: index + 1,
     request: safeSummary(job.request),
     requestType: job.requestType,
+    engineeringSummary: job.engineeringSummary ?? null,
+    engineeringSummaryOrigin: job.engineeringSummaryOrigin ?? null,
     model: job.model,
     runtime: job.runtime,
     pullRequestStrategy: job.pullRequestStrategy,
@@ -672,8 +674,9 @@ export function normalizeEngineeringSummary(value) {
       throw new Error(`Engineering summary ${key} must contain at most 20 bounded strings.`);
     }
     if (key === "changedFiles" && fields.some((field) =>
-      /^[\\/]/u.test(field) || /[:*?"\0\r\n]/u.test(field) ||
-      field.replace(/\\/gu, "/").split("/").some((part) => !part || part === "." || part === ".."))) {
+      /^[\\/]/u.test(field.trim()) || /[:*?"\0\r\n]/u.test(field) ||
+      field.trim().replace(/\\/gu, "/").split("/").some((part) =>
+        !part.trim() || part.trim() === "." || part.trim() === ".."))) {
       throw new Error("Engineering summary files must be relative paths without traversal.");
     }
     result[key] = fields.map((field) => safeSummary(field, 500).replace(/https?:\/\/\S+/giu, "[omitted URL]"));
@@ -3933,6 +3936,8 @@ export function createDashboardServer({
       workspaceStash: null,
       validationBaseline: null,
       validationHistory: { complete: true, gates: [] },
+      engineeringSummary: null,
+      engineeringSummaryOrigin: null,
       finishedAt: null,
       lastActivityAt: status === "running" ? createdAt : null,
       error: null,
@@ -4956,8 +4961,9 @@ export function createDashboardServer({
         }
         const job = [currentJob, ...heldJobs, ...completedJobs, ...persistedJobs]
           .find((candidate) => candidate?.id === body.jobId);
-        if (!job || !["passed", "failed", "blocked", "held", "cancelled"].includes(job.status)) {
-          throw new Error("Engineering notes require an existing stopped job.");
+        if (closing || !job || job.executorStopping || (job === currentJob && activeHandle) ||
+            !["passed", "failed", "blocked", "held", "cancelled"].includes(job.status)) {
+          throw new Error("Engineering notes require an existing stopped job with a settled executor.");
         }
         const summary = normalizeEngineeringSummary(body.summary);
         job.engineeringSummary = summary;
