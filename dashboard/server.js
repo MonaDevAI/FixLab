@@ -39,7 +39,7 @@ import { createSessionRegistry } from "./sessions.js";
 import { inspectBrowserProfileOwnership } from "./browser-ownership.js";
 import { canonicalExecutionRepository, createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
-import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
+import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, safeRuntimeText, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
 import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, allowsUnverifiedDraft, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, TRANSIENT_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
@@ -656,6 +656,9 @@ export function normalizeEngineeringSummary(value) {
     throw new Error("Engineering summary must contain only the documented bug, fix and evidence fields.");
   }
   const result = {};
+  const sanitize = (field, limit) => safeRuntimeText(field, limit)
+    ? safeSummary(field, limit).replace(/https?:\/\/\S+/giu, "[omitted URL]")
+    : "[Sensitive detail omitted]";
   for (const key of strings) {
     const field = value[key] ?? "";
     if (typeof field !== "string" || field.length > 2000 ||
@@ -665,7 +668,7 @@ export function normalizeEngineeringSummary(value) {
     if (key === "commit" && field && !/^[a-f0-9]{7,64}$/u.test(field)) {
       throw new Error("Engineering summary commit must be a hexadecimal commit reference.");
     }
-    result[key] = safeSummary(field, 2000).replace(/https?:\/\/\S+/giu, "[omitted URL]");
+    result[key] = sanitize(field, 2000);
   }
   for (const key of lists) {
     const fields = value[key] ?? [];
@@ -679,7 +682,7 @@ export function normalizeEngineeringSummary(value) {
         !part.trim() || part.trim() === "." || part.trim() === ".."))) {
       throw new Error("Engineering summary files must be relative paths without traversal.");
     }
-    result[key] = fields.map((field) => safeSummary(field, 500).replace(/https?:\/\/\S+/giu, "[omitted URL]"));
+    result[key] = fields.map((field) => sanitize(field, 500));
   }
   if (Buffer.byteLength(JSON.stringify(result)) > 16384) {
     throw new Error("Engineering summary exceeds 16 KiB.");
@@ -2673,6 +2676,9 @@ function splitRenderedMarkers(line) {
     return [...splitRenderedMarkers(line.slice(0, summaryIndex)), ...splitRenderedMarkers(line.slice(summaryIndex))];
   }
   if (summaryIndex === 0) {
+    if (!line.slice("FIXLAB_SUMMARY|".length).trimStart().startsWith("{")) {
+      return [line];
+    }
     let depth = 0;
     let quoted = false;
     let escaped = false;
@@ -2687,7 +2693,15 @@ function splitRenderedMarkers(line) {
       else if (character === "}") {
         depth -= 1;
         if (depth === 0) {
+          try {
+            JSON.parse(line.slice("FIXLAB_SUMMARY|".length, index + 1));
+          } catch {
+            return [line];
+          }
           const remainder = line.slice(index + 1).trim();
+          if (remainder && !/^FIXLAB_(?:STAGE|ACTIVITY|BUG|TEST|SUMMARY)(?:\||\s)/u.test(remainder)) {
+            return [line];
+          }
           return [line.slice(0, index + 1), ...(remainder ? splitRenderedMarkers(remainder) : [])];
         }
       }

@@ -75,6 +75,15 @@ test("engineering summary validates detail fields, redacts sensitive text and re
   assert.doesNotMatch(JSON.stringify(normalizeEngineeringSummary({
     ...detail, rootCause: "See https://private.example.test/path"
   })), /private\.example/);
+  for (const sensitive of ["api_key=syntheticCredentialValue123", `ghp_${"A".repeat(36)}`]) {
+    const sanitized = normalizeEngineeringSummary({ ...detail,
+      problem: sensitive, expectedBehavior: sensitive, actualBehavior: sensitive,
+      rootCause: sensitive, codeFix: sensitive, changedFiles: [sensitive],
+      regression: [sensitive], risks: [sensitive], workarounds: [sensitive] });
+    assert.ok(!JSON.stringify(sanitized).includes(sensitive));
+    assert.match(sanitized.codeFix, /omitted/);
+    assert.match(sanitized.regression[0], /omitted/);
+  }
   for (const changedFiles of [["..\\outside.json"], ["C:\\outside.json"], ["/outside.json"],
     [" ../outside.json"], [" /outside.json"], ["folder/.. "], ["folder/ .. /outside.json"]]) {
     assert.throws(() => normalizeEngineeringSummary({ ...detail, changedFiles }), /relative paths/);
@@ -96,6 +105,9 @@ test("engineering summaries survive history and restart, and reviewed notes cann
     if (executions.length === 1) {
       input.onOutput("stdout", `FIXLAB_SUMMARY|${JSON.stringify(detail)}FIXLAB_STAGE|intake|skipped|Fixture.\n`);
       input.onOutput("stdout", "FIXLAB_SUMMARY|{private-sentinel-invalid-json\n");
+      input.onOutput("stdout", `FIXLAB_SUMMARY|${JSON.stringify([detail,
+        { codeFix: "api_key=private-sentinel-array" }])}\n`);
+      input.onOutput("stdout", `FIXLAB_SUMMARY|${JSON.stringify(detail)} private-sentinel-trailing-text\n`);
       for (const stage of FIXLAB_STAGES.filter((stage) => stage !== "intake")) {
         input.onOutput("stdout", `FIXLAB_STAGE|${stage}|skipped|Fixture.\n`);
       }
