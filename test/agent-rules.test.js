@@ -13,7 +13,7 @@ import {
 
 const testDirectory = dirname(fileURLToPath(import.meta.url));
 
-test("safe recovery and scoped DEV/SIT/UAT POST guidance stay aligned across execution surfaces", () => {
+test("safe recovery and scoped DEV/PPE/SIT/UAT POST guidance stay aligned across execution surfaces", () => {
   const root = join(testDirectory, "..");
   for (const entryPoint of ["dashboard/server.js", "bin/fixlab.js"]) {
     assert.match(readFileSync(join(root, entryPoint), "utf8"), /RUNTIME_RECOVERY_GUIDANCE/u);
@@ -26,7 +26,7 @@ test("safe recovery and scoped DEV/SIT/UAT POST guidance stay aligned across exe
     for (const contract of [
       /oversized inline scripts/u, /repackage the rejected operation to evade review/u,
       /Deny and request safe recovery/u, /fixlab_dev_post/u, /dataSafety\.devPost/u,
-      /DEV\/SIT\/UAT/u, /fixlab_nonproduction_post/u, /dataSafety\.post/u,
+      /DEV\/PPE\/SIT\/UAT/u, /fixlab_nonproduction_post/u, /dataSafety\.post/u,
       /checkbox/u, /[Uu]nchecked/u,
       /single-use human confirmation/u, /Allow all and batch approval never apply/u,
       /without repeat confirmation/u, /profile\/helper revision/u,

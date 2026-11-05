@@ -1373,7 +1373,7 @@ test("direct run and validate cannot bypass production database job-bound proof"
   } finally { rmSync(repository, { recursive: true, force: true }); }
 });
 
-test("Agency backend-first guidance requires both environment and read-only source", () => {
+test("Agency backend-first guidance requires both environment and effective read-only source", () => {
   const repository = mkdtempSync(join(tmpdir(), "fixlab-cli-"));
   const executableDirectory = join(repository, "bin");
 
@@ -1404,6 +1404,8 @@ test("Agency backend-first guidance requires both environment and read-only sour
       "repository-profile.json"
     );
     const profile = JSON.parse(readFileSync(profilePath, "utf8"));
+    profile.browserAutomation.testSynthesis.devReadOnly = false;
+    writeFileSync(profilePath, JSON.stringify(profile));
     const selectedWithoutReadOnly = run(
       [
         "run",
