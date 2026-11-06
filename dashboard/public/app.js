@@ -187,7 +187,7 @@ function updatePostRequestsOption() {
   const key = available ? environment : "";
   if (postCheckboxEnvironment !== key) {
     allowPostRequestsInput.checked = false;
-    allowDevWritesInput.checked = false;
+    allowDevWritesInput.checked = key === "ppe" && repositoryReadiness?.ppeWriteConfigured === true;
     postCheckboxEnvironment = key;
   }
   allowDevWritesInput.disabled = !available || !["dev", "ppe"].includes(environment);
@@ -405,11 +405,72 @@ const fileAccessMessage = document.querySelector("#job-file-access-message");
 const fileAccessSave = document.querySelector("#job-file-access-save");
 let fileAccessSelection = null;
 let fileAccessBusy = false;
+const sourceEditReviewPanel = document.querySelector("#source-edit-review");
+const sourceEditReviewSummary = document.querySelector("#source-edit-review-summary");
+const sourceEditReviewOpen = document.querySelector("#source-edit-review-open");
+let sourceEditReviewSelection = null;
+let sourceEditAuthorizationSelection = null;
+
+function prepareSourceEditAuthorization(job) {
+  const review = job.sourceEditReview;
+  jobInputDetails.value = review.authorization;
+  jobInputAction.value = job.status === "running" ? "comment" : "continue";
+  sourceEditAuthorizationSelection = {
+    instanceId: dashboardInstanceId, jobId: job.id, requestId: review.requestId,
+    authorization: review.authorization
+  };
+  sourceEditReviewSelection = null;
+  fileAccessMessage.textContent = "File trust is reviewed. Read the fresh authorization below and send it to continue. No edit has been replayed.";
+  openWorkspaceSection("job-input-panel");
+  jobInputDetails.focus();
+}
+
+async function reviewSourceEditAccess() {
+  const job = activeJob;
+  const review = job?.sourceEditReview;
+  if (!review || job.mode !== "fix-and-validate" || runtimeBusy || fileAccessBusy) { return; }
+  const selection = {
+    instanceId: dashboardInstanceId, jobId: job.id, requestId: review.requestId
+  };
+  if (job.status === "running" &&
+      !window.confirm("Stop only this job's executor to review source-edit access? Pending operations are not approved or replayed. File trust and a fresh attempt require separate explicit confirmation.")) {
+    return;
+  }
+  sourceEditReviewSelection = selection;
+  setRuntimeBusy(true);
+  try {
+    if (job.status === "running") {
+      const body = await fetchJson("/api/job/source-edit-review", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...selection, confirmed: true })
+      });
+      if (dashboardInstanceId !== selection.instanceId || activeJob?.id !== selection.jobId) {
+        throw new Error("The job changed while stopping. Refresh before reviewing access.");
+      }
+      activeJob = body.job;
+      rememberJob(body.job);
+      renderJob(body.job, body.job);
+    } else {
+      renderFileAccess(job, true);
+    }
+    if (sourceEditReviewSelection) { openWorkspaceSection("job-file-access-panel"); }
+  } catch (error) {
+    sourceEditReviewSelection = null;
+    runtimeMessage.textContent = error.message;
+    fileAccessMessage.textContent = error.message;
+  } finally {
+    setRuntimeBusy(false);
+  }
+}
+
+sourceEditReviewOpen.addEventListener("click", () => void reviewSourceEditAccess());
 
 function renderFileAccess(job, isActive) {
   fileAccessPanel.hidden = !job || job.runtime !== "copilot";
   if (fileAccessPanel.hidden) {
     fileAccessSelection = null;
+    sourceEditReviewSelection = null;
+    sourceEditAuthorizationSelection = null;
     return;
   }
   const mode = job.fileAccess?.mode ?? "manual";
@@ -426,6 +487,40 @@ function renderFileAccess(job, isActive) {
   fileAccessSummary.textContent = mode === "manual" ? "Individual file approvals are active."
     : `${mode === "source-read-write" ? "Read and edit" : "Read"} non-sensitive source/test files for this job and checkout, including resumes. ${job.fileAccess?.allowValidationGates ? "Dashboard-owned validation gates are also trusted; other commands remain manual." : "Commands remain separately reviewed."}`;
   const editable = isActive && ["blocked", "failed", "passed"].includes(job.status);
+  const review = isActive && job.mode === "fix-and-validate" && job.status !== "passed"
+    ? job.sourceEditReview : null;
+  sourceEditReviewPanel.hidden = !review;
+  if (sourceEditReviewSelection &&
+      (sourceEditReviewSelection.instanceId !== dashboardInstanceId ||
+        sourceEditReviewSelection.jobId !== job.id ||
+        sourceEditReviewSelection.requestId !== review?.requestId)) {
+    sourceEditReviewSelection = null;
+  }
+  if (sourceEditAuthorizationSelection &&
+      (sourceEditAuthorizationSelection.instanceId !== dashboardInstanceId ||
+        sourceEditAuthorizationSelection.jobId !== job.id ||
+        sourceEditAuthorizationSelection.requestId !== review?.requestId)) {
+    sourceEditAuthorizationSelection = null;
+  }
+  if (review) {
+    sourceEditReviewSummary.textContent =
+      `${review.fileName}: ${review.reviewCharacters.toLocaleString()} review characters exceed inline approval's 8,192-character limit. ` +
+      "Nothing was approved. Review job-wide source/test access, then explicitly authorize a fresh attempt; creating another job or reinstalling does not remove this limit.";
+    sourceEditReviewOpen.hidden = job.runtimeRequests?.some((item) =>
+      item.id === review.requestId && item.sourceEditReview) ?? false;
+    sourceEditReviewOpen.disabled = runtimeBusy || fileAccessBusy || job.executorStopping;
+    if (sourceEditReviewSelection && sourceEditReviewSelection.instanceId === dashboardInstanceId &&
+        sourceEditReviewSelection.jobId === job.id &&
+        sourceEditReviewSelection.requestId === review.requestId && editable && !fileAccessBusy) {
+      if (mode === "source-read-write") {
+        prepareSourceEditAuthorization(job);
+      } else if (!sourceEditReviewSelection.trustPrepared) {
+        sourceEditReviewSelection = { ...sourceEditReviewSelection, trustPrepared: true };
+        fileAccessMode.value = "source-read-write";
+        fileAccessMessage.textContent = "Review source/test edit access for this job and checkout, not just this file. Update stopped job file trust to confirm; this does not approve or replay the hidden operation.";
+      }
+    }
+  }
   fileAccessMode.disabled = fileAccessBusy || !editable;
   fileAccessSave.disabled = fileAccessBusy || !editable;
   fileAccessGates.disabled = fileAccessBusy || !editable || fileAccessMode.value === "manual";
@@ -768,6 +863,14 @@ function renderRuntimeRequest(job, isActive) {
     }
     if (pending.canRecover === true) {
       button(runtimeActions, "Deny and request safe recovery", "deny", undefined, undefined, true);
+    }
+    if (pending.sourceEditReview && job.mode === "fix-and-validate") {
+      const review = document.createElement("button");
+      review.type = "button";
+      review.textContent = "Review source-edit access";
+      review.disabled = runtimeBusy;
+      review.addEventListener("click", () => void reviewSourceEditAccess());
+      runtimeActions.append(review);
     }
     button(runtimeActions, "Deny", "deny");
   } else {
@@ -2650,6 +2753,7 @@ form.addEventListener("submit", async (event) => {
     }
     allowPostRequestsInput.checked = false;
     allowDevWritesInput.checked = false;
+    postCheckboxEnvironment = null;
     updatePostRequestsOption();
     requestInput.focus();
     selectedScreenshots = [];
@@ -2863,9 +2967,19 @@ jobInputSubmit.addEventListener("click", async () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         action,
-        details
+        details,
+        ...(sourceEditAuthorizationSelection && sourceEditAuthorizationSelection.instanceId === dashboardInstanceId &&
+            sourceEditAuthorizationSelection.jobId === activeJob?.id &&
+            details === sourceEditAuthorizationSelection.authorization
+          ? {
+            confirmed: true,
+            instanceId: sourceEditAuthorizationSelection.instanceId,
+            jobId: sourceEditAuthorizationSelection.jobId,
+            sourceEditReviewId: sourceEditAuthorizationSelection.requestId
+          } : {})
       })
     });
+    sourceEditAuthorizationSelection = null;
     jobInputDetails.value = "";
     jobInputMessage.textContent =
       body.queued

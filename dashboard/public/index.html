@@ -303,7 +303,7 @@
           <label><input id="allow-post-requests" type="checkbox" name="allowPostRequests"> Allow POST writes for this job in the selected environment</label>
           <p id="post-requests-guidance" class="guidance">Native Copilot, DEV/SIT/UAT/PPE only; off by default. Checking this authorizes configured endpoint/test-record writes for this job without repeat confirmation. If unchecked, each write needs confirmation. Saved endpoint/test-record/authentication configuration is still required. Approval expires on stop, hold, completion or restart; configuration changes require a newly reviewed job. Explicit read-only/intercepted modes and production remain blocked. Browser guards are not disabled.</p>
           <label><input id="allow-dev-writes" type="checkbox" name="allowDevWrites"> <span id="origin-writes-label">Allow all DEV API writes for this job</span></label>
-          <p id="dev-writes-guidance" class="guidance">Native Copilot and DEV/PPE only; off by default. Authorizes POST, PUT, PATCH and DELETE to any path on the selected environment's reviewed dataSafety.devWrite or dataSafety.ppeWrite HTTPS origins, affecting any record your account can access. DEV and PPE grants are separate. No endpoint/test-record list or repeat confirmation. Existing SSO helper required. Expires on stop, hold, completion or restart. Other environments, explicit read-only/intercepted modes and browser-guard bypass remain blocked. Separate from Allow all tools.</p>
+          <p id="dev-writes-guidance" class="guidance">Native Copilot and DEV/PPE only. PPE defaults on only when PPE origins are configured; uncheck to opt out. DEV remains off by default. Authorizes POST, PUT, PATCH and DELETE to any path on the selected environment's reviewed dataSafety.devWrite or dataSafety.ppeWrite HTTPS origins, affecting any record your account can access. DEV and PPE grants are separate. No endpoint/test-record list or repeat confirmation. Existing SSO helper required. Expires on stop, hold, completion or restart. Other environments, explicit read-only/intercepted modes and browser-guard bypass remain blocked. Separate from Allow all tools.</p>
           <fieldset>
             <legend>Batch completion</legend>
             <label><input type="checkbox" name="separatePullRequests"> Create a separate PR per bug</label>
@@ -347,6 +347,10 @@
         <section id="job-file-access-panel" hidden aria-labelledby="job-file-access-heading">
           <h3 id="job-file-access-heading">This job's repository file trust</h3>
           <p id="job-file-access-summary" class="guidance"></p>
+          <div id="source-edit-review" hidden>
+            <p id="source-edit-review-summary" class="guidance"></p>
+            <button id="source-edit-review-open" type="button">Review source-edit access</button>
+          </div>
           <label for="job-file-access-mode">Reviewed access for this job, including resumes</label>
           <select id="job-file-access-mode">
             <option value="manual">Individual approvals</option>

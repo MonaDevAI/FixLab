@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { safeRuntimeText } from "./runtime-requests.js";
@@ -55,7 +56,8 @@ function safeProfile(path) {
     !sensitive(profile);
 }
 
-export function createRuntimePermissionPolicy(repository, protectedPaths = [], fileAccess = null, dashboardPort = null) {
+export function createRuntimePermissionPolicy(repository, protectedPaths = [], fileAccess = null, dashboardPort = null,
+  sessionId = null, copilotHome = join(homedir(), ".copilot")) {
   if (!Array.isArray(protectedPaths) || protectedPaths.some((path) => typeof path !== "string" || !isAbsolute(path))) {
     throw new Error("Protected runtime paths must be an array of absolute paths.");
   }
@@ -107,6 +109,26 @@ export function createRuntimePermissionPolicy(repository, protectedPaths = [], f
   const trustedHelper = (path) => path === helperPath &&
     contained(path, realpathSync.native(fileURLToPath(new URL("../", import.meta.url)))) === helperPath &&
     lstatSync(path).isFile();
+
+  function checkpointRead(request, prompt) {
+    if (request.kind !== "read" || !prompt.canApprove || typeof request.path !== "string" ||
+        !isAbsolute(request.path) || !/^[a-f0-9-]{36}$/.test(sessionId ?? "") ||
+        request.managedApprovalRequired || request.requestSandboxBypass || request.requestSandboxPermissive ||
+        request.sandboxPathGrant || request.warning || request.hasWriteFileRedirection) { return null; }
+    try {
+      if (lstatSync(copilotHome).isSymbolicLink() || realpathSync.native(copilotHome) !== copilotHome) { return null; }
+      const directory = join(copilotHome, "session-state", sessionId, "checkpoints");
+      if (dirname(request.path) !== directory || !/^[^\\/]+\.md$/i.test(basename(request.path))) { return null; }
+      const file = contained(request.path, copilotHome);
+      if (!file || protectedPath(file) || (request.resolvedPath && request.resolvedPath !== file)) { return null; }
+      const stat = lstatSync(file);
+      return stat.isFile() && stat.nlink === 1 && stat.size <= 1024 * 1024
+        ? "current session checkpoint Markdown (read only)" : null;
+    } catch (error) {
+      if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(error.code)) { return null; }
+      throw error;
+    }
+  }
 
   function candidate(request, prompt, automatic = false) {
     if (!eligible(request, prompt)) {
@@ -343,7 +365,7 @@ export function createRuntimePermissionPolicy(repository, protectedPaths = [], f
       commands.clear();
     },
     automaticApproval(request, prompt) {
-      return candidate(request, prompt, true)?.key ?? null;
+      return checkpointRead(request, prompt) ?? candidate(request, prompt, true)?.key ?? null;
     },
     review(request, prompt) {
       const match = candidate(request, prompt);
@@ -355,6 +377,20 @@ export function createRuntimePermissionPolicy(repository, protectedPaths = [], f
     },
     isSourceFile(path) {
       return candidate({ kind: "write", fileName: path }, { canApprove: true })?.scope === "repository-source-write";
+    },
+    reviewSourceEdit(request, prompt) {
+      if (request.kind !== "write" || prompt.canApprove || prompt.canUseFileTrust !== true ||
+          prompt.canRecover !== true || prompt.blockedReasons?.length !== 1 ||
+          prompt.blockedReasons[0] !== "oversized" ||
+          candidate(request, { ...prompt, canApprove: true })?.scope !== "repository-source-write") {
+        return null;
+      }
+      const fileName = relative(root(), resolve(root(), request.fileName));
+      if (!safeRuntimeText(fileName, 400)) { return null; }
+      return {
+        fileName,
+        reviewCharacters: prompt.reviewCharacters
+      };
     },
     allows(request, prompt) {
       const match = candidate(request, prompt);

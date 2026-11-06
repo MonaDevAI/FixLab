@@ -165,6 +165,16 @@ PPE uses its own **Allow all PPE API writes** choice, `fixlab_ppe_write` tool an
 `environments` and configure reviewed origins such as
 `https://api.ppe.example.test`. PPE grants never inherit DEV configuration or
 consent. Neither choice enables broad SIT/UAT or production writes.
+For future native PPE jobs only, the dashboard preselects this choice after
+the existing origin/helper configuration checks pass. Users can uncheck it;
+explicit read-only/intercepted selections suppress it. Identity-bound,
+user-authorized MCP `job-start` targeting PPE applies the same default and
+accepts `allowPpeWrites: false` to opt out. A scoped POST selection also takes
+precedence. The server revalidates configuration at grant creation and use;
+readiness is not a grant. Invalid optional PPE setup is reported, not enabled.
+Direct HTTP callers still need the exact browser origin and explicit write
+confirmation fields. These defaults never modify existing jobs or recover
+expired grants. DEV remains off by default.
 
 In `.github/fixlab/repository-profile.json`, declare DEV in `environments`, keep
 `productionAllowed: false`, and add this inside `browserAutomation.dataSafety`:

@@ -557,6 +557,66 @@ test("reviewed file trust covers source reads and edits across hosts, never othe
   }
 });
 
+test("oversized source edits offer a fresh review only after complete eligibility checks, never a grant", (t) => {
+  const state = fixture(t);
+  const request = { kind: "write", fileName: join(state.repository, "src", "index.ts"), diff: "+".repeat(9000) };
+  const prompt = runtimePermissionPrompt(request);
+  const review = state.policy.reviewSourceEdit(request, prompt);
+  assert.equal(review.fileName, join("src", "index.ts"));
+  assert.ok(review.reviewCharacters > 8192);
+  assert.equal(state.policy.allows(request, prompt), false);
+  for (const change of [
+    { diff: "Small edit" }, { diff: `${request.diff}\nconst token = "synthetic-value";` },
+    { diff: "+".repeat(MAX_RUNTIME_FRAME_BYTES) }, { managedApprovalRequired: true },
+    { requestSandboxBypass: true }, { warning: "Manual review required" },
+    { fileName: join(state.directory, "outside.ts") },
+    { fileName: join(state.repository, "src", "settings.ts") }
+  ]) {
+    const changed = { ...request, ...change };
+    assert.equal(state.policy.reviewSourceEdit(changed, runtimePermissionPrompt(changed)), null);
+  }
+  const protectedPolicy = createRuntimePermissionPolicy(state.repository, [join(state.repository, "src")]);
+  assert.equal(protectedPolicy.reviewSourceEdit(request, prompt), null);
+  const longDirectory = join(state.repository, "src", "a".repeat(200), "b".repeat(200));
+  mkdirSync(longDirectory, { recursive: true });
+  const longRequest = { ...request, fileName: join(longDirectory, "index.ts") };
+  assert.equal(state.policy.isSourceFile(longRequest.fileName), true);
+  assert.equal(state.policy.reviewSourceEdit(longRequest, runtimePermissionPrompt(longRequest)), null,
+    "unrepresentable hint metadata keeps the normal denial rather than breaking the permission bridge");
+});
+
+test("only the current session's regular checkpoint Markdown is automatically readable", (t) => {
+  const state = fixture(t);
+  const id = randomUUID();
+  const home = join(state.directory, "copilot-home");
+  const checkpoints = join(home, "session-state", id, "checkpoints");
+  mkdirSync(checkpoints, { recursive: true });
+  const file = join(checkpoints, "002-proposed-regression.md");
+  writeFileSync(file, "Synthetic current-job checkpoint.");
+  const policy = createRuntimePermissionPolicy(state.repository, [], null, null, id, home);
+  const read = { kind: "read", path: file };
+  const automatic = (request) => policy.automaticApproval(request, runtimePermissionPrompt(request));
+  assert.ok(automatic(read));
+  assert.equal(state.policy.automaticApproval(read, runtimePermissionPrompt(read)), null);
+  const otherSession = createRuntimePermissionPolicy(state.repository, [], null, null, randomUUID(), home);
+  assert.equal(otherSession.automaticApproval(read, runtimePermissionPrompt(read)), null);
+  for (const request of [
+    { kind: "write", fileName: file, diff: "Changed checkpoint" },
+    { ...read, path: checkpoints }, { ...read, path: join(home, "config.json") },
+    { ...read, managedApprovalRequired: true }, { ...read, requestSandboxBypass: true },
+    { ...read, resolvedPath: join(state.repository, "src", "index.ts") }
+  ]) { assert.equal(automatic(request), null); }
+  const link = join(checkpoints, "linked.md");
+  linkSync(file, link);
+  assert.equal(automatic(read), null);
+  rmSync(link);
+  symlinkSync(join(state.repository, "src"), link, process.platform === "win32" ? "junction" : "dir");
+  assert.equal(automatic({ ...read, path: link }), null);
+  rmSync(link);
+  writeFileSync(file, "x".repeat(1024 * 1024 + 1));
+  assert.equal(automatic(read), null);
+});
+
 test("the exact safe repository profile is readable under reviewed trust but never writable", (t) => {
   const state = fixture(t);
   const path = join(state.repository, ".github", "fixlab", "repository-profile.json");

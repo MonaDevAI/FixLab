@@ -109,6 +109,15 @@ export function createPpeWriteApproval(repository, targetEnvironment, jobId) {
   return createOriginWriteApproval(repository, targetEnvironment, jobId, "ppe");
 }
 
+export function inspectPpeWriteConfiguration(repository) {
+  try {
+    return { configured: Boolean(configurationAt(repository, "ppe", true, true)), error: null };
+  } catch (error) {
+    return { configured: false, error: safeRuntimeText(error.message, 1000)
+      ? error.message : "PPE write setup validation failed; review the configured origins and authentication helper." };
+  }
+}
+
 export function isOriginWriteApproval(approval) {
   return approval?.mode === "dev-origin" || approval?.mode === "ppe-origin";
 }
