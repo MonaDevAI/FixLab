@@ -753,6 +753,40 @@ test("native Copilot prompts allow once, deny and answer choices in the same liv
   }
 });
 
+test("Copilot intake defaults to source/test editing and trusted validation gates", async ({ page }) => {
+  const directory = mkdtempSync(join(tmpdir(), "fixlab-default-file-trust-ui-"));
+  mkdirSync(join(directory, ".github", "fixlab"), { recursive: true });
+  writeFileSync(join(directory, ".github", "fixlab", "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
+  let finish;
+  let execution;
+  const instance = createDashboardServer({
+    repository: directory, packageRoot, runtime: "copilot", browserOpener() {},
+    executor(input) {
+      execution = input;
+      return {
+        completion: new Promise((resolve) => { finish = resolve; }),
+        terminate() { finish({ code: 130 }); }, hasStopped: () => true
+      };
+    }
+  });
+  try {
+    const address = await instance.listen({ port: await availablePort() });
+    await openWorkflowControls(page, address.url);
+    await expect(page.locator('[name="routineFileAccess"]')).toBeChecked();
+    await page.locator("#request").fill("Synthetic default backend test editing.");
+    await page.locator("#start-button").click();
+    await expect(page.locator("#job-file-access-mode")).toHaveValue("source-read-write");
+    await expect(page.locator("#job-file-access-gates")).toBeChecked();
+    expect(execution.fileAccess.mode).toBe("source-read-write");
+    expect(execution.fileAccess.allowValidationGates).toBe(true);
+    expect(execution.toolApprovalMode).toBe("ask");
+  } finally {
+    await instance.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("Copilot file trust requires a stopped exact job and a separate confirmation without resuming", async ({ page }) => {
   const directory = mkdtempSync(join(tmpdir(), "fixlab-file-trust-ui-"));
   mkdirSync(join(directory, ".github", "fixlab"), { recursive: true });
@@ -773,6 +807,7 @@ test("Copilot file trust requires a stopped exact job and a separate confirmatio
   try {
     const address = await instance.listen({ port: await availablePort() });
     await openWorkflowControls(page, address.url);
+    await page.locator('[name="routineFileAccess"]').uncheck();
     await page.locator("#request").fill("Synthetic reviewed source file trust.");
     await page.locator("#start-button").click();
     await expect(page.locator("#job-file-access-mode")).toHaveValue("manual");
