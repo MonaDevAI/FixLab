@@ -499,6 +499,14 @@ approval, warning and sandbox-escalation checks.
 
 Eligible native requests also offer **Allow repository-file reads for this job**
 or **Allow this test command for this job**, each with a separate confirmation.
+Dashboard intake enables **Allow routine source access and checks for this job**
+by default. Submitting a fix-and-validate job grants non-sensitive source/test
+editing and dashboard-owned validation gates for that job and checkout.
+Validation-only modes receive read access, never source/test editing.
+Uncheck the option before submission to retain individual approvals. API callers
+must still explicitly send `routineFileAccess: true`; omitted or false values
+grant no routine access. This default does not enable Allow all tool commands,
+override earlier denials, or change existing jobs.
 Separately, a stopped native job's **Repository file trust** editor can review
 source/test reads or source/test reads and edits for that exact job and canonical
 checkout, including resumes and dashboard restart. This setting is not inherited

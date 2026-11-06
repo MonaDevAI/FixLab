@@ -2316,17 +2316,22 @@ test("reviewed file trust is exact-job bound, persists on resume/restart and is 
     await new Promise((resolve) => setTimeout(resolve, 50));
     const fresh = await jsonRequest(running.url, "/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ request: "A different untrusted job.", mode: "validate-only", fileAccess: expected })
+      body: JSON.stringify({ request: "A different untrusted job.", mode: "validate-only",
+        routineFileAccess: false, fileAccess: expected })
     });
     assert.equal(fresh.response.status, 202, fresh.body.error);
     const queued = fresh.body.queue.at(-1);
     assert.notEqual(queued.id, created.body.job.id);
     assert.equal(queued.fileAccess, null);
     assert.equal(launches.length, 2, "creating a queued job does not inherit or execute trusted access");
+    const intakeHtml = await (await fetch(running.url)).text();
+    const routineAccessInput = intakeHtml.match(/<input\b[^>]*name="routineFileAccess"[^>]*>/)?.[0];
+    assert.ok(routineAccessInput, "dashboard intake must expose the routine access choice");
+    const routineFileAccess = /\bchecked\b/.test(routineAccessInput);
     const submission = await jsonRequest(running.url, "/api/jobs", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ request: "Explicit routine source consent.", mode: "fix-and-validate",
-        routineFileAccess: true })
+        routineFileAccess })
     });
     assert.equal(submission.response.status, 202, submission.body.error);
     const consented = submission.body.queue.at(-1);
@@ -2334,6 +2339,13 @@ test("reviewed file trust is exact-job bound, persists on resume/restart and is 
     assert.equal(consented.fileAccess.jobId, consented.id);
     assert.equal(consented.fileAccess.repository, realpathSync.native(repository));
     assert.equal(consented.fileAccess.allowValidationGates, true);
+    const validation = await jsonRequest(running.url, "/api/jobs", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ request: "Default access in read-only validation.", mode: "validate-only",
+        routineFileAccess })
+    });
+    assert.equal(validation.response.status, 202, validation.body.error);
+    assert.equal(validation.body.queue.at(-1).fileAccess.mode, "source-read");
   } finally {
     await running.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
