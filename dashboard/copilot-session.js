@@ -65,7 +65,8 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
       config.dashboardPort < 1 || config.dashboardPort > 65535)) {
     throw new Error("Reviewed validation-gate trust requires the owning dashboard's current port.");
   }
-  const permissions = createRuntimePermissionPolicy(config.repository, config.protectedPaths, fileAccess, config.dashboardPort);
+  const permissions = createRuntimePermissionPolicy(config.repository, config.protectedPaths, fileAccess,
+    config.dashboardPort, config.sessionId);
   const publication = createPublicationPermissions(config.repository, config.protectedPaths);
   let publicationGranted = false;
   let policyReady = false;
@@ -162,8 +163,11 @@ export async function runCopilotSession(config, { client, ask, output, onUsage =
           }
         }, null, 2);
       }
+      const sourceEditReview = policyReady && config.mode === "fix-and-validate"
+        ? permissions.reviewSourceEdit(request, prompt) : null;
       const response = await ask({
-        ...prompt, ...(grantScope ? { grantScope } : {}), ...(canAllowAll ? { canAllowAll: true } : {})
+        ...prompt, ...(grantScope ? { grantScope } : {}), ...(canAllowAll ? { canAllowAll: true } : {}),
+        ...(sourceEditReview ? { sourceEditReview } : {})
       });
       if (budgetReached) {
         return { kind: "reject" };

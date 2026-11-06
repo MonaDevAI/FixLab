@@ -351,6 +351,44 @@ test(`${environment.toUpperCase()} write checkbox is environment-specific, exclu
 });
 }
 
+test("configured PPE writes default on for future jobs, preserve opt-out and never select other environments", async ({ page }) => {
+  const posts = [];
+  await mockChatWorkspace(page, { environments: ["dev", "sit", "uat", "ppe"], ppeWriteConfigured: true });
+  await page.route("**/api/jobs", async (route) => {
+    posts.push(route.request().postDataJSON());
+    await route.fulfill({ contentType: "application/json", status: 202,
+      body: JSON.stringify({ job: { id: "ppe-default", request: "Synthetic PPE validation.",
+        mode: "validate-only", status: "running", stages: {}, bugs: [], logs: [], activity: [] },
+      queue: [], history: [] }) });
+  });
+  await openWorkflowControls(page, baseUrl);
+  const checkbox = page.locator("#allow-dev-writes");
+  await page.locator("#target-environment").selectOption("dev");
+  await expect(checkbox).not.toBeChecked();
+  await page.locator("#target-environment").selectOption("ppe");
+  await expect(checkbox).toBeChecked();
+  await expect(page.locator("#allow-post-requests")).toBeDisabled();
+  await checkbox.uncheck();
+  await page.waitForResponse("**/api/status");
+  await expect(checkbox).not.toBeChecked();
+  await page.locator("#request").fill("Validate PPE without write access.");
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(1);
+  expect(posts[0].allowPpeWrites).toBe(false);
+  await expect(checkbox).toBeChecked();
+  await page.locator("#request").fill("Validate PPE with reviewed default access.");
+  await page.locator("#start-button").click();
+  await expect.poll(() => posts.length).toBe(2);
+  expect(posts[1].allowPpeWrites).toBe(true);
+  expect(posts[1].ppeWriteApprovalConfirmed).toBe(true);
+  expect(posts[1].allowDevWrites).toBe(false);
+  await page.locator("#job-test-mutation-mode").selectOption("none");
+  await expect(checkbox).toBeDisabled();
+  await expect(checkbox).not.toBeChecked();
+  await page.locator("#target-environment").selectOption("sit");
+  await expect(checkbox).not.toBeChecked();
+});
+
 for (const profileReady of [true, false]) {
 test(`unverified drafts with live readiness ${profileReady} submit deployed-backend choices and reset without fabricating checks`, async ({ page }) => {
   const posts = [];
@@ -834,6 +872,75 @@ test("Copilot file trust requires a stopped exact job and a separate confirmatio
     page.once("dialog", (dialog) => dialog.accept());
     await page.locator("#job-file-access-save").click();
     await expect(page.locator("#job-file-access-summary")).toContainText("Individual file approvals");
+  } finally {
+    await instance.close();
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("large source-edit recovery reviews trust and prepares but never sends fresh authorization automatically", async ({ page }) => {
+  const directory = mkdtempSync(join(tmpdir(), "fixlab-large-edit-ui-"));
+  mkdirSync(join(directory, ".github", "fixlab"), { recursive: true });
+  writeFileSync(join(directory, ".github", "fixlab", "repository-profile.json"),
+    readFileSync(join(repository, ".github", "fixlab", "repository-profile.json")));
+  const sent = [];
+  const launches = [];
+  let bridge;
+  let finish;
+  const instance = createDashboardServer({
+    repository: directory, packageRoot, runtime: "copilot", browserOpener() {},
+    executor(input) {
+      launches.push(input);
+      bridge = createRuntimeRequestBridge({ send: (message) => sent.push(message),
+        onChange: input.onRuntimeRequests });
+      return { completion: new Promise((resolve) => { finish = resolve; }),
+        respondToRuntimeRequest: (id, decision) => bridge.respond(id, decision),
+        terminate() { bridge.cancel(); finish({ code: 130 }); }, hasStopped: () => true };
+    }
+  });
+  try {
+    const address = await instance.listen({ port: await availablePort() });
+    await openWorkflowControls(page, address.url);
+    await page.locator('[name="routineFileAccess"]').uncheck();
+    await page.locator("#request").fill("Synthetic React header edit recovery.");
+    await page.locator("#start-button").click();
+    const prompt = runtimePermissionPrompt({ kind: "write", fileName: "src/header.tsx", diff: "+".repeat(9000) });
+    const id = randomUUID();
+    bridge.receive({ ...prompt, id,
+      sourceEditReview: { fileName: "src/header.tsx", reviewCharacters: prompt.reviewCharacters } });
+    const review = page.getByRole("button", { name: "Review source-edit access", exact: true });
+    await expect(review).toBeVisible();
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await review.click();
+    expect(launches).toHaveLength(1);
+    expect(sent).toHaveLength(0);
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: "Deny and request safe recovery", exact: true }).click();
+    await expect.poll(() => sent.at(-1)?.recover).toBe(true);
+    finish({ code: 1 });
+    await expect(page.locator("#source-edit-review-open")).toBeVisible();
+    await expect(page.locator("#job-file-access-save")).toBeEnabled();
+    await page.locator("#source-edit-review-open").click();
+    await expect(page.locator("#job-file-access-mode")).toHaveValue("source-read-write");
+    await page.locator("#job-file-access-mode").selectOption("manual");
+    await page.waitForResponse("**/api/status");
+    await expect(page.locator("#job-file-access-mode")).toHaveValue("manual");
+    await page.locator("#job-file-access-mode").selectOption("source-read-write");
+    const currentJob = async () => (await (await page.request.get(`${address.url}/api/job`)).json()).job;
+    expect((await currentJob()).fileAccess).toBeNull();
+    page.once("dialog", (dialog) => dialog.dismiss());
+    await page.locator("#job-file-access-save").click();
+    expect((await currentJob()).fileAccess).toBeNull();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.locator("#job-file-access-save").click();
+    await expect(page.locator("#job-file-access-message")).toContainText("fresh authorization");
+    await expect(page.locator("#job-input-details")).toHaveValue(/explicitly authorize a fresh attempt/);
+    expect(launches).toHaveLength(1);
+    expect((await currentJob()).sourceEditReview.requestId).toBe(id);
+    await page.locator("#job-input-submit").click();
+    await expect.poll(() => launches.length).toBe(2);
+    expect((await currentJob()).sourceEditReview).toBeNull();
+    expect(sent).toEqual([{ type: "response", id, action: "deny", recover: true }]);
   } finally {
     await instance.close();
     rmSync(directory, { recursive: true, force: true });
@@ -2200,12 +2307,12 @@ test("dashboard exposes explicit pull-request approval when validation is comple
 });
 
 async function mockChatWorkspace(page, { job = null, queue = [], history = [], environments,
-  profileReady = true, draftOnlyReady = false } = {}) {
+  profileReady = true, draftOnlyReady = false, ppeWriteConfigured = false } = {}) {
   await page.route("**/api/status", (route) => route.fulfill({
     contentType: "application/json",
     body: JSON.stringify({
       instanceId: "workspace-owner",
-      readiness: { repositoryReady: true, profileReady, draftOnlyReady,
+      readiness: { repositoryReady: true, profileReady, draftOnlyReady, ppeWriteConfigured,
         repository: "C:\\code\\alpha", profileName: "Alpha workspace", environments },
       runtime: { name: "copilot", supportsModelSelection: true, defaultModel: "" },
       job, queue, held: [], history

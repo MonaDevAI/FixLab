@@ -1405,6 +1405,74 @@ test("connected control starts scoped browser jobs, manages the queue and stops 
   }
 });
 
+test("connected PPE jobs default reviewed writes and routine test access, preserving explicit opt-outs", async () => {
+  const repository = createGitRepository();
+  const profile = validProfile();
+  profile.browserAutomation.testSynthesis.defaultDataSource = "non-production-approved";
+  profile.browserAutomation.testSynthesis.mutationMode = "approved-write";
+  profile.environments = ["dev", "sit", "uat", "ppe"];
+  profile.browserAutomation.dataSafety.ppeWrite = {
+    scope: "api://example-service/access", sessionHelper: "ppe-session.mjs",
+    origins: ["https://api.ppe.example.test"]
+  };
+  writeFileSync(join(repository, "ppe-session.mjs"),
+    'export async function withApiToken(options, run) { await run("synthetic-value"); }\n');
+  const profilePath = join(repository, ".github", "fixlab", "repository-profile.json");
+  writeFileSync(profilePath, JSON.stringify(profile));
+  const launches = [];
+  const { dashboard, url } = await startDashboard(repository, (input) => {
+    launches.push(input);
+    input.onOutput("stdout", `${"Synthetic retained output. ".repeat(160)}\n`.repeat(40));
+    return { completion: new Promise(() => {}) };
+  }, undefined, { runtime: "copilot" });
+  const base = { repository, port: Number(new URL(url).port) };
+  const start = async (parameters) => {
+    const state = await dashboardConversation(base);
+    return dashboardControl({ ...base, instanceId: state.instanceId, jobId: state.job?.id ?? null,
+      operation: "job-start", confirmed: true,
+      parameters: { request: "Synthetic future-job defaults.", mode: "fix-and-validate",
+        targetEnvironment: "ppe", ...parameters } });
+  };
+  try {
+    assert.equal(inspectRepository(repository).ppeWriteConfigured, true);
+    await start({});
+    assert.equal(launches[0].postWriteApproval.mode, "ppe-origin");
+    assert.equal(launches[0].fileAccess.mode, "source-read-write");
+    assert.equal(launches[0].fileAccess.allowValidationGates, true);
+    assert.equal(launches[0].toolApprovalMode, "ask");
+    assert.ok(Buffer.byteLength(JSON.stringify((await jsonRequest(url, "/api/status")).body)) > 128 * 1024,
+      "long-job logs must not enter the bounded MCP default lookup");
+    for (const parameters of [
+      { targetEnvironment: "dev" }, { targetEnvironment: "sit" }, { targetEnvironment: "uat" },
+      { allowPpeWrites: false, routineFileAccess: false }, { ppeWriteApprovalConfirmed: false },
+      { testMutationMode: "none" }, { testMutationMode: "intercepted" },
+      { allowPostRequests: true }
+    ]) {
+      await start({ mode: "validate-only", ...parameters });
+      const queued = (await jsonRequest(url, "/api/job")).body.queue.at(-1);
+      assert.equal(queued.ppeWriteApproved, false, JSON.stringify(parameters));
+      assert.equal(queued.fileAccess?.mode ?? null, parameters.routineFileAccess === false ? null : "source-read");
+    }
+    profile.browserAutomation.dataSafety.ppeWrite.origins = ["https://api.prod.example.test"];
+    writeFileSync(profilePath, JSON.stringify(profile));
+    const invalid = inspectRepository(repository);
+    assert.equal(invalid.profileReady, true, "optional write setup must not block read-only validation");
+    assert.equal(invalid.ppeWriteConfigured, false);
+    assert.match(invalid.ppeWriteSetupError, /PPE write origins/);
+    await start({});
+    assert.equal((await jsonRequest(url, "/api/job")).body.queue.at(-1).ppeWriteApproved, false);
+    await assert.rejects(start({ allowPpeWrites: true, ppeWriteApprovalConfirmed: true }), /PPE write origins/);
+    delete profile.browserAutomation.dataSafety.ppeWrite;
+    writeFileSync(profilePath, JSON.stringify(profile));
+    await start({});
+    assert.equal((await jsonRequest(url, "/api/job")).body.queue.at(-1).ppeWriteApproved, false);
+    assert.equal(launches.length, 1, "future-job defaults do not resume or alter the active executor");
+  } finally {
+    await dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
 test("connected control rechecks job identity after an asynchronous request body", async () => {
   const repository = createGitRepository();
   const { dashboard, url } = await startDashboard(repository, () => ({
@@ -2348,6 +2416,87 @@ test("reviewed file trust is exact-job bound, persists on resume/restart and is 
     assert.equal(validation.body.queue.at(-1).fileAccess.mode, "source-read");
   } finally {
     await running.dashboard.close();
+    rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test("oversized edit recovery retains denial and requires exact fresh authorization after stopped-job trust", async () => {
+  const repository = createGitRepository();
+  const sent = [];
+  const launches = [];
+  let bridge;
+  let stopped = 0;
+  const executor = (input) => {
+    launches.push(input);
+    bridge = createRuntimeRequestBridge({ send: (message) => sent.push(message),
+      onChange: input.onRuntimeRequests });
+    return { completion: new Promise(() => {}),
+      respondToRuntimeRequest: (id, decision) => bridge.respond(id, decision),
+      terminate() { stopped++; bridge.cancel(); } };
+  };
+  let current = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
+  const post = (path, body, origin = current.url) => jsonRequest(current.url, path, {
+    method: "POST", headers: { "Content-Type": "application/json", ...(origin ? { Origin: origin } : {}) },
+    body: JSON.stringify(body)
+  });
+  try {
+    const created = await post("/api/jobs", { request: "Review a large source edit.", mode: "fix-and-validate" });
+    const identity = (await jsonRequest(current.url, "/api/status")).body.instanceId;
+    const id = randomUUID();
+    bridge.receive({ ...runtimePermissionPrompt({ kind: "write", fileName: "src/header.tsx",
+      diff: "synthetic-hidden-diff\n".repeat(500) }), id,
+      sourceEditReview: { fileName: "src/header.tsx", reviewCharacters: 11000 } });
+    const state = (await jsonRequest(current.url, "/api/job")).body.job;
+    assert.equal(state.sourceEditReview.requestId, id);
+    assert.doesNotMatch(JSON.stringify(state.sourceEditReview), /synthetic-hidden-diff/);
+    const binding = { instanceId: identity, jobId: created.body.job.id, requestId: id, confirmed: true };
+    for (const changes of [{ instanceId: randomUUID() }, { jobId: randomUUID() },
+      { requestId: randomUUID() }, { confirmed: false }]) {
+      assert.equal((await post("/api/job/source-edit-review", { ...binding, ...changes })).response.status, 409);
+    }
+    assert.equal((await post("/api/job/source-edit-review", binding, "https://example.invalid")).response.status, 409);
+    assert.equal(stopped, 0);
+    const denied = await post("/api/job/runtime-response", { ...binding, action: "deny", recover: true });
+    assert.equal(denied.response.status, 200, denied.body.error);
+    assert.deepEqual(sent, [{ type: "response", id, action: "deny", recover: true }]);
+    assert.equal((await jsonRequest(current.url, "/api/job")).body.job.sourceEditReview.requestId, id);
+    assert.equal((await post("/api/job/source-edit-review", binding)).response.status, 202);
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if ((await jsonRequest(current.url, "/api/job")).body.job.canResume) { break; }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(stopped, 1);
+    assert.throws(() => bridge.respond(id, { action: "allow" }), /stale/);
+    const authorization = { action: "continue", details: state.sourceEditReview.authorization,
+      instanceId: identity, jobId: created.body.job.id, sourceEditReviewId: id, confirmed: true };
+    assert.equal((await post("/api/job/input", authorization)).response.status, 409);
+    await current.dashboard.close();
+    current = await startDashboard(repository, executor, undefined, { runtime: "copilot" });
+    const restored = (await jsonRequest(current.url, "/api/status")).body;
+    assert.equal(restored.job.sourceEditReview.requestId, id);
+    assert.equal(restored.job.runtimeRequests.length, 0);
+    assert.doesNotMatch(readFileSync(join(dirname(createCacheContext(repository).cachePath), "dashboard-jobs.json"), "utf8"),
+      /synthetic-hidden-diff/);
+    authorization.instanceId = restored.instanceId;
+    const trust = await post("/api/job/file-access", { instanceId: restored.instanceId,
+      jobId: created.body.job.id, repository, mode: "source-read-write", confirmed: true });
+    assert.equal(trust.response.status, 200, trust.body.error);
+    assert.equal(launches.length, 1, "reviewing trust never resumes or approves an operation");
+    for (const changes of [{ instanceId: identity }, { jobId: randomUUID() },
+      { sourceEditReviewId: randomUUID(), validationIntent: "full" },
+      { confirmed: false }, { details: "Different authorization" }]) {
+      assert.equal((await post("/api/job/input", { ...authorization, ...changes })).response.status, 409);
+    }
+    assert.equal((await post("/api/job/input", authorization, "")).response.status, 409);
+    assert.equal((await jsonRequest(current.url, "/api/job")).body.job.validationIntent, state.validationIntent);
+    const resumed = await post("/api/job/input", authorization);
+    assert.equal(resumed.response.status, 202, resumed.body.error);
+    assert.equal(resumed.body.job.sourceEditReview, null);
+    assert.equal(launches.length, 2);
+    assert.match(launches[1].prompt, /explicitly authorize a fresh attempt/);
+    assert.equal(sent.length, 1, "the old callback remains denied, never replayed");
+  } finally {
+    await current.dashboard.close();
     rmSync(repository, { recursive: true, force: true });
   }
 });

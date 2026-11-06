@@ -503,9 +503,10 @@ Dashboard intake enables **Allow routine source access and checks for this job**
 by default. Submitting a fix-and-validate job grants non-sensitive source/test
 editing and dashboard-owned validation gates for that job and checkout.
 Validation-only modes receive read access, never source/test editing.
-Uncheck the option before submission to retain individual approvals. API callers
-must still explicitly send `routineFileAccess: true`; omitted or false values
-grant no routine access. This default does not enable Allow all tool commands,
+Uncheck the option before submission to retain individual approvals. Connected
+MCP `job-start` uses the same default; `routineFileAccess: false` opts out.
+Direct HTTP callers must still explicitly send `routineFileAccess: true`;
+omitted or false values grant no routine access. This default does not enable Allow all tool commands,
 override earlier denials, or change existing jobs.
 Separately, a stopped native job's **Repository file trust** editor can review
 source/test reads or source/test reads and edits for that exact job and canonical
@@ -529,6 +530,31 @@ serialized review payload is at most 1 MiB and passes the full sensitive-content
 scan. Display size never replaces the job/checkout, protected-path, source-file,
 managed-approval or sandbox checks. Without reviewed edit trust, oversized writes
 still cannot be approved through the dashboard.
+Eligible oversized source edits offer **Review source-edit access**, including
+after safe recovery denies the old request and no live approval remains.
+The guided flow stops only the owned executor with confirmation, opens the
+stopped job's file-trust review, then prepares a separately submitted fresh
+authorization. Reviewing trust alone never resumes or replays an edit.
+Only the relative filename, size and request identity are retained, not the
+hidden diff. Fresh authorization remains instance/job/review-bound; full
+scanning and all existing restrictions still apply. Do not truncate, split or
+repackage the edit to evade the inline limit.
+
+The active Copilot session's direct `checkpoints/*.md` regular files are
+automatically readable without a repeated permission prompt. This bounded,
+read-only exception excludes other sessions, links, directories, configuration,
+writes, protected paths and managed/sandbox exceptions.
+
+For a new native PPE job, **Allow all PPE API writes** defaults on only when
+the repository's reviewed `dataSafety.ppeWrite` origins and authentication helper
+pass configuration checks. Uncheck it to opt out. Connected MCP starts explicitly
+targeting PPE use the same default; `allowPpeWrites: false`, explicit read-only or
+intercepted modes, or a separately selected scoped POST option suppress it.
+Invalid optional write setup is reported in readiness and does not default on.
+Direct HTTP starts still require explicit write fields and confirmation.
+DEV/SIT/UAT, production and existing jobs are unchanged. Each new job receives
+its own revision-bound grant, which is not recovered after stop or restart.
+
 Read trust also covers bounded, non-sensitive `stdout.log`/`stderr.log` under
 this checkout's `.git/fixlab/command-evidence`, only with a canonical, regular
 `job.json` receipt binding the gate to this exact job and repository. New

@@ -32,6 +32,32 @@ export function safeRuntimeText(value, limit = 8192) {
     !secret.test(value) && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/.test(value);
 }
 
+export function validateSourceEditReview(value) {
+  if (!value || typeof value.fileName !== "string" || !safeRuntimeText(value.fileName, 400) ||
+      /^[\\/]|[*?:]/.test(value.fileName) ||
+      value.fileName.split(/[\\/]/).some((part) => !part || part === "." || part === "..") ||
+      !Number.isSafeInteger(value.reviewCharacters) || value.reviewCharacters <= 8192 ||
+      value.reviewCharacters > MAX_RUNTIME_FRAME_BYTES) {
+    throw new Error("Invalid oversized source-edit review metadata.");
+  }
+  return { fileName: value.fileName, reviewCharacters: value.reviewCharacters };
+}
+
+export function recordedSourceEditReview(value) {
+  if (value === undefined || value === null) { return null; }
+  if (typeof value.requestId !== "string" || !/^[a-f0-9-]{36}$/.test(value.requestId)) {
+    throw new Error("Invalid recorded source-edit request identity.");
+  }
+  return { requestId: value.requestId, ...validateSourceEditReview(value) };
+}
+
+export function sourceEditAuthorization(value) {
+  const { fileName } = validateSourceEditReview(value);
+  return `I explicitly authorize a fresh attempt at the previously reviewed source edit in ${fileName}. ` +
+    "This supersedes the earlier denial only for that edit under the reviewed source/test file trust for this job and checkout. " +
+    "Do not reopen the old approval, split or conceal the edit, retry other denied operations, or bypass full content, path, managed-policy or sandbox checks.";
+}
+
 export function validateRuntimeUsage(value, previous = {}) {
   const usage = {};
   for (const name of ["inputTokens", "cachedInputTokens", "cacheWriteTokens", "outputTokens"]) {
@@ -110,6 +136,7 @@ export function runtimePermissionPrompt(request) {
         : "Deny this operation. Complete human sign-in or resolve the underlying policy/prerequisite before retrying; no restriction can be overridden here."),
     canApprove: reviewable,
     canUseFileTrust,
+    reviewCharacters: details.length,
     ...(blockedReasons.length ? { blockedReasons } : {}),
     ...(canRecover ? { canRecover: true } : {}),
     choices: [],
@@ -164,6 +191,11 @@ export function createRuntimeRequestBridge({ send, onChange }) {
           (value.canRecover !== undefined &&
             (value.canRecover !== true || value.kind !== "permission" ||
               value.canApprove || !value.blockedReasons?.length)) ||
+          (value.sourceEditReview !== undefined &&
+            (!value.sourceEditReview || value.kind !== "permission" || value.canApprove || value.canRecover !== true ||
+              value.blockedReasons?.length !== 1 || value.blockedReasons[0] !== "oversized" ||
+              Object.keys(value.sourceEditReview ?? {}).some((key) =>
+                !["fileName", "reviewCharacters"].includes(key)))) ||
           (value.canAllowAll !== undefined &&
             (typeof value.canAllowAll !== "boolean" ||
               (value.canAllowAll && (value.kind !== "permission" || !value.canApprove)))) ||
@@ -183,6 +215,7 @@ export function createRuntimeRequestBridge({ send, onChange }) {
         ...(value.perAction === true ? { perAction: true } : {}),
         ...(value.blockedReasons ? { blockedReasons: [...value.blockedReasons] } : {}),
         ...(value.canRecover === true ? { canRecover: true } : {}),
+        ...(value.sourceEditReview ? { sourceEditReview: validateSourceEditReview(value.sourceEditReview) } : {}),
         ...(value.canAllowAll === true ? { canAllowAll: true } : {}),
         ...(value.grantScope ? { grantScope: value.grantScope } : {})
       });

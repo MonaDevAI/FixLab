@@ -33,6 +33,22 @@ read-only contract is expanded; browser guards remain intact. See
 PPE has an independent `dataSafety.ppeWrite` configuration, per-job confirmation
 and `fixlab_ppe_write` tool with the same CRUD methods and grant lifecycle.
 DEV grants never authorize PPE or other environments.
+For future native PPE jobs, dashboard intake and identity-bound MCP `job-start`
+default this choice on only after the reviewed PPE origins/helper pass the
+existing configuration checks. Explicit opt-out, read-only/intercepted selections
+and scoped POST choices take precedence. Invalid optional setup is reported in
+readiness without blocking ordinary read-only work. Direct HTTP starts remain
+explicit; existing jobs and grants are unchanged.
+
+Dashboard and MCP starts default routine source/test access and dashboard-owned
+validation gates on, with explicit opt-out; validation-only jobs remain read-only.
+The active SDK session's bounded regular checkpoint Markdown has a read-only
+exception, not general access to Copilot state. Managed and sandbox checks remain.
+Eligible source edits exceeding inline review's 8,192 characters retain only
+safe filename/size/request metadata. Guided review stops the owned executor,
+reviews stopped-job source trust and prepares explicit fresh authorization.
+Old denials stay denied; nothing replays automatically. The complete request
+still undergoes the existing 1 MiB scan and path/content/policy checks.
 
 Job authors may explicitly select **Create an unverified draft PR without
 running checks** (`deferValidation`). This changes draft creation readiness only:

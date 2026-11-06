@@ -74,6 +74,28 @@ test("guided recovery denies only the exact request, never creates a grant and c
   }
 });
 
+test("large-edit review metadata survives transport but cannot approve or replay the hidden operation", () => {
+  const state = fixture();
+  const view = runtimePermissionPrompt({ kind: "write", fileName: "Header.tsx", diff: "+".repeat(9000) });
+  const request = { ...view, id: randomUUID(),
+    sourceEditReview: { fileName: "Header.tsx", reviewCharacters: view.reviewCharacters } };
+  state.bridge.receive(request);
+  assert.deepEqual(state.requests[0].sourceEditReview, request.sourceEditReview);
+  assert.doesNotMatch(state.requests[0].details, /\+{100}/u);
+  assert.throws(() => state.bridge.respond(request.id, { action: "allow" }), /not available/u);
+  state.bridge.respond(request.id, { action: "deny", recover: true });
+  assert.equal(state.sent[0].action, "deny");
+  assert.throws(() => state.bridge.respond(request.id, { action: "allow" }), /stale/u);
+  for (const metadata of [
+    null, { fileName: "..\\Header.tsx", reviewCharacters: 9000 },
+    { fileName: "Header.tsx", reviewCharacters: 8192 },
+    { fileName: "Header.tsx", reviewCharacters: 9000, diff: "Hidden source" }
+  ]) {
+    assert.throws(() => state.bridge.receive({ ...request, id: randomUUID(), sourceEditReview: metadata }),
+      /Invalid|invalid/u);
+  }
+});
+
 test("SDK safe recovery returns a denial with bounded feedback rather than approving the hidden operation", async () => {
   let decisions = 0;
   await runCopilotSession({ repository: "synthetic-repository", prompt: "Recover safely.", toolApprovalMode: "allow-all" }, {

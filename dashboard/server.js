@@ -39,12 +39,12 @@ import { createSessionRegistry } from "./sessions.js";
 import { inspectBrowserProfileOwnership } from "./browser-ownership.js";
 import { canonicalExecutionRepository, createExecutorLease } from "./executor-lease.js";
 import { spawnWindowsExecutor } from "./windows-executor.js";
-import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, safeRuntimeText, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
+import { createRuntimeRequestBridge, MAX_RUNTIME_FRAME_BYTES, recordedSourceEditReview, safeRuntimeText, sourceEditAuthorization, validateRuntimeUsage, validateToolApprovalMode } from "./runtime-requests.js";
 import { validateJobFileAccess } from "./runtime-permission-policy.js";
 import { configuredWorkflow, efficientWorkflowGuidance, allowsDraftIntegrationDeferral, allowsUnverifiedDraft, UNVERIFIED_DRAFT_GUIDANCE, OPTIONAL_INTEGRATION_GUIDANCE, AUTONOMOUS_RECOVERY_GUIDANCE, DRAFT_INTEGRATION_GUIDANCE, COPILOT_EXECUTION_GUIDANCE, RUNTIME_RECOVERY_GUIDANCE, READ_ONLY_POST_GUIDANCE, EXISTING_APPLICATION_GUIDANCE, API_ONLY_PLAYWRIGHT_GUIDANCE, UNIT_TEST_ONLY_GUIDANCE, TRANSIENT_PLAYWRIGHT_GUIDANCE, CONCISE_PR_GUIDANCE, PR_LEARNING_GUIDANCE } from "./workflow-policy.js";
 import { componentRetrievalGuidance } from "./affected-surface.js";
 import { apiAuthenticationConfiguration } from "./api-authentication.js";
-import { createDevWriteApproval, createPpeWriteApproval, createPostWriteApproval, isOriginWriteApproval } from "./dev-post.js";
+import { createDevWriteApproval, createPpeWriteApproval, createPostWriteApproval, inspectPpeWriteConfiguration, isOriginWriteApproval } from "./dev-post.js";
 import { browserConfigurationErrors } from "./repository-setup.js";
 import { applyRepositorySettings, inspectRepositorySettings, localRepository, planRepositorySettings } from "./repository-settings.js";
 import { configuredLinkedApplications, resolveLinkedApplications } from "./linked-applications.js";
@@ -608,6 +608,7 @@ function publicQueue(jobs) {
     devWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "dev-origin",
     ppeWriteApproved: Boolean(job.postWriteApproval?.revision) && job.postWriteApproval.mode === "ppe-origin",
     fileAccess: job.fileAccess ?? null,
+    sourceEditReview: recordedSourceEditReview(job.sourceEditReview),
     recordPlaywrightVideo: job.recordPlaywrightVideo,
     manualLocalhostTest: job.manualLocalhostTest,
     manualLocalhostUrl: job.manualLocalhostUrl,
@@ -759,6 +760,7 @@ function dashboardSnapshot(job) {
     budgetExceeded: job.budgetExceeded === true,
     toolApprovalMode: "ask",
     fileAccess: job.fileAccess ?? null,
+    sourceEditReview: recordedSourceEditReview(job.sourceEditReview),
     browserPreflightBlocked: job.browserPreflightBlocked === true,
     browserSessionNotStarted: job.browserSessionNotStarted === true,
     browserBlocker: job.browserBlocker ?? null,
@@ -823,6 +825,7 @@ function restoreDashboardJob(snapshot, repository) {
   }
   const restored = {
     ...snapshot,
+    sourceEditReview: recordedSourceEditReview(snapshot.sourceEditReview),
     ...(profile.browserAutomation?.mode === "api"
       ? { testEvidence: { ...snapshot.testEvidence, apiOnly: true } }
       : {}),
@@ -1134,11 +1137,14 @@ export function inspectRepository(repository) {
         error: `live-test profile is incomplete: ${liveTestProfile.detail}`
       };
     }
+    const ppeWrites = inspectPpeWriteConfiguration(resolvedRepository);
     return {
       repository: resolvedRepository,
       repositoryReady: true,
       profileReady: true,
       unitTestsOnly: profile.validation?.liveTestsRequired === false,
+      ppeWriteConfigured: ppeWrites.configured,
+      ppeWriteSetupError: ppeWrites.error,
       playwrightMode: profile.browserAutomation?.mode ?? "browser",
       profilePath,
       environments: configuredValidationEnvironments(profile),
@@ -2422,6 +2428,10 @@ function publicJob(job) {
     browserBlocker: job.browserBlocker ?? null,
     runtimeRequests: job.runtimeRequests ?? [],
     fileAccess: job.fileAccess ?? null,
+    sourceEditReview: job.sourceEditReview ? {
+      ...recordedSourceEditReview(job.sourceEditReview),
+      authorization: sourceEditAuthorization(job.sourceEditReview)
+    } : null,
     inputTokenLimit: job.inputTokenLimit ?? 0,
     toolApprovalMode: job.toolApprovalMode ?? "ask",
     postWriteApproved: Boolean(job.postWriteApproval?.revision) && !isOriginWriteApproval(job.postWriteApproval),
@@ -3939,6 +3949,7 @@ export function createDashboardServer({
       ...dashboardSnapshot(sourceJob),
       id: randomUUID(),
       fileAccess: null,
+      sourceEditReview: null,
       runtimeDirectoryGrants: [],
       workflow: configuredWorkflow(loadRepositoryProfile(resolvedRepository)),
       status,
@@ -4382,6 +4393,12 @@ export function createDashboardServer({
         },
         onRuntimeRequests(requests) {
           job.runtimeRequests = requests;
+          const review = job.mode === "fix-and-validate"
+            ? requests.find((item) => item.sourceEditReview) : null;
+          if (review && job.sourceEditReview?.requestId !== review.id) {
+            job.sourceEditReview = recordedSourceEditReview({ requestId: review.id, ...review.sourceEditReview });
+            recordJobMetric(job);
+          }
           job.lastActivityAt = new Date().toISOString();
           armIdleWatchdog();
         },
@@ -4680,6 +4697,7 @@ export function createDashboardServer({
       instanceId: sessions.id,
       repository: resolvedRepository,
       controlProtocol: 1,
+      ppeWriteConfigured: runtime === "copilot" && inspectPpeWriteConfiguration(resolvedRepository).configured,
       job: job ? {
         id: job.id, status: job.status, canResume: job.canResume, canComment: job.canComment,
         canReviewPermissions: job.canReviewPermissions,
@@ -5937,6 +5955,19 @@ export function createDashboardServer({
         sendJson(response, 400, { error: "validationIntent must be scoped, full, or affected." });
         return;
       }
+      if (body.sourceEditReviewId !== undefined) {
+        const review = currentJob.sourceEditReview;
+        const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+        if (request.headers.host !== new URL(expectedOrigin).host || request.headers.origin !== expectedOrigin ||
+            body.confirmed !== true || body.instanceId !== sessions.id || body.jobId !== currentJob.id ||
+            !review || body.sourceEditReviewId !== review.requestId || currentJob.mode !== "fix-and-validate" ||
+            currentJob.fileAccess?.mode !== "source-read-write" ||
+            !["continue", "retry", "comment"].includes(action) ||
+            details !== sourceEditAuthorization(review)) {
+          sendJson(response, 409, { error: "The reviewed source edit or its authorization changed. Refresh and review it again." });
+          return;
+        }
+      }
       if (body.reviewedWorkspace && (running || !currentJob.workspaceReview ||
           !["continue", "retry"].includes(action))) {
         sendJson(response, 409, { error: "Reviewed workspace reuse is available only for a stopped workspace recovery question." });
@@ -5966,6 +5997,9 @@ export function createDashboardServer({
         details,
         createdAt: new Date().toISOString()
       };
+      if (body.sourceEditReviewId !== undefined) {
+        currentJob.sourceEditReview = null;
+      }
       currentJob.inputs.push(input);
       if (manualResult) {
         currentJob.manualLocalhostPending = false;
@@ -6017,7 +6051,7 @@ export function createDashboardServer({
 
     if (
       request.method === "POST" &&
-      requestUrl.pathname === "/api/job/stop"
+      ["/api/job/stop", "/api/job/source-edit-review"].includes(requestUrl.pathname)
     ) {
       if (
         !currentJob ||
@@ -6037,6 +6071,24 @@ export function createDashboardServer({
           error: "Content-Type must be application/json"
         });
         return;
+      }
+      if (requestUrl.pathname === "/api/job/source-edit-review") {
+        let stopBody;
+        try {
+          stopBody = await readJsonBody(request);
+        } catch (error) {
+          sendJson(response, 400, { error: error.message });
+          return;
+        }
+        const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
+        if (request.headers.host !== new URL(expectedOrigin).host || request.headers.origin !== expectedOrigin ||
+            stopBody.confirmed !== true || stopBody.instanceId !== sessions.id ||
+            stopBody.jobId !== currentJob?.id || currentJob?.mode !== "fix-and-validate" ||
+            !currentJob.sourceEditReview || stopBody.requestId !== currentJob.sourceEditReview.requestId ||
+            !activeHandle?.terminate || currentJob.executorStopping) {
+          sendJson(response, 409, { error: "The oversized source-edit review changed. Refresh before stopping its executor." });
+          return;
+        }
       }
       pushLog(currentJob, {
         index: currentJob.nextLogIndex,
@@ -6603,7 +6655,8 @@ export function createDashboardServer({
           }
           const expectedOrigin = `http://${DASHBOARD_HOST}:${server.address().port}`;
           if (request.headers.host !== new URL(expectedOrigin).host ||
-              request.headers.origin !== expectedOrigin) {
+              (request.headers.origin !== expectedOrigin &&
+                !(field === "allowPpeWrites" && request.verifyConversation))) {
             sendJson(response, 403, { error: `${label} write approval requires the dashboard's exact loopback host and origin.` });
             return;
           }
